@@ -45,3 +45,12 @@ sudo apt-get install -y git tmux vim
 #  • suspend（mem_sleep=deep，2024 批 bug）：高風險、動底層，留最後、或那時才考慮 os2/備份當網。
 
 echo "== done =="
+
+# ── 試過、放棄的（別重踩）──
+#  • lid「蓋上就睡」：試過 logind 的 HandleLidSwitchExternalPower=ignore，想做成
+#    「插電不睡、電池才睡」→ 無效。疑 logind 不認為 USB-C 供電算「外部電源」。
+#    結論：維持系統預設，需要遠端連線時別蓋。
+#  🔴 別在活著的 session 上跑 systemctl restart systemd-logind — 會弄掉 GNOME session。
+#     救援：從 SSH 跑 sudo systemctl restart gdm3。改 lid 只能「寫檔 + 重開機」。
+#  🔴 電子紙的 TTY 字太小太糊、不堪用 — 若要走「開機直進 SSH 的極簡系統」，
+#     console 字型是必須先解的第一關。
