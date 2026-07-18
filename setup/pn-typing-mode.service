@@ -3,7 +3,7 @@ Description=Apply PineNote typing-mode waveform (A2)
 After=graphical-session.target
 [Service]
 Type=oneshot
-ExecStart=%h/pinenote-setup/typing-mode.sh
+ExecStart=%h/pinenote/setup/typing-mode.sh
 RemainAfterExit=yes
 [Install]
 WantedBy=graphical-session.target

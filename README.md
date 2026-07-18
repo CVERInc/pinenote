@@ -1,25 +1,66 @@
-# PineNote Setup（dogfood）
+# pinenote
 
-PineNote 記錄／重放**自己**的調教。目標：把乾淨的 PNDeb os1 調成
-「護眼 SSH 終端 ＋ 保留手寫 GNOME（Xournal++/Wacom）」的一機二職，
-不必另建 os2。
+> **Everything CVER runs on the Pine64 PineNote.** It starts with the one fix that made the
+> device usable as a terminal: typing on e-ink without the screen flashing every few words —
+> and clearing the ghosting only once you stop typing.
 
-## 用法
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Device: PineNote](https://img.shields.io/badge/Device-Pine64%20PineNote-brightgreen.svg)
+![Shell: bash](https://img.shields.io/badge/Shell-bash-lightgrey.svg)
+
+---
+
+## What & why
+
+The PineNote ships a Debian/GNOME image that drives the e-ink panel like an ordinary display.
+Type in a terminal and the whole screen flashes every ~20 characters. That is not a bug in
+your setup: the driver's default *partial* refresh waveform is **GC16**, the one the kernel
+source itself annotates as "flashy" — and it is applied to every single keystroke.
+
+Switching partial refreshes to **A2** (fast binary black/white transitions) removes the flash
+completely. But A2 has a catch: its refresh areas are tiny, so the driver's area-accumulating
+`auto_refresh` never reaches its threshold and ghosting builds up without ever being cleared.
+
+The answer is not a gentler cleanup waveform. Clearing ghosting *requires* driving every
+pixel, which is always visible — gentle waveforms simply fail to clean. The answer is
+**timing**: never clear while you are typing, then clear properly the moment you stop. It is
+the same trick a Kindle uses when it hides its flash inside a page turn.
+
+So this is less a set of parameters than a behaviour:
+
+| When | What | Why |
+|---|---|---|
+| You are typing | A2, no automatic clear | fast, flash-free, never interrupts you |
+| You stop (8s idle) | one GC16 global refresh | ugly, but you are not looking |
+| You want it now | the panel's ↻ button | manual escape hatch |
+
+## setup/
+
+One line on a clean PineNote:
+
 ```sh
-./setup.sh    # 冪等，可重複跑；乾淨重刷 / 將來若建 os2 也一跑重放
+curl -sL https://raw.githubusercontent.com/CVERInc/pinenote/main/setup/bootstrap.sh | bash
 ```
 
-## 現狀（2026-07-18 起步）
-- ✅ 已固化：SSH server、關閉閒置休眠（SSH 生命線）、gnome-terminal 護眼、
-  apt 地基（hold GNOME 48）、常用工具。
-- ⏳ 待調（要盯螢幕）：e-ink 波形（治打字全螢幕刷）、藍牙 K6 卡頓、suspend。見 `setup.sh` 末 TODO。
+It is idempotent, and it installs:
 
-## 保險
-- 本地 git（這裡）。⏳ **待設**：push 到 GitHub 當異地備援 —— 用 PineNote **專用 deploy key**
-  （只授權這一個 repo，裝置遺失也只影響它，不碰整個帳號）。在那之前這 repo 只在 os1、無備援。
-- 不可逆的 VCOM=1.17V 已另備份於 `~/vcom-backup.txt`。
+- **Typing mode** — A2 waveform, dithered B/W (icons keep their shading), `auto_refresh` off,
+  persisted via `/etc/modprobe.d/rockchip_ebc.conf` and a systemd user service.
+- **Idle refresh** — a small daemon that watches GNOME's idle monitor and calls
+  `org.pinenote.ebc.TriggerGlobalRefresh` once you have been still for 8 seconds.
+- **Terminal legibility** — pure black on pure white, no cursor blink, a large monospace face.
+- **Lifelines** — SSH enabled, idle suspend disabled, GNOME 48 held back (its mutter has a
+  documented history of breaking boot on this device).
 
-## 紀律
-- 🔴 不跑 `full-upgrade`（GNOME 48 有開機災難前例；PNDeb key 每 1-6 月過期＝維護稅）。
-- 設定層（波形/護眼/dotfiles）放心改，git 可回滾；動 kernel/bootloader 屬高風險，留最後。
-- 🔴 穩定度是否決門：硬體若隨機崩，一切白搭 → 先觀察期、再決定深耕還是 RMA。
+Everything is plain bash and gsettings. Read `setup/setup.sh` top to bottom before you run it.
+
+## Upstream
+
+The A2 waveform is not exposed in PineNote Helper's menu, although the code for it exists —
+`_add_waveform_buttons()` sits commented out in `extension.js`, and so does the line that
+would make *BW+Dither* select A2. Re-enabling them is what makes this workflow reachable from
+the GUI instead of from `/sys`. Our contribution back to PNDeb is tracked here as it lands.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
