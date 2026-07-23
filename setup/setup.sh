@@ -38,6 +38,11 @@ sudo apt-mark hold gnome-shell gnome-shell-common gnome-shell-extension-prefs \
 echo "== [5] 常用工具 =="
 sudo apt-get install -y git tmux vim
 
+echo "== [6] 生命線（SSH 金鑰／Wi-Fi／持久 journal／免密碼 sudo）=="
+# 免輸入的部分自動套（持久 journal——沒有它，下次崩潰的遺言會跟著崩潰一起消失）；
+# 其餘需要參數或明確 opt-in，lifeline.sh 會印出怎麼開。
+"$(dirname "$0")/lifeline.sh"
+
 # ── TODO（要盯螢幕才能調，留待有人看效果時做）──
 #  • e-ink 波形：/sys/module/rockchip_ebc/parameters/*（root:video、user 在 video group→免 sudo 可寫）
 #    治「打字全螢幕刷」。bw_mode=1 純黑白最適文字。runtime 不持久→開機自動套要寫 modprobe.d。

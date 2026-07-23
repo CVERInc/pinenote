@@ -50,9 +50,31 @@ It is idempotent, and it installs:
   `org.pinenote.ebc.TriggerGlobalRefresh` once you have been still for 8 seconds.
 - **Terminal legibility** — pure black on pure white, no cursor blink, a large monospace face.
 - **Lifelines** — SSH enabled, idle suspend disabled, GNOME 48 held back (its mutter has a
-  documented history of breaking boot on this device).
+  documented history of breaking boot on this device), and `setup/lifeline.sh` below.
 
 Everything is plain bash and gsettings. Read `setup/setup.sh` top to bottom before you run it.
+
+### setup/lifeline.sh
+
+The four settings that decide whether you can service this device from another machine at
+all. They are separate because three of them need something only you can supply, and one of
+them is a security trade-off nobody should inherit silently.
+
+| | Needs | Default |
+|---|---|---|
+| Persistent journal | nothing | **applied** — stock journald is volatile, so the log of a crash dies with the crash |
+| SSH authorised key | `PINENOTE_SSH_PUBKEY` | skipped |
+| Wi-Fi connection | `PINENOTE_WIFI_SSID`, `PINENOTE_WIFI_PSK` | skipped |
+| Passwordless sudo | `PINENOTE_NOPASSWD_SUDO=1` | skipped — read the block first |
+
+Two findings worth keeping even if you write your own:
+
+- On a **WPA2/WPA3 transition** network, nmcli's shorthand and an explicit `sae` both fail to
+  associate. It has to be `wifi-sec.key-mgmt wpa-psk`.
+- `nmcli connection add` **over SSH** fails with *Insufficient privileges* — polkit grants
+  NetworkManager writes to an active local session, and an SSH login is not one. Use `sudo`,
+  which is the better answer regardless: a root-owned system connection comes up at boot
+  without waiting for a login.
 
 ## Upstream
 
