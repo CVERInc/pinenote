@@ -38,7 +38,29 @@ sudo apt-mark hold gnome-shell gnome-shell-common gnome-shell-extension-prefs \
 echo "== [5] 常用工具 =="
 sudo apt-get install -y git tmux vim
 
-echo "== [6] 生命線（SSH 金鑰／Wi-Fi／持久 journal／免密碼 sudo）=="
+echo "== [6] Typing Mode：波形 + 兩個 user service + dbus 服務防呆 =="
+# 🔴 這一段以前不存在——README 說「一行就裝好 Typing Mode」，但 setup.sh 根本沒裝，
+#    那些 service 是當初手動放上去的。重刷一次就只剩終端配色，招牌功能不會回來。
+D="$(cd "$(dirname "$0")" && pwd)"
+
+# runtime 的波形設定不持久，開機要靠 modprobe.d
+sudo tee /etc/modprobe.d/rockchip_ebc.conf >/dev/null <<'EOF'
+options rockchip_ebc bw_mode=1 default_waveform=1 refresh_waveform=4 auto_refresh=0 prepare_prev_before_a2=1
+EOF
+
+mkdir -p "$HOME/.config/systemd/user"
+install -m 0644 "$D/pn-typing-mode.service" "$D/pn-idle-refresh.service" "$HOME/.config/systemd/user/"
+systemctl --user daemon-reload
+systemctl --user enable --now pn-typing-mode.service pn-idle-refresh.service
+
+# pinenote-dbus-service 會因 gpio-keys 開機競態而 panic，連帶讓「停手才清殘影」
+# 整條鏈安靜地死掉。理由寫在 drop-in 檔頭。
+sudo mkdir -p /etc/systemd/system/pinenote-dbus-service.service.d
+sudo install -m 0644 "$D/10-ensure-gpio-keys.conf" \
+  /etc/systemd/system/pinenote-dbus-service.service.d/10-ensure-gpio-keys.conf
+sudo systemctl daemon-reload
+
+echo "== [7] 生命線（SSH 金鑰／Wi-Fi／持久 journal／免密碼 sudo）=="
 # 免輸入的部分自動套（持久 journal——沒有它，下次崩潰的遺言會跟著崩潰一起消失）；
 # 其餘需要參數或明確 opt-in，lifeline.sh 會印出怎麼開。
 "$(dirname "$0")/lifeline.sh"

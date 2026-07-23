@@ -49,10 +49,48 @@ It is idempotent, and it installs:
 - **Idle refresh** — a small daemon that watches GNOME's idle monitor and calls
   `org.pinenote.ebc.TriggerGlobalRefresh` once you have been still for 8 seconds.
 - **Terminal legibility** — pure black on pure white, no cursor blink, a large monospace face.
+- **A guard on `pinenote-dbus-service`** — without it the whole clearing half can die silently;
+  see *When the ghosting stops clearing* below.
 - **Lifelines** — SSH enabled, idle suspend disabled, GNOME 48 held back (its mutter has a
   documented history of breaking boot on this device), and `setup/lifeline.sh` below.
 
 Everything is plain bash and gsettings. Read `setup/setup.sh` top to bottom before you run it.
+
+### When the ghosting stops clearing
+
+Half of this design is *not clearing* while you type. That half never breaks loudly — so when
+the other half dies, the symptom is simply a screen that slowly becomes unreadable, with no
+error anywhere you would think to look. Both halves of that failure happened here, and both
+were silent for days:
+
+1. **`pinenote-dbus-service` panics at boot.** It reads
+   `/sys/devices/platform/gpio-keys/power/wakeup` while checking travel mode, and `gpio-keys`
+   (the magnetic cover switch) can lose a boot-time race with its GPIO controller:
+
+   ```
+   gpio-keys gpio-keys: error -ENXIO: Unable to get irq number for GPIO 0
+   ```
+
+   A device that never probed has no `power/wakeup`, so the service exits 101 and
+   `org.pinenote.ebc` never reaches the bus — and `TriggerGlobalRefresh` has no listener.
+   Rebinding after boot always works, which is what the drop-in in `setup/` does.
+
+2. **The idle daemon parsed its own input wrong.** GNOME's idle monitor answers
+   `(uint64 342896,)`, and a `grep -oE '[0-9]+'` over that returns **two** numbers — the `64`
+   in `uint64` first. Every comparison then failed with *integer expression expected*, roughly
+   174,000 times per boot, straight into the journal. The refresh never fired once.
+
+If ghosting stops clearing, check these in order:
+
+```sh
+systemctl status pinenote-dbus-service          # exit 101 => the gpio-keys race
+journalctl --user -u pn-idle-refresh -b         # the daemon now says so when it cannot refresh
+pn_trigger_global_refresh                       # does a manual clear still work?
+```
+
+The general lesson is worth more than either bug: **a component whose job is to stay quiet
+needs to be loud when it fails.** The evidence for both was sitting in the journal the entire
+time. Nobody had a reason to look, because nothing ever said anything was wrong.
 
 ### setup/lifeline.sh
 
