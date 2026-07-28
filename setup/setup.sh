@@ -79,14 +79,27 @@ echo "== [7] 生命線（SSH 金鑰／Wi-Fi／持久 journal／免密碼 sudo）
 #  • e-ink 波形：/sys/module/rockchip_ebc/parameters/*（root:video、user 在 video group→免 sudo 可寫）
 #    治「打字全螢幕刷」。bw_mode=1 純黑白最適文字。runtime 不持久→開機自動套要寫 modprobe.d。
 #  • 藍牙 Keychron K6 卡頓：疑 2.4G Wi-Fi/BT 共存干擾 → Wi-Fi 切 5GHz。
-#  • suspend（mem_sleep=deep，2024 批 bug）：高風險、動底層，留最後、或那時才考慮 os2/備份當網。
+#  • ✅ suspend 已驗（2026-07-28，不再是未知）：deep 進得去、RTC 與掀開蓋子都叫得醒、
+#    resume 後 Wi-Fi 自動重連約 14 秒（brcmfmac 韌體重載）SSH 自己回來。睡著約 5.1%/天
+#    ⇒ 滿電約 20 天。🔴 驗證要走 logind（systemctl suspend），rtcwake -m mem 直寫
+#    /sys/power/state 會繞過 systemd-suspend.service，system-sleep hooks 一個都不會跑。
+
+echo "== [8] 修 PNDeb 的 suspend 耗電記錄（上游 bug：每次睡眠都 NameError）=="
+# /usr/lib/systemd/system-sleep/pn_record_power_usage.py 硬編碼 rk817-charger.6.auto，
+# 這台是 .7.auto（platform 實例編號會漂移）→ 兩條候選路徑都不存在 → bat_dir 從未賦值
+# → 每次 suspend 都拋 NameError。這支儀表從第一天就沒運作過。
+# dpkg -S 查不到擁有者＝套件管理不管它，重刷後只能靠這裡補回來。
+sudo python3 "$D/patch-pn-power-usage.py"
 
 echo "== done =="
 
 # ── 試過、放棄的（別重踩）──
 #  • lid「蓋上就睡」：試過 logind 的 HandleLidSwitchExternalPower=ignore，想做成
-#    「插電不睡、電池才睡」→ 無效。疑 logind 不認為 USB-C 供電算「外部電源」。
-#    結論：維持系統預設，需要遠端連線時別蓋。
+#    「插電不睡、電池才睡」→ 無效。當時猜「logind 不認為 USB-C 算外部電源」——猜錯了。
+#    🔑 真根因（2026-07-28 查明）：gpio-keys 報的是 SW_MACHINE_COVER(0x10)、不是 SW_LID，
+#    而 logind 的 HandleLidSwitch* 只認 SW_LID → 怎麼設都不會生效。真正在處理蓋子的是
+#    PNDeb 自己的 pinenote_sleep_on_cover_close.sh，聽到 cover close 就叫 logind suspend。
+#    行為結論不變（需要遠端連線時別蓋），但要改行為的對象是那支 daemon，不是 logind。
 #  🔴 別在活著的 session 上跑 systemctl restart systemd-logind — 會弄掉 GNOME session。
 #     救援：從 SSH 跑 sudo systemctl restart gdm3。改 lid 只能「寫檔 + 重開機」。
 #  🔴 電子紙的 TTY 字太小太糊、不堪用 — 若要走「開機直進 SSH 的極簡系統」，
