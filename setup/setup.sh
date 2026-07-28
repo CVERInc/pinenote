@@ -14,7 +14,11 @@ echo "== [2] 生命線：接電不休眠（保 SSH 不斷）／電池閒置 10 �
 # 🔴 AC 與電池要分開設。原本兩邊都 nothing ＝ 拔電後不到一天耗盡電池，
 #    而這台沒電關機後只有實體電源鍵能開機（reset 路徑全封，見 vault）。
 # 接電不吃電池 → 維持不睡，保留「插著電遠端長跑」的能力。
-# 電池 → 閒置 10 分鐘 deep suspend。實測 2026-07-28：清醒約 49.5mA、睡著約 6.7mA。
+# 電池 → 閒置 10 分鐘 deep suspend。
+# 🔴 耗電要在「拔電」下量，接電時量的全是假象（充電器補電流，charge_now 掉得慢）：
+#   拔電 deep suspend 實測約 32mA ＝ 19.4%/天 ⇒ 滿電約 5 天（2026-07-28，pn 的 hook 記錄）。
+#   接電時同一支 hook 量到 8.5mA／20 天，樂觀了四倍。同理接電量到的「清醒 49.5mA」也偏低，
+#   以維護者實測「不到一天耗盡」回推，真實清醒約 170-200mA。
 #   10 分鐘而非 5：在 e-ink 上讀東西可以很久沒有任何輸入。
 # idle-delay 維持 0（不 blank）：e-ink 上 blank 會洗掉正在看的畫面；
 #   suspend 本身就會關前光又保留畫面，讓它一步到位即可。
@@ -80,8 +84,8 @@ echo "== [7] 生命線（SSH 金鑰／Wi-Fi／持久 journal／免密碼 sudo）
 #    治「打字全螢幕刷」。bw_mode=1 純黑白最適文字。runtime 不持久→開機自動套要寫 modprobe.d。
 #  • 藍牙 Keychron K6 卡頓：疑 2.4G Wi-Fi/BT 共存干擾 → Wi-Fi 切 5GHz。
 #  • ✅ suspend 已驗（2026-07-28，不再是未知）：deep 進得去、RTC 與掀開蓋子都叫得醒、
-#    resume 後 Wi-Fi 自動重連約 14 秒（brcmfmac 韌體重載）SSH 自己回來。睡著約 5.1%/天
-#    ⇒ 滿電約 20 天。🔴 驗證要走 logind（systemctl suspend），rtcwake -m mem 直寫
+#    resume 後 Wi-Fi 自動重連約 14 秒（brcmfmac 韌體重載）SSH 自己回來。拔電睡眠約 19.4%/天
+#    ⇒ 滿電約 5 天。電池閒置自動 suspend 已在真實條件（拔電＋不碰）下看它開火過。🔴 驗證要走 logind（systemctl suspend），rtcwake -m mem 直寫
 #    /sys/power/state 會繞過 systemd-suspend.service，system-sleep hooks 一個都不會跑。
 
 echo "== [8] 修 PNDeb 的 suspend 耗電記錄（上游 bug：每次睡眠都 NameError）=="
