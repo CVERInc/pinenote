@@ -10,9 +10,19 @@ echo "== [1] SSH server =="
 sudo apt-get install -y openssh-server
 sudo systemctl enable --now ssh
 
-echo "== [2] 生命線：關閉閒置自動休眠（保 SSH 不斷）=="
+echo "== [2] 生命線：接電不休眠（保 SSH 不斷）／電池閒置 10 分鐘 suspend =="
+# 🔴 AC 與電池要分開設。原本兩邊都 nothing ＝ 拔電後不到一天耗盡電池，
+#    而這台沒電關機後只有實體電源鍵能開機（reset 路徑全封，見 vault）。
+# 接電不吃電池 → 維持不睡，保留「插著電遠端長跑」的能力。
+# 電池 → 閒置 10 分鐘 deep suspend。實測 2026-07-28：清醒約 49.5mA、睡著約 6.7mA。
+#   10 分鐘而非 5：在 e-ink 上讀東西可以很久沒有任何輸入。
+# idle-delay 維持 0（不 blank）：e-ink 上 blank 會洗掉正在看的畫面；
+#   suspend 本身就會關前光又保留畫面，讓它一步到位即可。
+# ✅ suspend/resume 實測可靠：deep 進得去、RTC 與電源鍵都叫得醒、
+#   resume 後 Wi-Fi 自動重連約 14 秒（brcmfmac 韌體重載），SSH 自己回來。
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing
-gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type nothing
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type suspend
+gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-timeout 600
 gsettings set org.gnome.desktop.session idle-delay 0
 
 echo "== [3] 終端護眼（gnome-terminal，電子紙最佳）=="
