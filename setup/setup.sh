@@ -88,11 +88,16 @@ echo "== [7] 生命線（SSH 金鑰／Wi-Fi／持久 journal／免密碼 sudo）
 #    ⇒ 滿電約 5 天。電池閒置自動 suspend 已在真實條件（拔電＋不碰）下看它開火過。🔴 驗證要走 logind（systemctl suspend），rtcwake -m mem 直寫
 #    /sys/power/state 會繞過 systemd-suspend.service，system-sleep hooks 一個都不會跑。
 
-echo "== [8] 修 PNDeb 的 suspend 耗電記錄（上游 bug：每次睡眠都 NameError）=="
-# /usr/lib/systemd/system-sleep/pn_record_power_usage.py 硬編碼 rk817-charger.6.auto，
-# 這台是 .7.auto（platform 實例編號會漂移）→ 兩條候選路徑都不存在 → bat_dir 從未賦值
-# → 每次 suspend 都拋 NameError。這支儀表從第一天就沒運作過。
-# dpkg -S 查不到擁有者＝套件管理不管它，重刷後只能靠這裡補回來。
+echo "== [8] 修 PNDeb 的 suspend 耗電記錄（我們這台的 image 上每次睡眠都 NameError）=="
+# /usr/lib/systemd/system-sleep/pn_record_power_usage.py 用 platform 路徑找電池。
+#   我們的 image：硬編碼 rk817-charger.6.auto，這台是 .7.auto（實例編號會漂移）
+#   → 兩條候選都不存在 → bat_dir 從未賦值 → 每次 suspend 拋 NameError，
+#     這支儀表從第一天就沒運作過（/root/energy_use.dat 一行都沒有）。
+#   上游現版：已改用 glob 找實例目錄，主 bug 修掉了——但仍 assert，一旦沒命中
+#     照樣在每次 suspend 拋例外。
+# 兩種形狀都換成穩定的 /sys/class/power_supply/rk817-battery ＋ 找不到就安靜退出。
+# 已送上游 PNDeb/pinenote-debian-image#129；在它落地前（以及任何舊 image）靠這裡補。
+# dpkg -S 查不到擁有者＝套件管理不管它，重刷後不會自己回來。
 sudo python3 "$D/patch-pn-power-usage.py"
 
 echo "== done =="
