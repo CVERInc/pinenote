@@ -122,6 +122,24 @@ else
   echo "   跳過：沒有 ~/offscreen/screen.bin（用 setup/offscreen/make-offscreen.sh 產一張）"
 fi
 
+echo "== [10] 藍牙鍵盤：關掉 BT 控制器的 runtime 休眠 =="
+# ⚠️ **假設，尚未驗證**（2026-07-31）：Keychron K6 打字卡頓的候選根因之一。
+# 實測 BT 控制器 runtime PM 是 auto、autosuspend 5s，44 分鐘 uptime 有 98.4% 在 suspended。
+# 🔴 但那份數字**不是證據**——量的時候鍵盤根本沒連線，98.4% 只證明它閒著。
+#    要證實得在「鍵盤連線期間」看它會不會反覆進出 suspend，那需要真人打字。
+# 另一個候選是 Wi-Fi/BT 共存：BCM43455 是單晶片、共用天線，而 Wi-Fi 在 2.4G(ch6)。
+#    同一 AP 若有 5GHz 可用，但這台沒有遠端救援，切頻段要維護者在場才做。
+# 代價：只在清醒時多一點點耗電；deep suspend 時整個系統停，不影響「拔電 5-7 天」。
+sudo tee /etc/udev/rules.d/50-bt-no-autosuspend.rules >/dev/null <<'EOF'
+# BT controller runtime PM off — a sparse-input device (keyboard) pays the wake
+# latency on every first keystroke after an idle gap. BCM43455 sits on UART/serdev.
+ACTION=="add", SUBSYSTEM=="serial", KERNEL=="serial0-0", ATTR{power/control}="on"
+EOF
+sudo udevadm control --reload
+C=/sys/class/bluetooth/hci0/device/power/control
+[ -e "$C" ] && echo on | sudo tee "$C" >/dev/null   # 立即生效，不必等重開機
+echo "   BT autosuspend 已關（規則已驗證會在 add 時開火）"
+
 echo "== done =="
 
 # ── 試過、放棄的（別重踩）──
