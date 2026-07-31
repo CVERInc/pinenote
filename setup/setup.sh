@@ -100,6 +100,28 @@ echo "== [8] 修 PNDeb 的 suspend 耗電記錄（我們這台的 image 上每�
 # dpkg -S 查不到擁有者＝套件管理不管它，重刷後不會自己回來。
 sudo python3 "$D/patch-pn-power-usage.py"
 
+echo "== [9] 睡眠畫面（有 ~/offscreen/screen.bin 才裝）=="
+# 蓋上／按鎖定／關機後停在螢幕上的那張圖不是 GNOME 鎖屏，是 kernel EBC driver 的
+# off-screen：面板斷電前，driver 把 /lib/firmware/rockchip/rockchip_ebc_default_screen.bin
+# 直接推給控制器。GNOME 那邊的 org.gnome.desktop.screensaver picture-uri 是死 key
+# （shell 只讀它的 user-switch-enabled），改它什麼都不會發生。
+# 圖是私人照片，不進這個公開 repo；配方在 setup/offscreen/，圖本身放 ~/offscreen/
+# （/home 是獨立分割 p7，重刷 os1 不會跟著消失）。
+# 🔴 不必重開機就能看：SetOfflineScreenFromFileTemporary 立刻套用執行期的圖。
+#    在一台「任何 reset 路徑都終結於掉電、只有實體電源鍵能開機」的裝置上，這不是方便，
+#    是唯一能在固化前先看一眼的辦法——不然每調一次亮度就要維護者到場開機一次。
+FW=/lib/firmware/rockchip/rockchip_ebc_default_screen.bin
+if [ -f "$HOME/offscreen/screen.bin" ]; then
+  sudo cp -n "$FW" "$FW.bak-pine64"          # 原廠 PINE64 圖，只備份一次（-n 保冪等）
+  sudo install -m 0644 "$HOME/offscreen/screen.bin" "$FW"
+  sudo dbus-send --system --dest=org.pinenote.ebc /ebc \
+    org.pinenote.ebc.SetOfflineScreenFromFileTemporary string:"$FW" >/dev/null 2>&1 \
+    || echo "   （執行期套用失敗，下次開機仍會生效）"
+  echo "   已裝；原廠圖備份在 $FW.bak-pine64"
+else
+  echo "   跳過：沒有 ~/offscreen/screen.bin（用 setup/offscreen/make-offscreen.sh 產一張）"
+fi
+
 echo "== done =="
 
 # ── 試過、放棄的（別重踩）──

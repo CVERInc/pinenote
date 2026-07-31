@@ -51,6 +51,8 @@ It is idempotent, and it installs:
 - **Terminal legibility** — pure black on pure white, no cursor blink, a large monospace face.
 - **A guard on `pinenote-dbus-service`** — without it the whole clearing half can die silently;
   see *When the ghosting stops clearing* below.
+- **A sleep screen** — optional, and only if you have put a `~/offscreen/screen.bin` there;
+  see *The picture it sleeps under* below.
 - **Lifelines** — SSH enabled, idle suspend disabled, GNOME 48 held back (its mutter has a
   documented history of breaking boot on this device), and `setup/lifeline.sh` below.
 
@@ -113,6 +115,48 @@ Two findings worth keeping even if you write your own:
   NetworkManager writes to an active local session, and an SSH login is not one. Use `sudo`,
   which is the better answer regardless: a root-owned system connection comes up at boot
   without waiting for a login.
+
+### The picture it sleeps under
+
+The PINE64 still life you are left staring at after you press lock is not a GNOME lock screen,
+and the setting that looks like it should change it does nothing: `org.gnome.desktop.screensaver
+picture-uri` is a dead key — GNOME Shell reads only `user-switch-enabled` out of that schema.
+The lock screen's *own* background is your desktop wallpaper with a blur of radius 90 and
+brightness 0.65 hardcoded in `unlockDialog.js`, which on e-ink is a field of grey noise.
+
+The still life comes from a layer below all of that. As the panel powers down the EBC driver
+pushes `/lib/firmware/rockchip/rockchip_ebc_default_screen.bin` straight at the controller —
+1872x1404, 4 bits per pixel, two pixels to a byte, exactly 1,314,144 of them. It is 1:1 with
+the physical pixels: no blur, no clock, no unlock dialog, and it stays there for days, because
+the picture survives the power going away. `setup/offscreen/` turns a photograph into one.
+
+![A cat, as the PineNote sleeps under it](setup/offscreen/example.png)
+
+*16 grey levels, Floyd–Steinberg, no blur and no clock, held in landscape. Shown at half size
+and re-dithered at that size — scaling an already dithered image is how you get moiré. The
+real buffer is 1404x1872, 1:1 with the panel. The maintainer's cat, published at the
+maintainer's insistence.*
+
+Three things are worth knowing before you make your own:
+
+- **The buffer is stored mirrored.** Upright frame to panel is `-flop -rotate 90`, and the
+  stock image is the proof — it only comes back readable through exactly that pair. Verify
+  against it rather than reasoning about it; `pnimg.py selftest` re-encodes the stock PNG and
+  checks it byte for byte against the stock buffer.
+- **You do not have to reboot to look.** `org.pinenote.ebc.SetOfflineScreenFromFileTemporary`
+  swaps the picture at runtime. On this device that is not a convenience: every reset path
+  ends in the machine losing power, and only the physical button brings it back, so "reboot to
+  see whether that brightness was right" costs a person walking over to the desk.
+- **Your monitor will lie to you about tone.** 16 levels, and a reflective white that returns
+  maybe 40% of the light — an image that looks well separated on a laptop arrives flat and
+  grey in the hand. The script prints a distribution instead: median for how grey it is,
+  near-white for how much highlight detail got flattened, and p1 for whether anything still
+  reads as black. Brightening via the white point and brightening via gamma move different
+  numbers, and only one of them costs you the fur.
+
+One quieter trap: dither against the 16 levels the buffer can actually hold (0, 17, ... 255).
+Dither to anything else and the encoder quantises a second time, undithered — which turns a
+carefully dithered gradient straight back into banding, after you already paid for it.
 
 ## Upstream
 
