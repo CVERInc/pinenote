@@ -147,10 +147,14 @@ echo "== [11] 讓 Wi-Fi 優先走 5GHz（給藍牙讓出 2.4GHz）=="
 # ⚠️ 證據等級：維護者實測 5GHz 下明顯穩定，客觀面 down/up 事件成對；但這不是對照
 #   嚴謹的實驗（2.4GHz 那組沒能在相同條件下取樣）。長期看 /var/log/bt-band-trial.log
 #   與 `dmesg | grep -c "BLUETOOTH HID"`（重連次數）才是硬指標。
-# 🔒 刻意不寫死 SSID：Wi-Fi 名稱可經由公開資料庫反查地理位置，不放進公開 repo。
-#    改成「把目前在用的連線複製一份 5GHz-only」，PSK 也從既有連線讀、不落地。
+# 不指名任何網路：讀目前在用的連線、複製一份把 band 釘在 5GHz 的，PSK 也從既有連線
+# 帶過去不落地。對任何人的任何網路都適用。
 A=$(nmcli -t -f NAME,TYPE con show --active 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1; exit}')
-if [ -n "$A" ] && ! nmcli -g NAME con show 2>/dev/null | grep -qx "${A}-5g"; then
+# 已經釘在 5GHz 的連線不必再複製（否則每跑一次就長出一條 -5g 尾巴）
+B=""; [ -n "$A" ] && B=$(nmcli -g 802-11-wireless.band con show "$A" 2>/dev/null)
+if [ "$B" = "a" ]; then
+  echo "   目前連線已釘在 5GHz，跳過"
+elif [ -n "$A" ] && ! nmcli -g NAME con show 2>/dev/null | grep -qx "${A}-5g"; then
   S=$(nmcli -g 802-11-wireless.ssid con show "$A" 2>/dev/null)
   P=$(sudo nmcli -s -g 802-11-wireless-security.psk con show "$A" 2>/dev/null)
   if [ -n "$S" ] && [ -n "$P" ]; then
