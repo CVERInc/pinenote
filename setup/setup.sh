@@ -82,7 +82,7 @@ echo "== [7] 生命線（SSH 金鑰／Wi-Fi／持久 journal／免密碼 sudo）
 # ── TODO（要盯螢幕才能調，留待有人看效果時做）──
 #  • e-ink 波形：/sys/module/rockchip_ebc/parameters/*（root:video、user 在 video group→免 sudo 可寫）
 #    治「打字全螢幕刷」。bw_mode=1 純黑白最適文字。runtime 不持久→開機自動套要寫 modprobe.d。
-#  • 藍牙 Keychron K6 卡頓：疑 2.4G Wi-Fi/BT 共存干擾 → Wi-Fi 切 5GHz。
+#  • 藍牙 Keychron K6 卡頓：疑 2.4G Wi-Fi/BT 共存干擾 → Wi-Fi 改走 5GHz（見 [11]）。
 #  • ✅ suspend 已驗（2026-07-28，不再是未知）：deep 進得去、RTC 與掀開蓋子都叫得醒、
 #    resume 後 Wi-Fi 自動重連約 14 秒（brcmfmac 韌體重載）SSH 自己回來。拔電睡眠約 19.4%/天
 #    ⇒ 滿電約 5 天。電池閒置自動 suspend 已在真實條件（拔電＋不碰）下看它開火過。🔴 驗證要走 logind（systemctl suspend），rtcwake -m mem 直寫
@@ -128,7 +128,7 @@ echo "== [10] 藍牙鍵盤：關掉 BT 控制器的 runtime 休眠 =="
 # 🔴 但那份數字**不是證據**——量的時候鍵盤根本沒連線，98.4% 只證明它閒著。
 #    要證實得在「鍵盤連線期間」看它會不會反覆進出 suspend，那需要真人打字。
 # 另一個候選是 Wi-Fi/BT 共存：BCM43455 是單晶片、共用天線，而 Wi-Fi 在 2.4G(ch6)。
-#    同一 AP 若有 5GHz 可用，但這台沒有遠端救援，切頻段要維護者在場才做。
+#    若同一 AP 有 5GHz 可用就切過去，但這台沒有遠端救援，切頻段要維護者在場才做。
 # 代價：只在清醒時多一點點耗電；deep suspend 時整個系統停，不影響「拔電 5-7 天」。
 sudo tee /etc/udev/rules.d/50-bt-no-autosuspend.rules >/dev/null <<'EOF'
 # BT controller runtime PM off — a sparse-input device (keyboard) pays the wake
@@ -139,6 +139,34 @@ sudo udevadm control --reload
 C=/sys/class/bluetooth/hci0/device/power/control
 [ -e "$C" ] && echo on | sudo tee "$C" >/dev/null   # 立即生效，不必等重開機
 echo "   BT autosuspend 已關（規則已驗證會在 add 時開火）"
+
+echo "== [11] 讓 Wi-Fi 優先走 5GHz（給藍牙讓出 2.4GHz）=="
+# BCM43455 是 Wi-Fi + 藍牙的**單晶片、共用天線**。Wi-Fi 待在 2.4GHz 時，藍牙鍵盤會
+# 斷線／掉鍵／連發（掉 key-up 後核心自動重複）。同一支鍵盤在 Mac 上完全穩定，
+# 環境干擾因此排除——爭用的是這台自己的兩個 radio。
+# ⚠️ 證據等級：維護者實測 5GHz 下明顯穩定，客觀面 down/up 事件成對；但這不是對照
+#   嚴謹的實驗（2.4GHz 那組沒能在相同條件下取樣）。長期看 /var/log/bt-band-trial.log
+#   與 `dmesg | grep -c "BLUETOOTH HID"`（重連次數）才是硬指標。
+# 🔒 刻意不寫死 SSID：Wi-Fi 名稱可經由公開資料庫反查地理位置，不放進公開 repo。
+#    改成「把目前在用的連線複製一份 5GHz-only」，PSK 也從既有連線讀、不落地。
+A=$(nmcli -t -f NAME,TYPE con show --active 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1; exit}')
+if [ -n "$A" ] && ! nmcli -g NAME con show 2>/dev/null | grep -qx "${A}-5g"; then
+  S=$(nmcli -g 802-11-wireless.ssid con show "$A" 2>/dev/null)
+  P=$(sudo nmcli -s -g 802-11-wireless-security.psk con show "$A" 2>/dev/null)
+  if [ -n "$S" ] && [ -n "$P" ]; then
+    # 🔴 WPA2/WPA3 transition 網路要明寫 wpa-psk（sae 與簡寫都關聯不上，見 lifeline.sh）
+    sudo nmcli con add type wifi con-name "${A}-5g" ifname wlan0 ssid "$S" \
+      wifi.band a wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$P" \
+      connection.autoconnect yes connection.autoconnect-priority 10 >/dev/null 2>&1 \
+      && sudo nmcli con mod "$A" connection.autoconnect-priority 0 \
+      && echo "   已建 ${A}-5g（5GHz 優先；原連線留著當 fallback）"
+    unset P
+  else
+    echo "   跳過：讀不到現用連線的 SSID/PSK"
+  fi
+else
+  echo "   已存在或無使用中的 Wi-Fi，跳過"
+fi
 
 echo "== done =="
 
