@@ -172,6 +172,22 @@ else
   echo "   已存在或無使用中的 Wi-Fi，跳過"
 fi
 
+echo "== [12] Mac 模式的藍牙鍵盤：把左 Alt 與左 Super 換回 PC 佈局 =="
+# 三模鍵盤切在 Mac 模式時，對主機自稱是 Apple 鍵盤（vendor 05AC），鍵位對應本身**是正確的**：
+#   control -> Ctrl / option -> Alt / command -> Super
+# 問題出在**實體順序**，兩種佈局的最後兩顆是相反的：
+#   PC 佈局   ... Ctrl  Super  Alt   [space]      <- Alt 貼著空格
+#   Mac 佈局  ... Ctrl  Alt    Super [space]      <- Super 貼著空格
+# 所以手指去按空格旁邊想要 Alt+Tab，送出的是 Super。鍵盤上的實體 Mac/Win 開關做的就是這個
+# 交換——這裡改成由主機端做，就不必為了換機器去撥開關（那是個看不見的裝置狀態，會咬人）。
+# 只換左邊：65% 佈局右下通常沒有右 Alt 可換（實測該鍵盤右側只有第二顆 command）。
+# ⚠️ 這是**全域**設定，會套用到任何接上的鍵盤；要精確到單一裝置得用 keyd 綁 device id。
+# 🔴 kernel 這邊本來有更對的解：`hid_apple` 驅動帶 `swap_opt_cmd` 參數，但這顆 kernel
+#    `# CONFIG_HID_APPLE is not set`，所以鍵盤只能落到 hid-generic，那些參數不存在。
+#    XKB 這條是使用者空間的繞法，不需要動 kernel。
+gsettings set org.gnome.desktop.input-sources xkb-options "['altwin:swap_lalt_lwin']"
+echo "   已套用（驗證只能靠人：XKB 在 evdev 之上，evdev 層的 keycode 不會變）"
+
 echo "== done =="
 
 # ── 試過、放棄的（別重踩）──
