@@ -182,6 +182,11 @@ echo "== [12] Mac 模式的藍牙鍵盤：把左 Alt 與左 Super 換回 PC 佈�
 # 交換——這裡改成由主機端做，就不必為了換機器去撥開關（那是個看不見的裝置狀態，會咬人）。
 # 只換左邊：65% 佈局右下通常沒有右 Alt 可換（實測該鍵盤右側只有第二顆 command）。
 # ⚠️ 這是**全域**設定，會套用到任何接上的鍵盤；要精確到單一裝置得用 keyd 綁 device id。
+# 🔴 **修正只能存在於一個地方**（2026-08-01 實測）：把鍵盤撥到 Windows 模式時，它在韌體層
+#    就把那兩顆的 keycode 換好了（實測 option→Super、command→Alt＝PC 順序），這時這條 XKB
+#    再換一次會**繞回 Mac 佈局＝全錯**。⇒ 用這條就把鍵盤留在 Mac 模式。
+#    順帶一提：撥開關**不會**改變鍵盤宣告的身分（兩種模式都是 vendor 05ac、同一個 HID 實例，
+#    沒有重新枚舉），變的只有送出的 keycode。
 # 🔴 kernel 這邊本來有更對的解：`hid_apple` 驅動帶 `swap_opt_cmd` 參數，但這顆 kernel
 #    `# CONFIG_HID_APPLE is not set`，所以鍵盤只能落到 hid-generic，那些參數不存在。
 #    XKB 這條是使用者空間的繞法，不需要動 kernel。
