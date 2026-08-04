@@ -1,0 +1,8 @@
+{
+  "uuid": "pn-osk@cver.net",
+  "name": "PineNote OSK",
+  "description": "GNOME's on-screen keyboard reserves a full-width band but draws the keys inside a fixed aspect ratio, so in landscape about a third of that band is blank while the key labels are too narrow to spell Tab or Ctrl. This makes the keys fill the width they were already costing you, and optionally adds an Esc + digits row to the terminal layout, which ships without an Escape key at all.",
+  "shell-version": ["47"],
+  "version": 1,
+  "settings-schema": null
+}

@@ -1,0 +1,12 @@
+/* The word-suggestions strip sits above the keys and is given ~98px of the
+ * band whether or not anything ever appears in it. On a terminal it never
+ * does: suggestions come from predictive input, and there is none here.
+ * Collapsing it hands that space back to the keys, which need the height far
+ * more than an empty bar does. */
+.word-suggestions {
+    height: 0px;
+    min-height: 0px;
+    padding: 0px;
+    margin: 0px;
+    spacing: 0px;
+}
