@@ -19,7 +19,7 @@
     "shift": "<>?"
   },
   "widths": {
-    "backspace": 2,
+    "backspace": 1.25,
     "tab": 1.5,
     "backslash": 2.5,
     "capsShift": 1.5,
@@ -27,7 +27,16 @@
     "shift": 2,
     "symbolSwitch": 2,
     "space": 7.5,
-    "nav": 1
+    "nav": 1.25,
+    "leftShift": 1.5,
+    "del": 1.25,
+    "esc": 1.5,
+    "arrow": 1.25,
+    "ctrl": 1.5,
+    "alt": 1,
+    "emoji": 1,
+    "langMenu": 1,
+    "arrowV": 1.5
   },
   "navLabels": {
     "esc": "Esc",
@@ -39,7 +48,14 @@
   },
   "columns": 17,
   "portrait": {
-    "k6": false,
+    "k6": true,
+    "labels": {
+      "Esc": "⎋",
+      "Tab": "⇥",
+      "Ctrl": "⌃",
+      "Alt": "⌥",
+      "?123": "123"
+    },
     "topRow": {
       "default": "1234567890-=",
       "shift": "!@#$%^&*()_+"
@@ -50,5 +66,8 @@
       "ctrl": 1.5,
       "symbolSwitch": 2
     }
+  },
+  "navIcons": {
+    "del": "edit-clear-rtl-symbolic"
   }
 }

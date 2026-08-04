@@ -44,7 +44,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 
-const BUILD = 12;
+const BUILD = 17;
 
 const DEFAULTS = {
     fillWidth: true,
@@ -73,14 +73,37 @@ const DEFAULTS = {
         pgdn: '\u21df',
     },
 
-    // Portrait is 1404px wide, not 1872. The landscape layout's 17 columns
-    // leave 82px each there, and a 66px key cannot spell "Ctrl" any more than
-    // the stock one could spell "Tab" — the same failure, caused by me this
-    // time. So portrait keeps the stock body and gains only the row it was
-    // really missing: Esc and the digits, which at 13 columns line up exactly
-    // with the rows underneath.
+    // U+2326 lives in three of the installed fonts, and the one that answers
+    // draws it too large for a single column, so the key ellipsizes \u2014 the very
+    // failure this whole layout exists to avoid. An icon is scaled to the key
+    // instead of typeset into it, so it cannot overflow. Forward delete is the
+    // backspace glyph mirrored, and the theme already ships that for RTL.
+    navIcons: {
+        del: 'edit-clear-rtl-symbolic',
+    },
+
+    // Portrait is 1404px wide, not 1872, so 17 columns leave 67px each and the
+    // word keys ellipsize. The first answer here was to drop to a 13-column
+    // layout in portrait, which was giving up on a symptom: what did not fit
+    // was the labels, not the layout. Set k6 false to get that fallback back.
     portrait: {
-        k6: false,
+        // The same layout in both orientations. Two layouts means relearning
+        // where the keys are every time the tablet turns, which costs more
+        // than the narrower keys do — 17 columns of 1404px is 7.5mm a key,
+        // which is still a touch target.
+        k6: true,
+
+        // What actually broke at that width was the labels, not the layout:
+        // "Esc", "Ctrl", "Alt" and "?123" ellipsize at 67px. These are the
+        // glyphs a keyboard prints on those very keys, and they are one
+        // character wide. Same medicine as the navigation column.
+        labels: {
+            Esc: '\u238b',
+            Tab: '\u21e5',
+            Ctrl: '\u2303',
+            Alt: '\u2325',
+            '?123': '123',
+        },
         topRow: {default: '1234567890-=', shift: '!@#$%^&*()_+'},
         columns: 13,
         // The stock body's word keys do not fit 13 narrow columns either. The
@@ -98,6 +121,23 @@ const DEFAULTS = {
     // of that row leaves over, so changing any width here stays safe.
     widths: {
         nav: 1,
+        // Every key this layout places reads its width from here, so tuning
+        // the shape of the keyboard never needs the extension reloaded.
+        esc: 1.5,
+        // Up and down carry the history and the scrollback; left and right
+        // only move the cursor. They do not have to be the same size.
+        arrow: 1,
+        arrowV: 1,
+        ctrl: 1,
+        alt: 1,
+        emoji: 1,
+        langMenu: 1,
+        // The left shift matches Tab and Caps above it, so q, a and z stand in
+        // one column. The right one stays wide; nothing lines up under it.
+        leftShift: 1.5,
+        // Wide enough that the icon is not wedged into its cell. Not wide
+        // enough for the word "Del", which needs 1.5 — measured, not guessed.
+        del: 1.25,
         backspace: 2,
         tab: 1.5,
         backslash: 2.5,
@@ -175,6 +215,14 @@ function balance(row, flexIndex, columns) {
         return row;
     }
     return row.map((k, i) => (i === flexIndex ? {...k, width} : k));
+}
+
+// Swap the printed face of a key without touching what it does.
+function relabel(rows, map) {
+    if (!map)
+        return rows;
+    return rows.map(row => row.map(
+        k => (k.label && map[k.label] !== undefined ? {...k, label: map[k.label]} : k)));
 }
 
 const byIcon = name => k => k.iconName === name;
@@ -336,11 +384,19 @@ export default class PineNoteOskExtension extends Extension {
             const rows = stock.levels?.[level]?.rows;
             if (!rows || rows.length < 4)
                 return null;
-            const built = landscape || this._config.portrait?.k6
+            const portraitK6 =
+                !landscape && (this._config.portrait?.k6 ?? DEFAULTS.portrait.k6);
+            let built = landscape || portraitK6
                 ? this._composeLevel(rows, level)
                 : this._composePortrait(rows, level);
             if (!built)
                 return null;
+            if (portraitK6) {
+                built = relabel(built, {
+                    ...DEFAULTS.portrait.labels,
+                    ...this._config.portrait?.labels,
+                });
+            }
             composed[level] = built;
         }
         return composed;
@@ -367,7 +423,7 @@ export default class PineNoteOskExtension extends Extension {
         const cols = p.columns;
 
         return [
-            [{label: L.esc, keyval: Clutter.KEY_Escape}, ...charKeys(faceFor(p.topRow, level))],
+            [{label: L.esc, keyval: Clutter.KEY_Escape, width: w.esc ?? 1}, ...charKeys(faceFor(p.topRow, level))],
             balance(qwerty, flexIn(qwerty, byAction('delete')), cols),
             homeRow,
             letterRow,
@@ -414,7 +470,10 @@ export default class PineNoteOskExtension extends Extension {
         if (extras.length)
             extras[extras.length - 1].width = w.backslash;
 
-        const navKey = (label, key) => ({label, keyval: key, width: w.nav});
+        const icons = {...DEFAULTS.navIcons, ...cfg.navIcons};
+        const navKey = (label, key, role) => (icons[role]
+            ? {iconName: icons[role], keyval: key, width: w.nav}
+            : {label, keyval: key, width: w.nav});
         const L = cfg.navLabels ?? DEFAULTS.navLabels;
 
         // Each row names the key that absorbs its slack, so every row lands on
@@ -429,7 +488,7 @@ export default class PineNoteOskExtension extends Extension {
 
         const rowsOut = [
             [
-                {label: L.esc, keyval: Clutter.KEY_Escape},
+                {label: L.esc, keyval: Clutter.KEY_Escape, width: w.esc ?? 1},
                 ...charKeys(faceFor(cfg.topRow, level)),
                 flexBackspace,
                 sized(hide, w.nav),
@@ -438,35 +497,35 @@ export default class PineNoteOskExtension extends Extension {
                 sized(tab, w.tab),
                 ...qwertyChars,
                 ...extras,
-                navKey(L.home, Clutter.KEY_Home),
+                navKey(L.home, Clutter.KEY_Home, 'home'),
             ],
             [
                 sized(capsShift, w.capsShift),
                 ...homeChars,
                 ...charKeys(faceFor(cfg.homeExtra, level)),
                 flexEnter,
-                navKey(L.end, Clutter.KEY_End),
+                navKey(L.end, Clutter.KEY_End, 'end'),
             ],
             [
-                sized(leftShift, w.shift),
+                sized(leftShift, w.leftShift ?? w.shift),
                 ...letterChars,
                 ...charKeys(faceFor(cfg.bottomKeys, level)),
                 flexShift,
-                sized(up, 1),
-                navKey(L.del, Clutter.KEY_Delete),
-                navKey(L.pgup, Clutter.KEY_Page_Up),
+                sized(up, w.arrowV ?? w.arrow ?? 1),
+                {...navKey(L.del, Clutter.KEY_Delete, 'del'), width: w.del ?? w.nav},
+                navKey(L.pgup, Clutter.KEY_Page_Up, 'pgup'),
             ],
             [
-                sized(ctrl, 1),
+                sized(ctrl, w.ctrl ?? 1),
                 sized(symbolSwitch, w.symbolSwitch),
-                sized(alt, 1),
+                sized(alt, w.alt ?? 1),
                 flexSpace,
-                sized(emoji, 1),
-                sized(langMenu, 1),
-                sized(left, 1),
-                sized(down, 1),
-                sized(right, 1),
-                navKey(L.pgdn, Clutter.KEY_Page_Down),
+                sized(emoji, w.emoji ?? 1),
+                sized(langMenu, w.langMenu ?? 1),
+                sized(left, w.arrow ?? 1),
+                sized(down, w.arrowV ?? w.arrow ?? 1),
+                sized(right, w.arrow ?? 1),
+                navKey(L.pgdn, Clutter.KEY_Page_Down, 'pgdn'),
             ],
         ];
 
