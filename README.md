@@ -173,6 +173,65 @@ One quieter trap: dither against the 16 levels the buffer can actually hold (0, 
 Dither to anything else and the encoder quantises a second time, undithered — which turns a
 carefully dithered gradient straight back into banding, after you already paid for it.
 
+## The keyboard it types on
+
+GNOME's on-screen keyboard reserves a band the full width of the monitor and a
+third of its height in landscape, then draws the keys inside a container that
+preserves the layout's column-to-row ratio and centres whatever it cannot fill.
+On this panel the keys got 1207 of 1872 pixels. The top 98 of the band's 468
+pixels belong to a word-suggestions strip that a terminal never fills. And the
+keys were narrow enough that the terminal layout's own labels ellipsized: `Tab`
+rendered as `T…`, `Ctrl` as `C…`, `?123` as `?…`. They were not mystery keys.
+They were keys that could not spell their names.
+
+![The keyboard, landscape and portrait](extensions/pn-osk@cver.net/keyboard.png)
+
+`extensions/pn-osk@cver.net` makes the keys use the band that was already being
+paid for, and rebuilds the terminal layout as a 65% keyboard: the digits with
+their shifted faces, the punctuation where fingers expect it, an inverted-T, and
+a navigation column down the right edge. Portrait gets the same keyboard with
+the modifiers wearing the symbols a keyboard prints on them — `⎋ ⇥ ⌃ ⌥` — because
+at 82px a column those words do not fit, and one layout in both orientations is
+worth more than two tuned ones. Rotating the tablet no longer moves a key.
+
+It also adds an Escape key, which the stock terminal layout does not have in any
+of its four levels. That gap is [three years old
+upstream](https://gitlab.gnome.org/GNOME/gnome-shell/-/merge_requests/2551).
+
+Every width lives in `~/.config/pn-osk.json` and is re-read on each rebuild, so
+changing the shape of the keyboard costs a JSON edit and a D-Bus call rather
+than a session restart. **Read
+[GEOMETRY.md](extensions/pn-osk@cver.net/GEOMETRY.md) before changing one** —
+half a column is the smallest width this keyboard can express, and finer values
+are truncated without complaint.
+
+The extension also exposes `Capture` and `Geometry` on
+`org.cver.PnOsk`. That is not a debugging leftover: GNOME refuses screenshots to
+callers outside the shell, and `/dev/fb0` on this device holds whatever plymouth
+last drew rather than the live desktop, so there was no way to see this layout
+over SSH except by photographing the glass. `setup/oskshot` counts down and then
+takes the picture, which leaves your hands free to rotate the tablet or hold
+shift while it fires.
+
+### What the measurements could not tell us
+
+The instrumentation found the 17 columns, the 0.5 grid, and an override that was
+silently doing nothing because an unallocated actor reports its box as
+`±Infinity` and `|| fallback` does not catch that.
+
+It did not find any of this:
+
+- that the keys should **not** be aligned — the left edge of a real keyboard is
+  a staircase, and a straight one is harder to type on
+- that up and down should be wider than left and right, but only where they are
+  not sitting next to each other
+- that `` ` ~ `` cannot leave the number row, whatever it costs elsewhere
+- that a forward delete key never needed to exist
+
+Every one of those came from looking at the glass, and three of them reversed
+what the arithmetic was busy doing at the time. The layout in the screenshot is
+not a design that was computed. It is what two ways of being wrong converged on.
+
 ## Upstream
 
 The A2 waveform is not exposed in PineNote Helper's menu, although the code for it exists —

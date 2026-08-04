@@ -44,7 +44,7 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 
-const BUILD = 17;
+const BUILD = 23;
 
 const DEFAULTS = {
     fillWidth: true,
@@ -78,9 +78,10 @@ const DEFAULTS = {
     // failure this whole layout exists to avoid. An icon is scaled to the key
     // instead of typeset into it, so it cannot overflow. Forward delete is the
     // backspace glyph mirrored, and the theme already ships that for RTL.
-    navIcons: {
-        del: 'edit-clear-rtl-symbolic',
-    },
+    // No forward delete. It went through three rounds of sizing before anyone
+    // asked whether it would ever be pressed — on a Mac there is no such key,
+    // and this keyboard is used by someone who has never had one.
+    navIcons: {},
 
     // Portrait is 1404px wide, not 1872, so 17 columns leave 67px each and the
     // word keys ellipsize. The first answer here was to drop to a 13-column
@@ -128,6 +129,7 @@ const DEFAULTS = {
         // only move the cursor. They do not have to be the same size.
         arrow: 1,
         arrowV: 1,
+        hide: 1.25,
         ctrl: 1,
         alt: 1,
         emoji: 1,
@@ -204,17 +206,33 @@ const sized = (key, width) => (key ? {...key, width} : null);
 // Each row nominates one key to absorb the slack, so a width change anywhere
 // cannot leave the right edge ragged. Returns the row with that key resized.
 function balance(row, flexIndex, columns) {
+    row = quantizeRow(row);
     const total = row.reduce((sum, k) => sum + (k.width ?? 1), 0);
-    const slack = columns - total;
+    const slack = quantize(columns) - total;
     if (!slack || flexIndex < 0 || flexIndex >= row.length)
         return row;
     const flex = row[flexIndex];
-    const width = (flex.width ?? 1) + slack;
+    const width = quantize((flex.width ?? 1) + slack);
     if (width < 1) {
         console.warn(`[pn-osk] row does not fit in ${columns} columns; leaving it ragged`);
         return row;
     }
     return row.map((k, i) => (i === flexIndex ? {...k, width} : k));
+}
+
+// KeyContainer attaches keys to a Clutter.GridLayout with width * KEY_SIZE,
+// KEY_SIZE is 2, and GridLayout.attach takes integers — so half a column is the
+// finest this keyboard can express, and anything narrower is silently truncated
+// down. 1.25 renders as 1, which is how a navigation column set to 1.25 spent
+// several revisions looking exactly 0.5 columns too narrow.
+const QUANTUM = 0.5;
+const quantize = v => Math.max(QUANTUM, Math.round((v ?? 1) / QUANTUM) * QUANTUM);
+
+function quantizeRow(row) {
+    return row.map(k => {
+        const w = quantize(k.width ?? 1);
+        return w === (k.width ?? 1) ? k : {...k, width: w};
+    });
 }
 
 // Swap the printed face of a key without touching what it does.
@@ -435,6 +453,14 @@ export default class PineNoteOskExtension extends Extension {
         const cfg = this._config;
         const w = cfg.widths;
 
+        const offGrid = Object.entries(w)
+            .filter(([, v]) => quantize(v) !== v)
+            .map(([k, v]) => `${k}=${v}->${quantize(v)}`);
+        if (offGrid.length && !this._warnedOffGrid) {
+            this._warnedOffGrid = true;
+            console.warn(`[pn-osk] widths must be multiples of ${QUANTUM}; rounding ${offGrid.join(', ')}`);
+        }
+
         const [qwertyRow, homeRow, letterRow, bottomRow] = rows;
         const find = (row, pred) => row.find(pred);
 
@@ -491,20 +517,20 @@ export default class PineNoteOskExtension extends Extension {
                 {label: L.esc, keyval: Clutter.KEY_Escape, width: w.esc ?? 1},
                 ...charKeys(faceFor(cfg.topRow, level)),
                 flexBackspace,
-                sized(hide, w.nav),
+                navKey(L.home, Clutter.KEY_Home, 'home'),
             ],
             [
                 sized(tab, w.tab),
                 ...qwertyChars,
                 ...extras,
-                navKey(L.home, Clutter.KEY_Home, 'home'),
+                navKey(L.end, Clutter.KEY_End, 'end'),
             ],
             [
                 sized(capsShift, w.capsShift),
                 ...homeChars,
                 ...charKeys(faceFor(cfg.homeExtra, level)),
                 flexEnter,
-                navKey(L.end, Clutter.KEY_End, 'end'),
+                navKey(L.pgup, Clutter.KEY_Page_Up, 'pgup'),
             ],
             [
                 sized(leftShift, w.leftShift ?? w.shift),
@@ -512,8 +538,7 @@ export default class PineNoteOskExtension extends Extension {
                 ...charKeys(faceFor(cfg.bottomKeys, level)),
                 flexShift,
                 sized(up, w.arrowV ?? w.arrow ?? 1),
-                {...navKey(L.del, Clutter.KEY_Delete, 'del'), width: w.del ?? w.nav},
-                navKey(L.pgup, Clutter.KEY_Page_Up, 'pgup'),
+                navKey(L.pgdn, Clutter.KEY_Page_Down, 'pgdn'),
             ],
             [
                 sized(ctrl, w.ctrl ?? 1),
@@ -522,19 +547,24 @@ export default class PineNoteOskExtension extends Extension {
                 flexSpace,
                 sized(emoji, w.emoji ?? 1),
                 sized(langMenu, w.langMenu ?? 1),
+                sized(hide, w.hide ?? w.nav),
                 sized(left, w.arrow ?? 1),
                 sized(down, w.arrowV ?? w.arrow ?? 1),
                 sized(right, w.arrow ?? 1),
-                navKey(L.pgdn, Clutter.KEY_Page_Down, 'pgdn'),
             ],
         ];
 
         const flex = [flexBackspace, flexBackslash, flexEnter, flexShift, flexSpace];
         const columns = cfg.columns ?? DEFAULTS.columns;
-        return rowsOut.map((row, i) => {
+        const out = rowsOut.map((row, i) => {
             const kept = row.filter(Boolean);
             return balance(kept, kept.indexOf(flex[i]), columns);
         });
+        this._lastComposed = out.map(row => ({
+            total: row.reduce((t, k) => t + (k.width ?? 1), 0),
+            keys: row.map(k => `${k.label ?? k.iconName ?? k.action ?? "?"}:${k.width ?? 1}`),
+        }));
+        return out;
     }
 
     // AspectContainer keeps the keys at the layout's column:row ratio and
@@ -658,6 +688,7 @@ export default class PineNoteOskExtension extends Extension {
             aspectContainer: box(kb?._aspectContainer),
             layers,
             sampleKey: firstKey ? box(firstKey) : null,
+            composed: this._lastComposed ?? null,
         }, null, 2);
     }
 

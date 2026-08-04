@@ -19,28 +19,27 @@
     "shift": "<>?"
   },
   "widths": {
-    "backspace": 1.25,
+    "backspace": 2,
     "tab": 1.5,
     "backslash": 2.5,
-    "capsShift": 1.5,
-    "enter": 3.5,
+    "capsShift": 2,
+    "enter": 3,
     "shift": 2,
-    "symbolSwitch": 2,
-    "space": 7.5,
-    "nav": 1.25,
-    "leftShift": 1.5,
-    "del": 1.25,
-    "esc": 1.5,
-    "arrow": 1.25,
+    "symbolSwitch": 1.5,
+    "space": 6,
+    "nav": 1,
+    "leftShift": 2.5,
+    "esc": 1,
+    "arrow": 1,
     "ctrl": 1.5,
-    "alt": 1,
+    "alt": 1.5,
     "emoji": 1,
     "langMenu": 1,
-    "arrowV": 1.5
+    "arrowV": 1.5,
+    "hide": 1
   },
   "navLabels": {
     "esc": "Esc",
-    "del": "⌦",
     "home": "↖",
     "end": "↘",
     "pgup": "⇞",
@@ -66,8 +65,5 @@
       "ctrl": 1.5,
       "symbolSwitch": 2
     }
-  },
-  "navIcons": {
-    "del": "edit-clear-rtl-symbolic"
   }
 }
