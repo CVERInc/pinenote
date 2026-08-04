@@ -54,8 +54,9 @@ It is idempotent, and it installs:
 - **A sleep screen** — optional, and only if you have put a `~/offscreen/screen.bin` there.
   Installed as firmware and re-applied at every boot by `pn-offscreen.service`, because the
   firmware path alone does not survive a reboot; see *The picture it sleeps under* below.
-- **Lifelines** — SSH enabled, idle suspend disabled, GNOME 48 held back (its mutter has a
-  documented history of breaking boot on this device), and `setup/lifeline.sh` below.
+- **Lifelines** — SSH enabled, idle suspend disabled, GNOME's shell and mutter held back (what
+  is actually documented on this device is a full `dist-upgrade` leaving it with no gdm3 — not
+  a fault in any one GNOME release), and `setup/lifeline.sh` below.
 
 Everything is plain bash and gsettings. Read `setup/setup.sh` top to bottom before you run it.
 

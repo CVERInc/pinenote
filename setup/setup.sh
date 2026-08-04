@@ -42,7 +42,12 @@ gsettings set "$T" background-color "rgb(255,255,255)"
 gsettings set "$T" audible-bell false
 gsettings set "$T" scrollback-lines 100000
 
-echo "== [4] apt 地基：hold GNOME 48（不追 GNOME 大版本，避開開機災難）=="
+echo "== [4] apt 地基：hold 住 GNOME shell/mutter（真正的理由是不跑 full-upgrade）=="
+# 🔴 歸因更正（2026-08-01）：這裡以前寫「GNOME 48 有開機災難」，那是錯的。
+#    手上唯一的證據是上游 PNDeb/pinenote-debian-image#89 "Cannot boot after update"，
+#    開於 2024-11，而 GNOME 48 是 2025-03 才發布——時間對不上，它談的是跑 dist-upgrade
+#    之後裝不回 gdm3。⇒「別跑 full-upgrade」成立；「GNOME 48 危險」沒有證據。
+#    hold 有代價：gnome-shell 47.3-1+pn1 已無來源(只剩 dpkg status)＝孤兒、不會再有安全更新。
 # 🔴 不跑 full-upgrade。PNDeb 簽章 key 短命(1-6月過期)，失效時重裝官方 keyring：
 #    wget <release>/pinenote-custom-repo-and-keyring_X_all.deb && sudo dpkg -i ...（先驗指紋）
 sudo apt-mark hold gnome-shell gnome-shell-common gnome-shell-extension-prefs \
