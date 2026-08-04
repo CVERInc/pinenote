@@ -1,0 +1,20 @@
+# The picture the panel keeps while it has no power does not survive a reboot on
+# its own: the driver reads its default screen out of the initramfs, not out of
+# the root filesystem. restore-offscreen.sh explains the mechanism in full.
+#
+# This is a system service, not a user one like the other two here, because the
+# call goes to the system bus and the picture should be right whether or not
+# anyone has logged in.
+[Unit]
+Description=Restore the PineNote off-screen (sleep) image after boot
+After=pinenote-dbus-service.service
+Wants=pinenote-dbus-service.service
+ConditionPathExists=/lib/firmware/rockchip/rockchip_ebc_default_screen.bin
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/pn-restore-offscreen
+
+[Install]
+WantedBy=multi-user.target

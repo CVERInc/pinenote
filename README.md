@@ -51,8 +51,9 @@ It is idempotent, and it installs:
 - **Terminal legibility** — pure black on pure white, no cursor blink, a large monospace face.
 - **A guard on `pinenote-dbus-service`** — without it the whole clearing half can die silently;
   see *When the ghosting stops clearing* below.
-- **A sleep screen** — optional, and only if you have put a `~/offscreen/screen.bin` there;
-  see *The picture it sleeps under* below.
+- **A sleep screen** — optional, and only if you have put a `~/offscreen/screen.bin` there.
+  Installed as firmware and re-applied at every boot by `pn-offscreen.service`, because the
+  firmware path alone does not survive a reboot; see *The picture it sleeps under* below.
 - **Lifelines** — SSH enabled, idle suspend disabled, GNOME 48 held back (its mutter has a
   documented history of breaking boot on this device), and `setup/lifeline.sh` below.
 
@@ -130,6 +131,9 @@ pushes `/lib/firmware/rockchip/rockchip_ebc_default_screen.bin` straight at the 
 the physical pixels: no blur, no clock, no unlock dialog, and it stays there for days, because
 the picture survives the power going away. `setup/offscreen/` turns a photograph into one.
 
+Writing that file is not, on its own, enough to change the picture — see the first bullet
+below. That took a reboot to find out.
+
 ![A cat, as the PineNote sleeps under it](setup/offscreen/example.png)
 
 *16 grey levels, Floyd–Steinberg, no blur and no clock, held in landscape. Shown at half size
@@ -137,8 +141,18 @@ and re-dithered at that size — scaling an already dithered image is how you ge
 real buffer is 1404x1872, 1:1 with the panel. The maintainer's cat, published at the
 maintainer's insistence.*
 
-Three things are worth knowing before you make your own:
+Four things are worth knowing before you make your own:
 
+- **The file the driver reads is the one in the initramfs.** `rockchip_ebc` is a module packed
+  into the initramfs and it probes at t+1.3s, so `request_firmware` is answered from there, not
+  from the root filesystem you just wrote to. The initramfs was built with the stock picture in
+  it, which means your picture is read exactly never — and nothing tells you, because from the
+  driver's side nothing failed. It looks correct for as long as the machine stays up, since the
+  runtime call below is what put it on the panel, and it is gone after the next boot. `setup.sh`
+  therefore also installs `pn-offscreen.service`, which re-applies the picture through that same
+  runtime call once the bus is up. Making the file itself authoritative means regenerating the
+  initramfs — `PINENOTE_OFFSCREEN_INITRAMFS=1 setup/setup.sh`, opt-in on purpose, because this
+  device's only recovery path is maskrom and an initramfs is a thing you can get wrong.
 - **The buffer is stored mirrored.** Upright frame to panel is `-flop -rotate 90`, and the
   stock image is the proof — it only comes back readable through exactly that pair. Verify
   against it rather than reasoning about it; `pnimg.py selftest` re-encodes the stock PNG and

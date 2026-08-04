@@ -110,14 +110,33 @@ echo "== [9] 睡眠畫面（有 ~/offscreen/screen.bin 才裝）=="
 # 🔴 不必重開機就能看：SetOfflineScreenFromFileTemporary 立刻套用執行期的圖。
 #    在一台「任何 reset 路徑都終結於掉電、只有實體電源鍵能開機」的裝置上，這不是方便，
 #    是唯一能在固化前先看一眼的辦法——不然每調一次亮度就要維護者到場開機一次。
+# 🔴 但那個「固化」以前是假的（2026-08-04 一次重開機才抓到）：rockchip_ebc 是模組、
+#    住在 initramfs 裡、t+1.3s 就 probe，request_firmware 解析到的是 **initramfs 內的
+#    那份**，不是我們寫進 rootfs 的這份。initramfs 裡包的是出廠圖 → 重開機貓就沒了，
+#    而 driver 一句警告都不會印（對它來說什麼都沒失敗）。
+#    ⇒ 寫檔 + 開機時用同一支 D-Bus 呼叫補回來；真正的固化是 update-initramfs，見下。
 FW=/lib/firmware/rockchip/rockchip_ebc_default_screen.bin
 if [ -f "$HOME/offscreen/screen.bin" ]; then
   sudo cp -n "$FW" "$FW.bak-pine64"          # 原廠 PINE64 圖，只備份一次（-n 保冪等）
   sudo install -m 0644 "$HOME/offscreen/screen.bin" "$FW"
-  sudo dbus-send --system --dest=org.pinenote.ebc /ebc \
-    org.pinenote.ebc.SetOfflineScreenFromFileTemporary string:"$FW" >/dev/null 2>&1 \
-    || echo "   （執行期套用失敗，下次開機仍會生效）"
-  echo "   已裝；原廠圖備份在 $FW.bak-pine64"
+
+  sudo install -m 0755 "$D/offscreen/restore-offscreen.sh" /usr/local/sbin/pn-restore-offscreen
+  sudo install -m 0644 "$D/offscreen/pn-offscreen.service" /etc/systemd/system/pn-offscreen.service
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now pn-offscreen.service
+  echo "   已裝；原廠圖備份在 $FW.bak-pine64；開機由 pn-offscreen.service 補回"
+
+  # initramfs 才是 driver 真正讀得到的地方。預設不動它：這台沒有遠端救援，
+  # 壞掉的 initramfs ＝ 只剩磁鐵 maskrom，而且 extlinux 選單目前是隱藏的（挑不到舊 kernel）。
+  # 要固化就明講一聲再開（重生完務必在人在現場時重開機驗一次）：
+  #   PINENOTE_OFFSCREEN_INITRAMFS=1 setup/setup.sh
+  if [ "${PINENOTE_OFFSCREEN_INITRAMFS:-0}" = "1" ]; then
+    sudo cp -n "/boot/initrd.img-$(uname -r)" "/boot/initrd.img-$(uname -r).bak-offscreen"
+    sudo update-initramfs -u -k "$(uname -r)"
+    echo "   initramfs 已重生（舊的備份在 /boot/initrd.img-$(uname -r).bak-offscreen）"
+  else
+    echo "   initramfs 未重生＝driver 開機時讀到的仍是出廠圖；要固化見上方註解"
+  fi
 else
   echo "   跳過：沒有 ~/offscreen/screen.bin（用 setup/offscreen/make-offscreen.sh 產一張）"
 fi
