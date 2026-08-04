@@ -1,0 +1,40 @@
+#!/bin/bash
+# Photograph the on-screen keyboard from inside the shell.
+#
+# GNOME refuses org.gnome.Shell.Screenshot to anything that is not the
+# screenshot UI, and /dev/fb0 on this device holds whatever plymouth last drew
+# rather than the live desktop — so neither the obvious route nor the clever one
+# works from a terminal. The pn-osk extension runs inside gnome-shell, which is
+# the one place that is allowed to look, and it exposes that as a D-Bus method.
+#
+# The countdown exists so you can be doing something while it fires: rotate the
+# tablet, hold shift, switch to the '?123' layer. The keyboard has to be on
+# screen at the moment of the shot, which is exactly the moment your hands are
+# busy — hence a delay rather than a keypress.
+#
+#   oskshot          one shot, after 4 seconds
+#   oskshot 4        four shots, 4 seconds apart
+#   oskshot 4 6      four shots, 6 seconds apart
+set -u
+
+shots=${1:-1}
+delay=${2:-4}
+dir="${OSKSHOT_DIR:-$HOME/Pictures/osk}"
+mkdir -p "$dir"
+
+for i in $(seq 1 "$shots"); do
+    for t in $(seq "$delay" -1 1); do
+        printf "\r[%d/%d] %2ds " "$i" "$shots" "$t"
+        sleep 1
+    done
+
+    file="$dir/osk-$(date +%Y%m%d-%H%M%S).png"
+    result=$(gdbus call --session --dest org.cver.PnOsk \
+        --object-path /org/cver/PnOsk \
+        --method org.cver.PnOsk.Capture "$file" 2>&1)
+
+    case "$result" in
+        *ok*) printf "\r[%d/%d] %s\n" "$i" "$shots" "$file" ;;
+        *)    printf "\r[%d/%d] failed: %s\n" "$i" "$shots" "$result" >&2 ;;
+    esac
+done

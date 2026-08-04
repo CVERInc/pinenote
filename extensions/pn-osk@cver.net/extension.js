@@ -1,27 +1,38 @@
 // PineNote OSK — make GNOME's on-screen keyboard stop wasting landscape.
 //
-// What is wrong, on a 1872x1404 panel:
+// Measured on this 1872x1404 panel, before any of this:
 //
-// Keyboard._relayout() reserves a band the full width of the monitor and
-// monitor.height / 3 tall in landscape (a quarter in portrait). The keys are
-// drawn inside an AspectContainer, which preserves the layout's column:row
-// ratio and centres whatever it cannot fill. In landscape the band is far
-// wider than that ratio, so a large part of the reserved strip is blank — you
-// pay a third of a shorter screen and get nothing for it — while the keys stay
-// narrow enough that the terminal layout's labels ellipsize: "Tab" renders as
-// "T…", "Ctrl" as "C…", "?123" as "?…". Those are not mystery keys. They are
-// keys that cannot spell their own names.
+//   Keyboard._relayout() reserves a band the full width of the monitor and a
+//   third of its height in landscape. The keys are drawn inside an
+//   AspectContainer, which preserves the layout's column:row ratio and centres
+//   whatever it cannot fill, so the keys got 1207 of 1872 pixels. The top 98
+//   pixels of that band belong to a word-suggestions strip that a terminal
+//   never fills. And the keys were narrow enough that the terminal layout's own
+//   labels ellipsized: "Tab" as "T...", "Ctrl" as "C...", "?123" as "?...".
+//   They were not mystery keys. They were keys that could not spell their names.
 //
-// Settings live in ~/.config/pn-osk.json and are re-read every time the
-// keyboard is rebuilt, so changing them needs no session restart:
+// What this does:
 //
-//   { "fillWidth": true, "addTopRow": true, "symbolKeyWidth": 1.5 }
+//   fillWidth   override the ratio in landscape so the keys use the band that
+//               was already being paid for
+//   k6Layout    rebuild the terminal layout as a real 65% keyboard: the digits
+//               with their shifted faces, the punctuation where fingers expect
+//               it, an inverted-T, and a navigation column down the right edge.
+//               The stock us-extended layout has no Escape key in any of its
+//               four levels, which is a strange thing for a terminal keyboard.
 //
-// The D-Bus interface at org.cver.PnOsk exists because this device is driven
-// over SSH and GNOME refuses screenshots to outside callers. An extension runs
-// inside the shell, so it can both take the picture and report the actual
-// allocation boxes — which is the difference between measuring this layout and
-// guessing at it from a photograph of the glass.
+// Everything below lives in ~/.config/pn-osk.json and is re-read on every
+// keyboard rebuild, so tuning it costs no session restart. Changing THIS FILE
+// does — GNOME caches extension modules, and only `systemctl restart gdm3`
+// (autologin is on, so it comes back by itself) picks up a new one. The
+// stylesheet is the exception: it reloads on disable/enable.
+//
+// The D-Bus interface is not a debugging leftover. This device is driven over
+// SSH; GNOME refuses screenshots to callers outside the shell, and /dev/fb0
+// holds whatever plymouth last drew rather than the live desktop. An extension
+// runs inside the shell, so Capture() can take the picture and Geometry() can
+// report the real allocation boxes. It earned itself within the hour: the ratio
+// override was silently doing nothing, and one trace line said why.
 
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
@@ -33,15 +44,69 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 
-const BUILD = 5;
+const BUILD = 12;
 
 const DEFAULTS = {
     fillWidth: true,
-    addTopRow: true,
-    // The stock '?123' key is one column wide and its label does not fit.
-    // Widening it takes the difference out of the space bar, which has four.
-    symbolKeyWidth: 1.5,
+    k6Layout: true,
     trace: false,
+
+    // One key per character. The shift string lines up position for position
+    // with its default: index N of one is the shifted face of index N of the
+    // other, exactly as the two halves of a physical keycap.
+    topRow: {default: '`1234567890-=', shift: '~!@#$%^&*()_+'},
+    qwertyExtra: {default: '[]\\', shift: '{}|'},
+    homeExtra: {default: ";'", shift: ':"'},
+    bottomKeys: {default: ',./', shift: '<>?'},
+
+    // The navigation column down the right edge. One column is 110px here,
+    // which fits three characters: "End" and "Del" survive, "Home" and "PgUp"
+    // ellipsize into "H..." and "P...". The symbols are what a Mac keyboard
+    // prints on these very keys, and they fit. Set them back to words and
+    // raise widths.nav to 1.5 if you would rather read them.
+    navLabels: {
+        esc: 'Esc',
+        del: '\u2326',
+        home: '\u2196',
+        end: '\u2198',
+        pgup: '\u21de',
+        pgdn: '\u21df',
+    },
+
+    // Portrait is 1404px wide, not 1872. The landscape layout's 17 columns
+    // leave 82px each there, and a 66px key cannot spell "Ctrl" any more than
+    // the stock one could spell "Tab" — the same failure, caused by me this
+    // time. So portrait keeps the stock body and gains only the row it was
+    // really missing: Esc and the digits, which at 13 columns line up exactly
+    // with the rows underneath.
+    portrait: {
+        k6: false,
+        topRow: {default: '1234567890-=', shift: '!@#$%^&*()_+'},
+        columns: 13,
+        // The stock body's word keys do not fit 13 narrow columns either. The
+        // space bar has the width to spare, and is the one key nobody misses
+        // half a column of.
+        widths: {tab: 1.5, ctrl: 1.5, symbolSwitch: 2},
+    },
+
+    // Every row is balanced to this many columns, or the navigation column
+    // stops being a column: rows lay out from the left, so slack shows up as a
+    // ragged right edge rather than as a gap where you wanted one.
+    columns: 17,
+
+    // Column widths. One key per row is elastic and absorbs whatever the rest
+    // of that row leaves over, so changing any width here stays safe.
+    widths: {
+        nav: 1,
+        backspace: 2,
+        tab: 1.5,
+        backslash: 2.5,
+        capsShift: 1.5,
+        enter: 3.5,
+        shift: 2,
+        symbolSwitch: 1.5,
+        space: 7.5,
+    },
 };
 
 const IFACE = `
@@ -65,30 +130,56 @@ function configPath() {
 function readConfig() {
     try {
         const [ok, bytes] = GLib.file_get_contents(configPath());
-        if (ok)
-            return {...DEFAULTS, ...JSON.parse(new TextDecoder().decode(bytes))};
+        if (ok) {
+            const user = JSON.parse(new TextDecoder().decode(bytes));
+            return {...DEFAULTS, ...user, widths: {...DEFAULTS.widths, ...user.widths}};
+        }
     } catch (e) {
         // No file, or bad JSON: fall back to defaults rather than breaking the
         // keyboard. A typo in a config file must not cost you your input.
         if (!(e instanceof GLib.FileError))
             console.warn(`[pn-osk] ignoring bad config: ${e.message}`);
     }
-    return {...DEFAULTS};
+    return {...DEFAULTS, widths: {...DEFAULTS.widths}};
 }
 
-// Fresh objects every build: _addRowKeys does `strings?.shift()`, mutating the
-// key it is handed. A shared constant would be drained of its characters the
-// second time the keyboard is built.
-function topRow() {
-    return [
-        {label: 'Esc', keyval: Clutter.KEY_Escape},
-        ...[...'1234567890'].map(c => ({label: c, strings: [c]})),
-    ];
+// The shell's own KeyboardModel reads exactly this, and reading it again is how
+// the action keys — delete, enter, the level switches, hide — get reused with
+// their real fields instead of being guessed at and quietly rebuilt wrong.
+function loadStockLayout(groupName) {
+    const file = Gio.File.new_for_uri(
+        `resource:///org/gnome/shell/osk-layouts/${groupName}.json`);
+    const [, contents] = file.load_contents(null);
+    return JSON.parse(new TextDecoder().decode(contents));
 }
 
-function isSpaceKey(key) {
-    return key.label === ' ' || key.strings?.[0] === ' ';
+const charKeys = str => [...(str ?? '')].map(c => ({label: c, strings: [c]}));
+const faceFor = (setting, level) =>
+    level === 1 ? setting?.shift ?? setting?.default ?? '' : setting?.default ?? '';
+
+// Widths are applied to copies: the originals are this build's model objects,
+// and _addRowKeys consumes them by mutating their `strings`.
+const sized = (key, width) => (key ? {...key, width} : null);
+
+// Each row nominates one key to absorb the slack, so a width change anywhere
+// cannot leave the right edge ragged. Returns the row with that key resized.
+function balance(row, flexIndex, columns) {
+    const total = row.reduce((sum, k) => sum + (k.width ?? 1), 0);
+    const slack = columns - total;
+    if (!slack || flexIndex < 0 || flexIndex >= row.length)
+        return row;
+    const flex = row[flexIndex];
+    const width = (flex.width ?? 1) + slack;
+    if (width < 1) {
+        console.warn(`[pn-osk] row does not fit in ${columns} columns; leaving it ragged`);
+        return row;
+    }
+    return row.map((k, i) => (i === flexIndex ? {...k, width} : k));
 }
+
+const byIcon = name => k => k.iconName === name;
+const byAction = name => k => k.action === name;
+const keyval = (label, key) => ({label, keyval: key});
 
 function box(actor) {
     if (!actor)
@@ -103,18 +194,8 @@ function box(actor) {
         };
         if (actor instanceof St.Widget) {
             const node = actor.get_theme_node();
-            out.padding = [
-                node.get_padding(St.Side.TOP),
-                node.get_padding(St.Side.RIGHT),
-                node.get_padding(St.Side.BOTTOM),
-                node.get_padding(St.Side.LEFT),
-            ].map(Math.round);
-            out.margin = [
-                node.get_margin(St.Side.TOP),
-                node.get_margin(St.Side.RIGHT),
-                node.get_margin(St.Side.BOTTOM),
-                node.get_margin(St.Side.LEFT),
-            ].map(Math.round);
+            out.padding = [St.Side.TOP, St.Side.RIGHT, St.Side.BOTTOM, St.Side.LEFT]
+                .map(s => Math.round(node.get_padding(s)));
         }
         return out;
     } catch (e) {
@@ -135,43 +216,77 @@ export default class PineNoteOskExtension extends Extension {
 
         proto._relayout = function (...args) {
             ext._origRelayout.apply(this, args);
+
+            // Rotating the device resizes the band but does not rebuild the
+            // layout, and the orientation is only sampled while composing — so
+            // the keyboard kept wearing whichever shape it was built in. This
+            // is the one place that does hear about monitor changes.
+            const monitor = Main.layoutManager.keyboardMonitor;
+            const landscape = !monitor || monitor.width > monitor.height;
+            if (this._pnBuiltLandscape !== undefined &&
+                this._pnBuiltLandscape !== landscape) {
+                this._pnBuiltLandscape = landscape;   // set first: _updateKeys re-enters here
+                this._updateKeys();
+            }
+
             if (ext._config.fillWidth)
                 ext._forceFullWidth(this);
         };
 
         proto._updateLayout = function (groupName, purpose) {
-            // Re-read here: this runs on every rebuild, which makes the config
-            // file take effect without reloading the extension.
             ext._config = readConfig();
             this._pnPurpose = purpose;
+
+            // Compose the whole terminal layout up front. _addRowKeys is told
+            // nothing about which level it is building, so the containers get
+            // tracked as they first appear and matched against this by index.
+            this._pnLevels = [];
+            this._pnComposed = null;
+            const monitor = Main.layoutManager.keyboardMonitor;
+            const landscape = !monitor || monitor.width > monitor.height;
+            this._pnBuiltLandscape = landscape;
+            if (purpose === Clutter.InputContentPurpose.TERMINAL &&
+                ext._config.k6Layout)
+                this._pnComposed = ext._composeLayout(groupName, landscape);
+
             const ret = ext._origUpdateLayout.call(this, groupName, purpose);
+
             // _relayout only runs on monitor changes, so installing the ratio
             // override from there leaves it uninstalled after the extension is
-            // re-enabled on a session that already has a keyboard. This runs
-            // on every rebuild, which is the honest place for it.
+            // re-enabled on a session that already has a keyboard. This runs on
+            // every rebuild, which is the honest place for it.
             if (ext._config.fillWidth)
                 ext._forceFullWidth(this);
             return ret;
         };
 
         proto._addRowKeys = function (keys, layout, emojiVisible) {
-            const cfg = ext._config;
-            const isTerminal =
-                this._pnPurpose === Clutter.InputContentPurpose.TERMINAL;
-
-            if (cfg.addTopRow && isTerminal && !layout._pnTopRowDone) {
-                layout._pnTopRowDone = true;
-                ext._origAddRowKeys.call(this, topRow(), layout, emojiVisible);
-                layout.appendRow();
+            this._pnLevels ??= [];
+            let level = this._pnLevels.indexOf(layout);
+            if (level < 0) {
+                level = this._pnLevels.push(layout) - 1;
+                layout._pnRow = 0;
             }
+            const row = layout._pnRow++;
 
+            const composed = this._pnComposed?.[level];
+            if (!composed)
+                return ext._origAddRowKeys.call(this, keys, layout, emojiVisible);
+
+            // Five composed rows against the model's four: the first call emits
+            // two of them, opening a row in between.
+            if (row === 0) {
+                ext._origAddRowKeys.call(this, composed[0], layout, emojiVisible);
+                layout.appendRow();
+                return ext._origAddRowKeys.call(this, composed[1], layout, emojiVisible);
+            }
             return ext._origAddRowKeys.call(
-                this, ext._widenSymbolKey(keys, cfg), layout, emojiVisible);
+                this, composed[row + 1] ?? keys, layout, emojiVisible);
         };
 
         this._exportDBus();
         this._rebuild();
-        console.log(`[pn-osk] enabled, build=${BUILD}, config=${JSON.stringify(this._config)}`);
+        console.log(`[pn-osk] enabled, build=${BUILD}`);
     }
 
     disable() {
@@ -198,31 +313,176 @@ export default class PineNoteOskExtension extends Extension {
         this._rebuild();
     }
 
-    // Give '?123' the columns its label needs, and take them from the space
-    // bar, which is the only key on that row with any to spare. Clone the two
-    // keys touched — the originals belong to the freshly parsed model, but the
-    // row array is walked more than once per build.
-    _widenSymbolKey(keys, cfg) {
-        const extra = (cfg.symbolKeyWidth ?? 1) - 1;
-        if (extra <= 0)
-            return keys;
+    // Rebuild levels 0 (plain) and 1 (shifted) as a 65% keyboard, 17 columns
+    // wide. Levels 2 and 3 are the '?123' symbol layers, which already carry
+    // their own punctuation and are left exactly as they ship.
+    _composeLayout(groupName, landscape) {
+        let stock = null;
+        for (const name of [`${groupName}-extended`, 'us-extended']) {
+            try {
+                stock = loadStockLayout(name);
+                break;
+            } catch (e) {
+                // Try the next candidate, exactly as the shell does.
+            }
+        }
+        if (!stock) {
+            console.warn('[pn-osk] no stock layout to compose from');
+            return null;
+        }
 
-        const symbolIdx = keys.findIndex(k => k.label === '?123');
-        const spaceIdx = keys.findIndex(k => isSpaceKey(k) && (k.width ?? 1) > extra + 1);
-        if (symbolIdx < 0 || spaceIdx < 0)
-            return keys;
+        const composed = {};
+        for (const level of [0, 1]) {
+            const rows = stock.levels?.[level]?.rows;
+            if (!rows || rows.length < 4)
+                return null;
+            const built = landscape || this._config.portrait?.k6
+                ? this._composeLevel(rows, level)
+                : this._composePortrait(rows, level);
+            if (!built)
+                return null;
+            composed[level] = built;
+        }
+        return composed;
+    }
 
-        const out = [...keys];
-        out[symbolIdx] = {...keys[symbolIdx], width: cfg.symbolKeyWidth};
-        out[spaceIdx] = {...keys[spaceIdx], width: (keys[spaceIdx].width ?? 1) - extra};
-        return out;
+    // Portrait: the stock rows, untouched, with the missing top row in front.
+    _composePortrait(rows, level) {
+        const cfg = this._config;
+        const p = {...DEFAULTS.portrait, ...cfg.portrait};
+        const w = {...DEFAULTS.portrait.widths, ...cfg.portrait?.widths};
+        const L = cfg.navLabels ?? DEFAULTS.navLabels;
+
+        const [qwertyRow, homeRow, letterRow, bottomRow] = rows;
+        const resize = (row, match, width) =>
+            row.map(k => (match(k) ? {...k, width} : k));
+
+        // Same three keys as landscape, for the same reason: a label that does
+        // not fit reads as a mystery key, not as a narrow one.
+        const qwerty = resize(qwertyRow, k => k.label === 'Tab', w.tab);
+        let bottom = resize(bottomRow, k => k.label === 'Ctrl', w.ctrl);
+        bottom = resize(bottom, k => k.label === '?123', w.symbolSwitch);
+
+        const flexIn = (row, match) => row.findIndex(match);
+        const cols = p.columns;
+
+        return [
+            [{label: L.esc, keyval: Clutter.KEY_Escape}, ...charKeys(faceFor(p.topRow, level))],
+            balance(qwerty, flexIn(qwerty, byAction('delete')), cols),
+            homeRow,
+            letterRow,
+            balance(bottom, flexIn(bottom, k => k.label === ' ' || k.strings?.[0] === ' '), cols),
+        ];
+    }
+
+    _composeLevel(rows, level) {
+        const cfg = this._config;
+        const w = cfg.widths;
+
+        const [qwertyRow, homeRow, letterRow, bottomRow] = rows;
+        const find = (row, pred) => row.find(pred);
+
+        const tab = find(qwertyRow, k => k.label === 'Tab');
+        const backspace = find(qwertyRow, byAction('delete'));
+        const enter = find(homeRow, byIcon('keyboard-enter-symbolic'));
+        const capsShift = homeRow[0];
+        const leftShift = letterRow[0];
+        const rightShift = letterRow[letterRow.length - 1];
+        const up = find(letterRow, byIcon('go-up-symbolic'));
+        const ctrl = find(bottomRow, k => k.label === 'Ctrl');
+        const symbolSwitch = find(bottomRow, k => k.label === '?123');
+        const alt = find(bottomRow, k => k.label === 'Alt');
+        const space = find(bottomRow, k => k.label === ' ' || k.strings?.[0] === ' ');
+        const emoji = find(bottomRow, byAction('emoji'));
+        const langMenu = find(bottomRow, byAction('languageMenu'));
+        const left = find(bottomRow, byIcon('go-previous-symbolic'));
+        const down = find(bottomRow, byIcon('go-down-symbolic'));
+        const right = find(bottomRow, byIcon('go-next-symbolic'));
+        const hide = find(bottomRow, byAction('hide'));
+
+        // The letters come out of the stock rows rather than being written
+        // here, so the shifted level yields real capitals and a non-US layout
+        // would keep its own alphabet.
+        const qwertyChars = qwertyRow.slice(1, -1);
+        const homeChars = homeRow.slice(1, -1);
+        const letterChars = letterRow.slice(1, -3);
+
+        if (!backspace || !enter || !hide || !space || qwertyChars.length !== 10)
+            return null;
+
+        const extras = charKeys(faceFor(cfg.qwertyExtra, level));
+        if (extras.length)
+            extras[extras.length - 1].width = w.backslash;
+
+        const navKey = (label, key) => ({label, keyval: key, width: w.nav});
+        const L = cfg.navLabels ?? DEFAULTS.navLabels;
+
+        // Each row names the key that absorbs its slack, so every row lands on
+        // cfg.columns and the navigation column stays a column. The inverted-T
+        // only reads as one if the up key sits in the same column as the down
+        // key, which is the column the Del on the fourth row holds open.
+        const flexBackspace = sized(backspace, w.backspace);
+        const flexBackslash = extras[extras.length - 1];
+        const flexEnter = sized(enter, w.enter);
+        const flexShift = sized(rightShift, w.shift);
+        const flexSpace = sized(space, w.space);
+
+        const rowsOut = [
+            [
+                {label: L.esc, keyval: Clutter.KEY_Escape},
+                ...charKeys(faceFor(cfg.topRow, level)),
+                flexBackspace,
+                sized(hide, w.nav),
+            ],
+            [
+                sized(tab, w.tab),
+                ...qwertyChars,
+                ...extras,
+                navKey(L.home, Clutter.KEY_Home),
+            ],
+            [
+                sized(capsShift, w.capsShift),
+                ...homeChars,
+                ...charKeys(faceFor(cfg.homeExtra, level)),
+                flexEnter,
+                navKey(L.end, Clutter.KEY_End),
+            ],
+            [
+                sized(leftShift, w.shift),
+                ...letterChars,
+                ...charKeys(faceFor(cfg.bottomKeys, level)),
+                flexShift,
+                sized(up, 1),
+                navKey(L.del, Clutter.KEY_Delete),
+                navKey(L.pgup, Clutter.KEY_Page_Up),
+            ],
+            [
+                sized(ctrl, 1),
+                sized(symbolSwitch, w.symbolSwitch),
+                sized(alt, 1),
+                flexSpace,
+                sized(emoji, 1),
+                sized(langMenu, 1),
+                sized(left, 1),
+                sized(down, 1),
+                sized(right, 1),
+                navKey(L.pgdn, Clutter.KEY_Page_Down),
+            ],
+        ];
+
+        const flex = [flexBackspace, flexBackslash, flexEnter, flexShift, flexSpace];
+        const columns = cfg.columns ?? DEFAULTS.columns;
+        return rowsOut.map((row, i) => {
+            const kept = row.filter(Boolean);
+            return balance(kept, kept.indexOf(flex[i]), columns);
+        });
     }
 
     // AspectContainer keeps the keys at the layout's column:row ratio and
     // centres the remainder. Its class is not exported, but the instance is,
-    // and setRatio() is called on it every time the page changes — so
-    // overriding the instance's own method catches every caller, including the
-    // ones inside the shell we cannot reach from here.
+    // and setRatio() is called on it whenever the page changes — so overriding
+    // the instance's own method catches every caller, including the ones inside
+    // the shell that cannot be reached from here.
     _forceFullWidth(keyboard) {
         const self = this;
         const ac = keyboard._aspectContainer;
@@ -232,36 +492,28 @@ export default class PineNoteOskExtension extends Extension {
         if (!ac._pnOrigSetRatio) {
             ac._pnOrigSetRatio = ac.setRatio.bind(ac);
             ac.setRatio = (relWidth, relHeight) => {
-                const monitor = Main.layoutManager.keyboardMonitor;
-                if (monitor && monitor.width > monitor.height) {
-                    // Use the container's own allocation when it has one: the
-                    // keyboard actor is larger than the box the keys land in,
-                    // and matching the wrong box is what leaves a margin.
-                    // An actor that has never been allocated reports the empty
-                    // box, whose corners are +/-Infinity. `|| fallback` does
-                    // not catch that — -Infinity is truthy — and feeding it to
-                    // setRatio yields a NaN ratio, which AspectContainer
-                    // silently ignores in favour of the layout's own. That is
-                    // exactly how this looked like "the override did nothing".
-                    const b = ac.get_allocation_box();
-                    const bw = b.x2 - b.x1;
-                    const bh = b.y2 - b.y1;
-                    const allocated =
-                        Number.isFinite(bw) && Number.isFinite(bh) &&
-                        bw > 0 && bh > 0;
-                    const w = allocated ? Math.round(bw) : keyboard.width;
-                    const h = allocated ? Math.round(bh) : keyboard.height;
+                // Both orientations. Portrait was left out of this at first and
+                // spent its keys on a 14% margin it was already paying for.
+                if (true) {
+                    // Deliberately NOT the container's allocation box. That box
+                    // is whatever the last layout left there, so reading it here
+                    // samples the previous orientation: rotating to landscape
+                    // produced a keyboard exactly 1404px wide, which is the
+                    // width of the portrait screen it had just left. Third time
+                    // today that something was measured before it existed. The
+                    // keyboard's own size was set by _relayout from the monitor
+                    // moments ago and cannot be stale.
+                    const width = keyboard.width;
+                    const height = keyboard.height;
                     if (self._trace) {
-                        console.log(`[pn-osk] setRatio(${relWidth},${relHeight})` +
-                            ` -> forcing ${w}/${h}`);
+                        console.log(
+                            `[pn-osk] setRatio(${relWidth},${relHeight}) -> ${width}/${height}`);
                     }
-                    ac._pnOrigSetRatio(w, h);
+                    ac._pnOrigSetRatio(width, height);
                 } else {
                     ac._pnOrigSetRatio(relWidth, relHeight);
                 }
             };
-            if (this._config.trace)
-                console.log('[pn-osk] ratio override installed');
         }
 
         this._trace = this._config.trace;
@@ -290,7 +542,7 @@ export default class PineNoteOskExtension extends Extension {
             Gio.BusNameOwnerFlags.NONE, null, null, null);
     }
 
-    // --- D-Bus methods -----------------------------------------------------
+    // --- D-Bus -------------------------------------------------------------
 
     CaptureAsync([path], invocation) {
         try {
@@ -328,18 +580,13 @@ export default class PineNoteOskExtension extends Extension {
                     box: box(container),
                     visible: container.visible,
                     ratio: container.getRatio?.() ?? null,
-                    rows: container.get_children?.().length ?? null,
+                    keys: container.get_children?.().length ?? null,
                 };
             }
         }
 
-        // One real key, to see what the labels are actually being given.
-        let sampleKey = null;
         const firstLayer = kb?._layers ? Object.values(kb._layers)[0] : null;
-        const firstRow = firstLayer?.get_children?.()[0];
-        const firstKey = firstRow?.get_children?.()[0];
-        if (firstKey)
-            sampleKey = box(firstKey);
+        const firstKey = firstLayer?.get_children?.()[0];
 
         return JSON.stringify({
             build: BUILD,
@@ -347,13 +594,11 @@ export default class PineNoteOskExtension extends Extension {
             monitor: monitor
                 ? {x: monitor.x, y: monitor.y, w: monitor.width, h: monitor.height}
                 : null,
-            keyboardBox: box(Main.layoutManager.keyboardBox),
             keyboard: box(kb),
             keyboardVisible: kb?.visible ?? null,
             aspectContainer: box(kb?._aspectContainer),
-            currentLayout: box(kb?._currentLayout),
             layers,
-            sampleKey,
+            sampleKey: firstKey ? box(firstKey) : null,
         }, null, 2);
     }
 
