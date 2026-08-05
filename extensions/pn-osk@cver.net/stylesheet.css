@@ -10,3 +10,24 @@
     margin: 0px;
     spacing: 0px;
 }
+
+/* GNOME 48 raised .keyboard-key past the size 47 used, and a key is as tall as
+ * its label needs rather than as tall as the grid offers - five composed rows
+ * measured 240 against the 234 the shell hands the keyboard, and the bottom row
+ * fell off the screen. The theme sets no icon-size under #keyboard, so the
+ * glyph keys track font-size and end up larger than the lettered ones.
+ *
+ * The gap at the bottom costs width. AspectContainer holds a ratio, so the 4px
+ * taken off the band comes back as ~9px of margin on each side. Two ways round
+ * it were tried and both failed for the same reason - a key is at least as tall
+ * as its label, so neither loosening .key-container padding nor setting an
+ * explicit height makes it shorter. Only font-size does, and that is a
+ * legibility budget rather than a layout knob. */
+.keyboard-key {
+    font-size: 1.1em;
+    icon-size: 0.85em;
+}
+
+#keyboard {
+    padding-bottom: 4px;
+}

@@ -20,15 +20,15 @@
   },
   "widths": {
     "backspace": 2,
-    "tab": 1.5,
-    "backslash": 2.5,
-    "capsShift": 2,
-    "enter": 3,
-    "shift": 2,
+    "tab": 2.5,
+    "backslash": 1.5,
+    "capsShift": 3,
+    "enter": 2,
+    "shift": 1,
     "symbolSwitch": 1.5,
     "space": 6,
     "nav": 1,
-    "leftShift": 2.5,
+    "leftShift": 3.5,
     "esc": 1,
     "arrow": 1,
     "ctrl": 1.5,
@@ -50,10 +50,9 @@
     "k6": true,
     "labels": {
       "Esc": "⎋",
-      "Tab": "⇥",
-      "Ctrl": "⌃",
-      "Alt": "⌥",
-      "?123": "123"
+      "Tab": "tab",
+      "Ctrl": "ctrl",
+      "Alt": "alt"
     },
     "topRow": {
       "default": "1234567890-=",
@@ -65,5 +64,15 @@
       "ctrl": 1.5,
       "symbolSwitch": 2
     }
+  },
+  "labels": {
+    "?123": "#+=",
+    "Tab": "tab",
+    "Ctrl": "ctrl",
+    "Alt": "alt"
+  },
+  "capsLabels": {
+    "default": "caps lock",
+    "latched": "caps locked"
   }
 }

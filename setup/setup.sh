@@ -230,3 +230,40 @@ echo "== done =="
 #     救援：從 SSH 跑 sudo systemctl restart gdm3。改 lid 只能「寫檔 + 重開機」。
 #  🔴 電子紙的 TTY 字太小太糊、不堪用 — 若要走「開機直進 SSH 的極簡系統」，
 #     console 字型是必須先解的第一關。
+
+echo "== [13] pn-osk：把虛擬鍵盤換成 65% 版面（GNOME 47 與 48 都吃） =="
+# 🔴 這一步以前不在腳本裡：README 有一整節在講這個鍵盤，而重刷後它不會回來。
+#    跟 Typing Mode 當年同一個形狀的 phantom feature。
+# 冪等：檔案直接覆蓋；設定檔已存在就不動（那是使用者調過的）。
+E="$HOME/.local/share/gnome-shell/extensions/pn-osk@cver.net"
+mkdir -p "$E"
+install -m 0644 "$D/../extensions/pn-osk@cver.net/extension.js" \
+                "$D/../extensions/pn-osk@cver.net/metadata.json" \
+                "$D/../extensions/pn-osk@cver.net/stylesheet.css" "$E/"
+if [ ! -f "$HOME/.config/pn-osk.json" ]; then
+  install -m 0644 "$D/../extensions/pn-osk@cver.net/pn-osk.example.json" \
+                  "$HOME/.config/pn-osk.json"
+  echo "   -> 已放上預設 ~/.config/pn-osk.json"
+else
+  echo "   -> ~/.config/pn-osk.json 已存在，保留"
+fi
+# 新裝的擴充目錄要重啟 session 才掃得到，所以 enable 這一步可能先失敗；
+# 直接把 uuid 寫進清單，下次 shell 起來就會載入。用 python 而不是 sed 改這個
+# 陣列：清單為空時是 "@as []"，字串接合會生出 "@as [, 'x']" 這種壞語法。
+gnome-extensions enable pn-osk@cver.net 2>/dev/null || python3 - <<'PY'
+import subprocess
+
+UUID = "pn-osk@cver.net"
+cur = subprocess.run(["gsettings", "get", "org.gnome.shell", "enabled-extensions"],
+                     capture_output=True, text=True).stdout.strip()
+body = cur[cur.index("[") + 1:cur.rindex("]")]
+items = [s.strip().strip("'") for s in body.split(",") if s.strip()]
+if UUID in items:
+    print("   -> 已在 enabled-extensions 內")
+else:
+    items.append(UUID)
+    val = "[" + ", ".join("'%s'" % i for i in items) + "]"
+    subprocess.run(["gsettings", "set", "org.gnome.shell",
+                    "enabled-extensions", val], check=True)
+    print("   -> 已加入 enabled-extensions")
+PY

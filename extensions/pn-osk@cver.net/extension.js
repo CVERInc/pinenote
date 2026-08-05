@@ -51,6 +51,18 @@ const DEFAULTS = {
     k6Layout: true,
     trace: false,
 
+    // Renames that apply in both orientations. portrait.labels sits on top of
+    // this one, so a key can read one way everywhere and another way only when
+    // the tablet is upright.
+    labels: {},
+
+    // Caps Lock latches the whole shift level, but GNOME only ever paints a
+    // key as latched on the long-press-Shift path, so the state is real and
+    // invisible. Naming the key after its state is the cheaper signal: no
+    // pseudo class to hunt, and it reads the same on a panel with two colours.
+    // Set either string empty to keep the stock caps-lock icon instead.
+    capsLabels: {default: "Caps Lock", latched: "Caps Locked"},
+
     // One key per character. The shift string lines up position for position
     // with its default: index N of one is the shifted face of index N of the
     // other, exactly as the two halves of a physical keycap.
@@ -235,6 +247,17 @@ function quantizeRow(row) {
     });
 }
 
+// The stock caps key carries an icon and no label. Swapping in a label means
+// dropping the icon, or the icon wins and the text never shows.
+function capsNamed(key, cfg, level) {
+    const labels = {...DEFAULTS.capsLabels, ...cfg.capsLabels};
+    const text = level === 0 ? labels.default : labels.latched;
+    if (!text)
+        return key;
+    const {iconName, ...rest} = key;
+    return {...rest, label: text};
+}
+
 // Swap the printed face of a key without touching what it does.
 function relabel(rows, map) {
     if (!map)
@@ -243,7 +266,24 @@ function relabel(rows, map) {
         k => (k.label && map[k.label] !== undefined ? {...k, label: map[k.label]} : k)));
 }
 
-const byIcon = name => k => k.iconName === name;
+// GNOME 48 renamed every keyboard-specific OSK icon to an osk- prefix.
+// The generic go-*-symbolic arrows were left alone. Matching both names keeps
+// one extension working on 47 and 48 - and the only one of these that mattered
+// was enter, because it is the sole icon behind _composeLevel's return null.
+const OSK_ICON_ALIASES = {
+    'keyboard-enter-symbolic': 'osk-enter-symbolic',
+    'keyboard-caps-lock-symbolic': 'osk-caps-lock-symbolic',
+    'keyboard-shift-symbolic': 'osk-shift-symbolic',
+    'keyboard-hide-symbolic': 'osk-hide-symbolic',
+    'keyboard-layout-symbolic': 'osk-layout-symbolic',
+    'face-smile-symbolic': 'osk-emoji-picker-symbolic',
+    'edit-clear-symbolic': 'osk-delete-symbolic',
+};
+const byIcon = name => {
+    const alias = OSK_ICON_ALIASES[name];
+    return k => k.iconName === name ||
+        (alias !== undefined && k.iconName === alias);
+};
 const byAction = name => k => k.action === name;
 const keyval = (label, key) => ({label, keyval: key});
 
@@ -302,6 +342,8 @@ export default class PineNoteOskExtension extends Extension {
         proto._updateLayout = function (groupName, purpose) {
             ext._config = readConfig();
             this._pnPurpose = purpose;
+            if (ext._config.trace)
+                log(`[pn-osk] _updateLayout group=${groupName} purpose=${purpose} TERMINAL=${Clutter.InputContentPurpose.TERMINAL} k6=${ext._config.k6Layout}`);
 
             // Compose the whole terminal layout up front. _addRowKeys is told
             // nothing about which level it is building, so the containers get
@@ -334,6 +376,8 @@ export default class PineNoteOskExtension extends Extension {
                 layout._pnRow = 0;
             }
             const row = layout._pnRow++;
+            if (ext._config.trace)
+                log(`[pn-osk] _addRowKeys level=${level} row=${row} hasComposed=${!!this._pnComposed} composedLen=${this._pnComposed?.length ?? -1} landscape=${this._pnBuiltLandscape}`);
 
             const composed = this._pnComposed?.[level];
             if (!composed)
@@ -409,12 +453,17 @@ export default class PineNoteOskExtension extends Extension {
                 : this._composePortrait(rows, level);
             if (!built)
                 return null;
-            if (portraitK6) {
-                built = relabel(built, {
-                    ...DEFAULTS.portrait.labels,
-                    ...this._config.portrait?.labels,
-                });
-            }
+            // Two layers: the top-level map applies whichever way up the
+            // tablet is, the portrait one overrides it. Landscape had no
+            // relabel at all before, so a rename like ?123 -> #+= could only be
+            // made on one side of the rotation.
+            built = relabel(built, {
+                ...DEFAULTS.labels,
+                ...this._config.labels,
+                ...(portraitK6
+                    ? {...DEFAULTS.portrait.labels, ...this._config.portrait?.labels}
+                    : {}),
+            });
             composed[level] = built;
         }
         return composed;
@@ -526,7 +575,7 @@ export default class PineNoteOskExtension extends Extension {
                 navKey(L.end, Clutter.KEY_End, 'end'),
             ],
             [
-                sized(capsShift, w.capsShift),
+                sized(capsNamed(capsShift, cfg, level), w.capsShift),
                 ...homeChars,
                 ...charKeys(faceFor(cfg.homeExtra, level)),
                 flexEnter,

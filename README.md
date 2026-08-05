@@ -48,6 +48,9 @@ It is idempotent, and it installs:
   persisted via `/etc/modprobe.d/rockchip_ebc.conf` and a systemd user service.
 - **Idle refresh** — a small daemon that watches GNOME's idle monitor and calls
   `org.pinenote.ebc.TriggerGlobalRefresh` once you have been still for 8 seconds.
+- **The keyboard** — `extensions/pn-osk@cver.net` installed and enabled, with
+  `pn-osk.example.json` dropped in as `~/.config/pn-osk.json` if you do not have
+  one yet. An existing config is never overwritten.
 - **Terminal legibility** — pure black on pure white, no cursor blink, a large monospace face.
 - **A guard on `pinenote-dbus-service`** — without it the whole clearing half can die silently;
   see *When the ghosting stops clearing* below.
@@ -189,14 +192,49 @@ They were keys that could not spell their names.
 `extensions/pn-osk@cver.net` makes the keys use the band that was already being
 paid for, and rebuilds the terminal layout as a 65% keyboard: the digits with
 their shifted faces, the punctuation where fingers expect it, an inverted-T, and
-a navigation column down the right edge. Portrait gets the same keyboard with
-the modifiers wearing the symbols a keyboard prints on them — `⎋ ⇥ ⌃ ⌥` — because
-at 82px a column those words do not fit, and one layout in both orientations is
-worth more than two tuned ones. Rotating the tablet no longer moves a key.
+a navigation column down the right edge. Portrait gets the same keyboard: one
+layout in both orientations is worth more than two tuned ones, and rotating the
+tablet no longer moves a key. The modifiers are named in lower case on both — the
+words fit once the label size is trimmed, and a key that can spell itself beats a
+glyph you have to learn. Escape keeps `⎋` in portrait, where the column is
+narrowest. Renames live in `labels` (both orientations) and `portrait.labels`
+(upright only), the second layered over the first.
 
 It also adds an Escape key, which the stock terminal layout does not have in any
 of its four levels. That gap is [three years old
 upstream](https://gitlab.gnome.org/GNOME/gnome-shell/-/merge_requests/2551).
+
+Caps Lock says which state it is in. Pressing it latches the whole shift level —
+that part works — but GNOME only ever paints a key as *latched* on the
+long-press-Shift path, and the caps key is not in the list that gets told. The
+state was real and invisible at once. A `:latched` rule in the stylesheet was
+tried first and did nothing, because the pseudo class never arrives. So the key
+is named after what it is doing instead: `caps lock` becomes `caps locked`. On a
+panel with two colours and no animation, words are the signal that survives.
+
+### On GNOME 48
+
+48 renames every keyboard-specific OSK icon to an `osk-` prefix —
+`keyboard-enter-symbolic` becomes `osk-enter-symbolic`, and likewise for shift,
+caps lock, hide, layout, emoji and delete. The generic `go-*-symbolic` arrows are
+left alone. The extension matches both spellings, so one copy runs on 47 and 48.
+
+Only one of those renames actually mattered, and it is worth knowing why: `enter`
+is the single icon behind `_composeLevel`'s `return null`. One failed lookup
+dropped the entire layout back to stock while the extension still reported
+`ACTIVE`, still answered on D-Bus, still read its config, and composed exactly
+zero rows. Nothing in the journal said so. If this keyboard is ever silently the
+stock one again, `trace` in the config prints what `_updateLayout` was handed and
+whether `_addRowKeys` ever saw a composed row — that is the shortest path back.
+
+48 also enlarges the key font, and a key is as tall as its label needs rather
+than as tall as the grid offers, so five composed rows measured past the band the
+shell allots and the bottom row fell off the screen. `stylesheet.css` trims the
+label and icon back. The gap above the screen edge costs width: `AspectContainer`
+holds a ratio, so every pixel taken off the band returns as roughly two pixels of
+margin on each side. Loosening `.key-container` padding does not help, and
+neither does an explicit `height` — only the font size moves a key's height, and
+that is a legibility budget, not a layout knob.
 
 Every width lives in `~/.config/pn-osk.json` and is re-read on each rebuild, so
 changing the shape of the keyboard costs a JSON edit and a D-Bus call rather
