@@ -232,6 +232,33 @@ Every one of those came from looking at the glass, and three of them reversed
 what the arithmetic was busy doing at the time. The layout in the screenshot is
 not a design that was computed. It is what two ways of being wrong converged on.
 
+## A rotation glitch we could not reproduce
+
+The panel is native landscape and GNOME rotates it to portrait. Turning the
+screen while a window was open produced this once: the window kept its landscape
+width, ran off the right edge, and left a band of empty desktop below it.
+Reopening the browser in portrait did not fix it. Restarting gnome-shell did.
+
+That looked like a compositor bug and was written up as one. The evidence never
+supported it. **Every measurement was taken on a window launched over SSH with a
+hand-assembled environment (`setsid` plus four exported variables), not from the
+dock.** That difference was present in both of the runs being compared, which
+means there was no control. Launching normally and rotating does not reproduce
+it.
+
+One dead end worth recording so it is not repeated: `ls -l /proc/PID/fd | grep
+wayland-0` cannot tell you which display protocol a process is using. Sockets
+appear there as `socket:[inode]` with no path, so the check comes back empty
+whether or not the process is on Wayland — and empty looks exactly like a
+negative result. `pgrep Xwayland` answers the question; that grep never could.
+
+If it happens again, capture these three *before* restarting the shell. Together
+they separate the client from the compositor:
+
+- `about:support` -> Window Protocol, for a browser window
+- `gdbus call --session --dest org.gnome.Mutter.DisplayConfig --object-path /org/gnome/Mutter/DisplayConfig --method org.gnome.Mutter.DisplayConfig.GetCurrentState` -> the transform
+- `pgrep Xwayland` -> whether an X11 path is involved at all
+
 ## Upstream
 
 The A2 waveform is not exposed in PineNote Helper's menu, although the code for it exists —
