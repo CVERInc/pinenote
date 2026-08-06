@@ -11,11 +11,17 @@
     spacing: 0px;
 }
 
-/* GNOME 48 raised .keyboard-key past the size 47 used, and a key is as tall as
- * its label needs rather than as tall as the grid offers - five composed rows
- * measured 240 against the 234 the shell hands the keyboard, and the bottom row
- * fell off the screen. The theme sets no icon-size under #keyboard, so the
- * glyph keys track font-size and end up larger than the lettered ones.
+/* A key is as tall as its label needs rather than as tall as the grid offers,
+ * so five composed rows overflow the band the shell allots and the bottom row
+ * falls off the screen. This is not a 48 regression: measured on both, keys are
+ * 94 physical pixels on 47 against 96 on 48, five rows overflow by six either
+ * way, and font-size is 1.455em in both themes. 47 has been overflowing since
+ * the first day. What 48 changed is the scale - rotating the tablet makes it
+ * write scale=2 into monitors.xml - so the same six logical pixels arrive as
+ * twelve physical ones and stop being invisible. Trimming the label buys them
+ * back, and is also what lets "caps locked" fit its three columns. The theme
+ * sets no icon-size under #keyboard, so the glyph keys track font-size and have
+ * to be trimmed with it.
  *
  * The gap at the bottom costs width. AspectContainer holds a ratio, so the 4px
  * taken off the band comes back as ~9px of margin on each side. Two ways round

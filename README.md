@@ -227,14 +227,29 @@ zero rows. Nothing in the journal said so. If this keyboard is ever silently the
 stock one again, `trace` in the config prints what `_updateLayout` was handed and
 whether `_addRowKeys` ever saw a composed row — that is the shortest path back.
 
-48 also enlarges the key font, and a key is as tall as its label needs rather
-than as tall as the grid offers, so five composed rows measured past the band the
-shell allots and the bottom row fell off the screen. `stylesheet.css` trims the
-label and icon back. The gap above the screen edge costs width: `AspectContainer`
-holds a ratio, so every pixel taken off the band returns as roughly two pixels of
-margin on each side. Loosening `.key-container` padding does not help, and
-neither does an explicit `height` — only the font size moves a key's height, and
-that is a legibility budget, not a layout knob.
+The keyboard also sits past the bottom of its band, and it is tempting to file
+that under 48. It is not. Measured on both systems: keys are 94 physical pixels
+on 47 against 96 on 48, five rows overflow by six either way, and `font-size` is
+`1.455em` in both themes. **47 has been overflowing since the first day.** What 48
+changed is the scale — rotating the tablet makes it write `scale=2` into
+`monitors.xml` — so the same six logical pixels arrive as twelve physical ones
+and stop being invisible. `stylesheet.css` trims label and icon, which takes keys
+to 92 and the overflow to four, and is also what lets `caps locked` fit its three
+columns.
+
+This was first written up the other way round, as *48 enlarges the key font*,
+from numbers that looked twice as large on one side — because they were logical
+pixels under a 2x scale on one system and physical pixels under 1x on the other.
+Two coordinate systems, read as one measurement. Correcting it cost a reboot into
+the older install and one more look, which is the practical argument for keeping
+that install around: a second system is not only a way back, it is the only
+control group this device has.
+
+The gap above the screen edge costs width: `AspectContainer` holds a ratio, so
+every pixel taken off the band returns as roughly two pixels of margin on each
+side. Loosening `.key-container` padding does not help, and neither does an
+explicit `height` — only the font size moves a key's height, and that is a
+legibility budget, not a layout knob.
 
 Every width lives in `~/.config/pn-osk.json` and is re-read on each rebuild, so
 changing the shape of the keyboard costs a JSON edit and a D-Bus call rather
