@@ -967,10 +967,13 @@ export default class PineNoteOskExtension extends Extension {
     // 這台上按得最兇的兩件事是「全域刷新」和「旋轉」，而旋轉原本埋在一個狀態
     // 顯示器的選單裡第十幾項。兩個都升成單獨一顆，而且是我們自己呼叫底層介面，
     // 不是借用別人的按鈕 —— 借用的話每次套件升級都會被放回原位。
-    _pnMakePanelButton(name, iconName, onActivate) {
+    _pnMakePanelButton(name, icon, onActivate) {
         const button = new PanelMenu.Button(0.0, name, true);
+        // icon 可以是主題裡的名字，也可以是我們自己帶的檔案
         button._pnIcon = new St.Icon({
-            icon_name: iconName,
+            ...(icon.startsWith("/")
+                ? {gicon: Gio.icon_new_for_string(icon)}
+                : {icon_name: icon}),
             style_class: "system-status-icon",
         });
         button.add_child(button._pnIcon);
@@ -1117,7 +1120,8 @@ export default class PineNoteOskExtension extends Extension {
         };
         add("pn-rotate", "PN Rotate", "object-rotate-right-symbolic",
             () => this._pnRotate());
-        add("pn-refresh", "PN Refresh", "view-refresh-symbolic",
+        add("pn-refresh", "PN Refresh",
+            `${this.path}/icons/pn-screen-refresh-symbolic.svg`,
             () => this._pnTriggerRefresh());
 
         this._pnSyncRotateIcon();

@@ -240,6 +240,9 @@ mkdir -p "$E"
 install -m 0644 "$D/../extensions/pn-osk@cver.net/extension.js" \
                 "$D/../extensions/pn-osk@cver.net/metadata.json" \
                 "$D/../extensions/pn-osk@cver.net/stylesheet.css" "$E/"
+# 自製圖示（面板的刷新鈕）。漏掉的話那顆按鈕會是空白的，而空白按鈕看起來就是壞掉。
+mkdir -p "$E/icons"
+install -m 0644 "$D/../extensions/pn-osk@cver.net/icons/"*.svg "$E/icons/"
 if [ ! -f "$HOME/.config/pn-osk.json" ]; then
   install -m 0644 "$D/../extensions/pn-osk@cver.net/pn-osk.example.json" \
                   "$HOME/.config/pn-osk.json"
