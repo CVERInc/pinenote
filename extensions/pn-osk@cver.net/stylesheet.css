@@ -73,16 +73,16 @@
  * reclaimed. Once they live in a fixed-position layer nobody hands them a box,
  * and CENTER alignment collapses them to zero. Give them their own dimensions.
  * Black on white because this panel quantises everything else away. */
+/* 原廠是 margin:6 padding:18 width:24 height:24 border-radius:999px（共 60x60）。
+   我們曾把 width 設成 56 —— 那是內容框，加上 padding 實際佔 92，大到壓在頂列上，
+   然後又把 padding 砍成 0 去補救，等於用錯的旋鈕解決對的問題。幾何全部交還原廠，
+   這裡只改這塊面板真正需要的東西：兩色電子紙上，半透明深灰會量化成雜訊。 */
 .page-navigation-arrow {
-    /* 主題給了它 padding，所以 width 只是內容框 —— 量到的是 92 而不是 56，
-       大到壓在頂列上。歸零之後這個數字才是它實際佔的大小。 */
-    padding: 0;
-    margin: 0;
-    width: 56px;
-    height: 56px;
-    border-radius: 28px;
     background-color: #000000;
     color: #ffffff;
-    icon-size: 28px;
+}
+
+.page-navigation-arrow > StIcon {
+    color: #ffffff;
 }
 

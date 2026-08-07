@@ -615,7 +615,7 @@ export default class PineNoteOskExtension extends Extension {
     _pnFloatArrows() {
         const gl = this._pnGridLayout;
         const controls = pnOverviewControls();
-        if (!gl || !controls || this._pnArrowLayer)
+        if (!gl || !controls || this._pnArrows)
             return;
 
         const prev = gl._previousPageArrow;
@@ -623,46 +623,51 @@ export default class PineNoteOskExtension extends Extension {
         if (!prev || !next)
             return;
 
-        // 記住原本的家，disable 時要還回去
+        // 記住原本的家：disable 時要還回去，替身也要住進去（見下）
         this._pnArrowHome = prev.get_parent();
         this._pnArrows = {prev, next};
 
-        this._pnArrowLayer = new St.Widget({
-            name: "pn-arrow-layer",
-            layout_manager: new Clutter.FixedLayout(),
-            reactive: false,
-            visible: false,
-        });
-        // addChrome 而不是 uiGroup.add_child：後者是硬塞一個 actor 進別人的
-        // 容器，排版不歸我們管，set_size 只是建議。addChrome 是 shell 給
-        // 「浮在畫面上的自有 UI」的正式入口，它會照我們給的座標放。
-        Main.layoutManager.addChrome(this._pnArrowLayer, {
-            trackFullscreen: false,
-            affectsStruts: false,
-            affectsInputRegion: true,
-        });
-
         for (const arrow of [prev, next]) {
             arrow.get_parent()?.remove_child(arrow);
-            this._pnArrowLayer.add_child(arrow);
+            // 一顆一顆 addChrome，不是先做一個鋪滿螢幕的層再把它們放進去。
+            // 那個層帶著 affectsInputRegion，等於在畫面上蓋一張透明壓克力板，
+            // 連頂列都點不動 —— 箭頭要能點就得進輸入區，但只有箭頭需要。
+            Main.layoutManager.addChrome(arrow, {
+                trackFullscreen: false,
+                affectsStruts: false,
+                affectsInputRegion: true,
+            });
             arrow.reactive = true;
-            // 這兩顆本來由 grid 的翻頁狀態控制顯隱，搬家之後那條線斷了，
-            // 所以固定顯示 —— 在啟動器上「還有下一頁」本來就該一直看得見。
-            arrow.opacity = 255;
-            // CENTER 對齊需要 parent 分配 box 才有尺寸，固定定位層不做這件事
+            // CENTER 對齊要 parent 分配 box 才有尺寸，chrome 不做這件事
             arrow.x_align = Clutter.ActorAlign.START;
             arrow.y_align = Clutter.ActorAlign.START;
-            arrow.show();
         }
 
-        // grid 的 allocate 仍會直接對這兩個屬性指到的 actor 下 allocate，
-        // 把它們壓回零寬的 indicators box。換成隱形替身，讓它去擺替身。
+        // grid 的 allocate 仍會直接對 layout 上那兩個屬性指到的 actor 下
+        // allocate（Clutter 允許對非自己 child 的 actor 這樣做），把它們壓回
+        // 零寬的 indicators box。換成替身，讓它去挨那一下。
+        //
+        // 🔴 替身必須有父節點：upstream 用 show()/hide() + ease({opacity}) 控制
+        // 顯隱，而 ClutterTransition 的時間軸跟著 stage 走。無父節點 ⇒ 沒有
+        // stage ⇒ 動畫不會跑完 ⇒ onComplete 裡的 hide() 永遠不發生。放回箭頭
+        // 原本的家，它們才收得到完整的週期，而我們鏡射得到正確結果。
         this._pnDecoys = {
-            prev: new St.Widget({name: "pn-arrow-decoy-prev", visible: false}),
-            next: new St.Widget({name: "pn-arrow-decoy-next", visible: false}),
+            prev: new St.Widget({name: "pn-arrow-decoy-prev"}),
+            next: new St.Widget({name: "pn-arrow-decoy-next"}),
         };
+        for (const decoy of [this._pnDecoys.prev, this._pnDecoys.next])
+            this._pnArrowHome?.add_child(decoy);
         gl._previousPageArrow = this._pnDecoys.prev;
         gl._nextPageArrow = this._pnDecoys.next;
+
+        this._pnArrowVisSignals = [];
+        for (const [key, decoy] of Object.entries(this._pnDecoys)) {
+            for (const prop of ["notify::visible", "notify::opacity"]) {
+                this._pnArrowVisSignals.push([decoy, decoy.connect(
+                    prop, () => this._pnSyncArrowVisibility())]);
+            }
+            void key;
+        }
 
         this._pnPositionArrows();
         this._pnArrowStateSignal = controls._stateAdjustment.connect(
@@ -671,22 +676,36 @@ export default class PineNoteOskExtension extends Extension {
             "monitors-changed", () => this._pnPositionArrows());
     }
 
+    // 真箭頭該不該出現 = 「upstream 認為該不該出現」AND「現在在 app grid」。
+    // 前半直接讀替身 —— 第一頁沒有 prev、最後一頁沒有 next 那段數學是
+    // upstream 的 _syncPageIndicators 算的，沒有理由重寫一次。
+    _pnSyncArrowVisibility() {
+        const controls = pnOverviewControls();
+        if (!controls || !this._pnArrows || !this._pnDecoys)
+            return;
+        const inAppGrid = controls._stateAdjustment.value > 1.5;
+        for (const key of ["prev", "next"]) {
+            const arrow = this._pnArrows[key];
+            const decoy = this._pnDecoys[key];
+            if (!arrow || !decoy)
+                continue;
+            arrow.opacity = decoy.opacity;
+            arrow.visible = inAppGrid && decoy.visible && decoy.opacity > 0;
+        }
+    }
+
     _pnPositionArrows() {
         const controls = pnOverviewControls();
-        const layer = this._pnArrowLayer;
-        if (!controls || !layer)
+        if (!controls || !this._pnArrows)
             return;
 
-        const inAppGrid = controls._stateAdjustment.value > 1.5;
-        layer.visible = inAppGrid;
-        layer.reactive = inAppGrid;
-        if (!inAppGrid)
+        this._pnSyncArrowVisibility();
+        if (controls._stateAdjustment.value <= 1.5)
             return;
 
         const mon = Main.layoutManager.primaryMonitor;
         const entry = controls._searchEntryBin ?? controls._searchEntry;
-        const prev = this._pnArrows?.prev;
-        const next = this._pnArrows?.next;
+        const {prev, next} = this._pnArrows;
         if (!mon || !entry || !prev || !next)
             return;
 
@@ -695,25 +714,18 @@ export default class PineNoteOskExtension extends Extension {
         const centerY = entryY + entry.height / 2;
         const margin = Math.round(mon.width * 0.03);
 
-        // 不自己推座標系：uiGroup 的孩子用的是 stage 座標，而 monitor.width
-        // 是邏輯像素 —— 在 scale=2 下兩者差一倍。用 layer 自己的 allocation
-        // 當畫布，那是唯一保證同一個座標系的東西。
         // 只管位置，尺寸交給 stylesheet。先前這裡 set_size(arrow.width || 48)
-        // 等於拿一個猜來的數字蓋掉樣式算出的值 —— 讀到 0 就把 0 寫回去，
-        // 於是那顆箭頭永遠是零寬。
-        // 寬度問 actor 自己要（natural width），不要拿 css 的 56px 乘 scale_factor
+        // 等於拿一個猜來的數字蓋掉樣式算出的值 —— 讀到 0 就把 0 寫回去。
+        // 寬度問 actor 自己要（natural width），不要拿 css 的 px 乘 scale_factor
         // 去推 —— 那等於在兩個座標系之間猜換算，而它本人知道答案。
-        const place = (arrow, xFromRight) => {
+        const place = (arrow, alignRight) => {
             const [, w] = arrow.get_preferred_width(-1);
             const [, h] = arrow.get_preferred_height(-1);
-            const x = xFromRight === null ? margin : mon.width - margin - w;
-            arrow.set_position(Math.round(x), Math.round(centerY - h / 2));
+            const x = alignRight ? mon.width - margin - w : margin;
+            arrow.set_position(
+                Math.round(mon.x + x), Math.round(centerY - h / 2));
         };
-        // 先給畫布尺寸，再放東西 —— 反過來的話 place() 讀到的是舊的寬度
-        layer.set_position(mon.x, mon.y);
-        layer.set_size(mon.width, mon.height);
-
-        place(prev, null);
+        place(prev, false);
         place(next, true);
     }
 
@@ -727,6 +739,10 @@ export default class PineNoteOskExtension extends Extension {
             Main.layoutManager.disconnect(this._pnArrowMonitorSignal);
             this._pnArrowMonitorSignal = 0;
         }
+        for (const [obj, id] of this._pnArrowVisSignals ?? [])
+            obj.disconnect(id);
+        this._pnArrowVisSignals = null;
+
         const gl = this._pnGridLayout;
         if (gl && this._pnArrows) {
             gl._previousPageArrow = this._pnArrows.prev;
@@ -735,18 +751,19 @@ export default class PineNoteOskExtension extends Extension {
         this._pnDecoys?.prev?.destroy();
         this._pnDecoys?.next?.destroy();
         this._pnDecoys = null;
-        if (this._pnArrowLayer) {
-            for (const arrow of [this._pnArrows?.prev, this._pnArrows?.next]) {
+
+        if (this._pnArrows) {
+            for (const arrow of [this._pnArrows.prev, this._pnArrows.next]) {
                 if (!arrow)
                     continue;
+                Main.layoutManager.removeChrome(arrow);
                 arrow.get_parent()?.remove_child(arrow);
                 this._pnArrowHome?.add_child(arrow);
+                arrow.visible = true;
+                arrow.opacity = 255;
             }
-            Main.layoutManager.removeChrome(this._pnArrowLayer);
-            this._pnArrowLayer.destroy();
-            this._pnArrowLayer = null;
-            this._pnArrowHome = null;
             this._pnArrows = null;
+            this._pnArrowHome = null;
         }
     }
 
@@ -1146,8 +1163,7 @@ export default class PineNoteOskExtension extends Extension {
         } : null;
         return JSON.stringify({
             gridLayoutFound: !!gl,
-            layerExists: !!this._pnArrowLayer,
-            layerVisible: this._pnArrowLayer ? this._pnArrowLayer.visible : null,
+            chromed: !!this._pnArrows,
             stateValue: controls ? controls._stateAdjustment.value : null,
             prev: dump(this._pnArrows?.prev ?? null),
             next: dump(this._pnArrows?.next ?? null),
