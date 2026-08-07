@@ -109,3 +109,37 @@
     max-row-spacing: 32px;
     max-column-spacing: 32px;
 }
+
+/* 資料夾對話框。原廠是深色面板（底 #38383b、字 #fafafb），在兩色電子紙上整塊
+   量化成黑，裡面的名字跟著沉進去。跟 app grid 一樣：只改顏色，幾何留給原廠。
+   選擇器要帶 .app-folder-dialog 前綴才蓋得過原廠 —— 對話框裡那幾條的特異性
+   比外面那條高，我們外面那條 .page-navigation-arrow 在這裡是輸的。 */
+.app-folder-dialog {
+    /* 原廠寫死 720x720。在桌機上那是個小面板；這台橫向只有 702 高，所以它是
+       **比螢幕還高**，上下才會被切齊 —— 不是沒留 margin。620 在兩個方向都放得下
+       （短邊 702），四周各留 41。 */
+    width: 620px;
+    height: 620px;
+    background-color: #ffffff;
+    border: 2px solid #000000;
+}
+
+.app-folder-dialog .overview-tile,
+.app-folder-dialog .grid-search-result,
+.app-folder-dialog .overview-tile .overview-icon,
+.app-folder-dialog .grid-search-result .overview-icon,
+.app-folder-dialog .folder-name-container .folder-name-label,
+.app-folder-dialog .folder-name-container .folder-name-entry {
+    color: #000000;
+}
+
+.app-folder-dialog .page-navigation-arrow {
+    background-color: #000000;
+    color: #ffffff;
+}
+
+.app-folder-dialog .icon-button {
+    background-color: #ffffff;
+    color: #000000;
+    border: 2px solid #000000;
+}

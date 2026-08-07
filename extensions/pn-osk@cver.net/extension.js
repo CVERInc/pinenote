@@ -272,6 +272,11 @@ function quantizeRow(row) {
 // 只剩 3px 可分 —— 行距被壓成 row-spacing 本身（12.6，而橫向是 24.6），同時右邊
 // 空著 148px 而格子是正方形、用不上。5 列之後「兩個方向都塞得下的最大圖示」
 // 不再由直向決定（56 -> 64），橫向每頁仍是 24。代價是兩邊每頁數量不同。
+// 資料夾維持原廠 3x3。試過 4x4：setGridModes 只改畫法，不改容量 —— 分頁是既有的，
+// 於是畫成 4 欄而每頁仍是 9 個，11 個 app 有 2 個留在第二頁，還多一顆換頁箭頭。
+// _updatePages() 只把溢出的往後推；往前拉的 _fillItemVacancies() 叫了也沒有效。
+// 再往下就是自己重寫分頁，而分頁是 shell 用來記住每個 app 位置的東西，不是版面。
+
 const PN_GRID_MODES = [
     {rows: 5, columns: 4},   // 直向
     {rows: 4, columns: 6},   // 橫向
@@ -547,6 +552,7 @@ export default class PineNoteOskExtension extends Extension {
             this._pnFloatArrows();
             this._pnInstallLabelWrap();
             this._pnInstallModeChoice();
+            this._pnInstallDialogWatch();
             if (this._config?.trace)
                 console.log("[pn-osk] indicators gutter reclaimed");
         } else if (this._config?.trace) {
@@ -828,6 +834,13 @@ export default class PineNoteOskExtension extends Extension {
         });
     }
 
+    // 資料夾裡的項目是 FolderView 自己的一組，不在 appDisplay._orderedItems 裡。
+    _pnApplyWrapToView(view) {
+        for (const item of view?._orderedItems ?? [])
+            this._pnApplyWrap(item);
+        view?._grid?.layout_manager?.layout_changed();
+    }
+
     _pnInstallLabelWrap() {
         const appDisplay = pnOverviewControls()?._appDisplay;
         if (!appDisplay || this._pnWrapInstalled)
@@ -932,6 +945,39 @@ export default class PineNoteOskExtension extends Extension {
             "monitors-changed", () => this._pnPositionArrows());
     }
 
+    // 資料夾對話框打開時，我們的浮動箭頭要退場。它是 addChrome 上去的、浮在整個
+    // shell 之上，而判斷依據只有 _stateAdjustment —— 對話框打開時狀態仍是 APP_GRID，
+    // 所以它不知道有東西蓋上來了。AppDisplay 沒有對外的訊號，但 addFolderDialog 是
+    // 普通方法，包一層就能在每個對話框身上接到 open-state-changed。
+    _pnInstallDialogWatch() {
+        const appDisplay = pnOverviewControls()?._appDisplay;
+        if (!appDisplay || appDisplay._pnOrigAddFolderDialog)
+            return;
+        const ext = this;
+        appDisplay._pnOrigAddFolderDialog = appDisplay.addFolderDialog;
+        appDisplay.addFolderDialog = function (dialog) {
+            appDisplay._pnOrigAddFolderDialog.call(this, dialog);
+            // dialog._view 是 FolderView，_grid 是 FolderGrid（它自己的 layout
+            // manager，跟外層 grid 無關，所以釘死的圖示尺寸不會套到這裡）
+            ext._pnApplyWrapToView(dialog._view);
+            // 原版的 handler 先接、先跑，所以我們讀到的 _displayingDialog 已經是新值
+            dialog.connect('open-state-changed', (o, isOpen) => {
+                ext._pnSyncArrowVisibility();
+                // 項目是延遲建立的 —— 包裝當下跑一次會漏掉還沒生出來的那些
+                if (isOpen)
+                    ext._pnApplyWrapToView(dialog._view);
+            });
+        };
+    }
+
+    _pnRemoveDialogWatch() {
+        const appDisplay = pnOverviewControls()?._appDisplay;
+        if (!appDisplay?._pnOrigAddFolderDialog)
+            return;
+        appDisplay.addFolderDialog = appDisplay._pnOrigAddFolderDialog;
+        delete appDisplay._pnOrigAddFolderDialog;
+    }
+
     // 真箭頭該不該出現 = 「upstream 認為該不該出現」AND「現在在 app grid」。
     // 前半直接讀替身 —— 第一頁沒有 prev、最後一頁沒有 next 那段數學是
     // upstream 的 _syncPageIndicators 算的，沒有理由重寫一次。
@@ -940,13 +986,15 @@ export default class PineNoteOskExtension extends Extension {
         if (!controls || !this._pnArrows || !this._pnDecoys)
             return;
         const inAppGrid = controls._stateAdjustment.value > 1.5;
+        const dialogOpen = !!controls._appDisplay?._displayingDialog;
         for (const key of ["prev", "next"]) {
             const arrow = this._pnArrows[key];
             const decoy = this._pnDecoys[key];
             if (!arrow || !decoy)
                 continue;
             arrow.opacity = decoy.opacity;
-            arrow.visible = inAppGrid && decoy.visible && decoy.opacity > 0;
+            arrow.visible = inAppGrid && !dialogOpen &&
+                decoy.visible && decoy.opacity > 0;
         }
     }
 
@@ -1035,6 +1083,7 @@ export default class PineNoteOskExtension extends Extension {
     _pnRemoveLaunchpad() {
         this._pnRemoveLabelWrap();
         this._pnRemoveModeChoice();
+        this._pnRemoveDialogWatch();
         this._pnUnfloatArrows();
         this._pnRemoveTopArrows();
 
