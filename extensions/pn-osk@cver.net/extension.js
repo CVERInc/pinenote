@@ -265,9 +265,16 @@ function quantizeRow(row) {
 // columns — not of setting icon-size, whose ceiling is 96 and which the layout
 // does not consult anyway. Stock modes are 3/4/6/8 columns; on this panel the
 // 8-column mode wins and app names ellipsize at about seven characters.
+//
+// 直向是 5 列而不是 6，所以這不是一組轉置。轉置很誘人（兩個方向同樣數量），但
+// 這塊面板做不到：橫向可用區域 936x578、直向 702x807，加上固定高度的搜尋列之後
+// 兩者不是互為倒數，沒有任何一組轉置模式在兩邊都合身。6 列 x 120 = 720 塞進 723，
+// 只剩 3px 可分 —— 行距被壓成 row-spacing 本身（12.6，而橫向是 24.6），同時右邊
+// 空著 148px 而格子是正方形、用不上。5 列之後「兩個方向都塞得下的最大圖示」
+// 不再由直向決定（56 -> 64），橫向每頁仍是 24。代價是兩邊每頁數量不同。
 const PN_GRID_MODES = [
-    {rows: 6, columns: 4},
-    {rows: 4, columns: 6},
+    {rows: 5, columns: 4},   // 直向
+    {rows: 4, columns: 6},   // 橫向
 ];
 
 // ControlsState.APP_GRID。overviewControls.js 沒有 export 這個 enum，而擴充又
@@ -775,7 +782,11 @@ export default class PineNoteOskExtension extends Extension {
         const h = lm._pageHeight || height;
         const emptyV = h - pad.top - pad.bottom - cell * rows -
             lm.rowSpacing * (rows - 1);
-        const gap = lm.rowSpacing + Math.max(emptyV, 0) / (rows - 1);
+        // 上限會夾住實際的縫寬，剩下的由 layout 變成上下置中的留白。畫布要照
+        // **夾過之後**的那個值算，不然水平會比垂直寬一截。
+        const rawGap = lm.rowSpacing + Math.max(emptyV, 0) / (rows - 1);
+        const gap = lm.maxRowSpacing > 0
+            ? Math.min(rawGap, lm.maxRowSpacing) : rawGap;
 
         // 同樣的縫寬套到水平，反推畫布
         const want = cell * cols + gap * (cols - 1) + pad.left + pad.right;
