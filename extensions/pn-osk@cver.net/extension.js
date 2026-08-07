@@ -182,6 +182,9 @@ const IFACE = `
     <method name="ShowAppGrid"/>
     <method name="OpenFolder"/>
     <method name="RenameFolder"/>
+    <method name="PanelInfo">
+      <arg type="s" direction="out" name="info"/>
+    </method>
     <method name="GridInfo">
       <arg type="s" direction="out" name="info"/>
     </method>
@@ -1712,6 +1715,55 @@ export default class PineNoteOskExtension extends Extension {
                 item._dialog._editButton.checked = true;
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    PanelInfo() {
+        const panel = Main.panel;
+        // statusArea 是「名字 -> 物件」，反過來查才問得出畫面上這顆是誰
+        const roles = new Map();
+        for (const [role, obj] of Object.entries(panel.statusArea ?? {})) {
+            if (obj)
+                roles.set(obj, role);
+        }
+
+        const describe = actor => {
+            // 每個 box 的孩子通常是容器，有身分的是裡面那顆 PanelMenu.Button
+            const inner = actor.get_children?.()?.[0] ?? actor;
+            const role = roles.get(actor) ?? roles.get(inner) ?? null;
+            const labels = [];
+            const collect = a => {
+                if (!a)
+                    return;
+                if (a.text !== undefined && a.text !== null && a.text !== "")
+                    labels.push(String(a.text));
+                if (a.icon_name)
+                    labels.push(`icon:${a.icon_name}`);
+                for (const c of a.get_children?.() ?? [])
+                    collect(c);
+            };
+            collect(actor);
+            return {
+                role,
+                name: actor.name || inner.name || null,
+                styleClass: actor.style_class || inner.style_class || null,
+                visible: actor.visible,
+                w: Math.round(actor.width),
+                x: Math.round(actor.x),
+                // 面板上看得到的字與圖示，用來對上畫面
+                content: labels.slice(0, 6),
+            };
+        };
+
+        const box = b => (b?.get_children() ?? []).map(describe);
+
+        return JSON.stringify({
+            panel: {w: Math.round(panel.width), h: Math.round(panel.height)},
+            left: box(panel._leftBox),
+            center: box(panel._centerBox),
+            right: box(panel._rightBox),
+            // 誰在 statusArea 裡但沒出現在三個 box 中（隱藏或被別人收走）
+            statusAreaRoles: Object.keys(panel.statusArea ?? {}),
+        }, null, 2);
     }
 
     GridInfo() {

@@ -1,8 +1,11 @@
 {
   "uuid": "pn-osk@cver.net",
-  "name": "PineNote OSK",
-  "description": "GNOME's on-screen keyboard reserves a full-width band but draws the keys inside a fixed aspect ratio, so in landscape about a third of that band is blank while the key labels are too narrow to spell Tab or Ctrl. This makes the keys fill the width they were already costing you, and optionally adds an Esc + digits row to the terminal layout, which ships without an Escape key at all.",
-  "shell-version": ["47", "48"],
-  "version": 1,
+  "name": "PineNote Shell",
+  "description": "Makes GNOME behave on a 10.3\" two-colour e-ink tablet. Keyboard: the stock on-screen keyboard reserves a full-width band but draws its keys inside a fixed aspect ratio, so in landscape a third of that band is blank while the labels are too narrow to spell Tab or Ctrl; this fills the width you were already paying for and adds a digit row with Esc, which the stock layout has no key for at all. Launcher: the app grid gives its whole page to the icons, app names wrap to two lines instead of ellipsizing after seven characters, the icon size is pinned so it does not change when the tablet is rotated, and the canvas width is computed so the gaps come out equal on both axes. Colour: panel elements that ship as translucent greys quantise to noise on a two-colour panel, so the app grid, the folder dialog and the page arrows are black and white. Everything is measured on the device rather than assumed; the reasoning is in the README.",
+  "shell-version": [
+    "47",
+    "48"
+  ],
+  "version": 2,
   "settings-schema": null
 }
