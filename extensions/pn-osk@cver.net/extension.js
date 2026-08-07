@@ -35,6 +35,11 @@
 // override was silently doing nothing, and one trace line said why.
 
 import Clutter from 'gi://Clutter';
+import Pango from 'gi://Pango';
+
+// 名字最多兩行。三行的名字（ImageMagick (color depth=q16)）在這台上是異數，
+// 讓它省略，不要讓它去撐高每一格。
+const PN_LABEL_LINES = 2;
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
@@ -175,6 +180,9 @@ const IFACE = `
     </method>
     <method name="Rebuild"/>
     <method name="ShowAppGrid"/>
+    <method name="GridInfo">
+      <arg type="s" direction="out" name="info"/>
+    </method>
     <method name="ArrowInfo">
       <arg type="s" name="json" direction="out"/>
     </method>
@@ -494,8 +502,12 @@ export default class PineNoteOskExtension extends Extension {
                 // 從搜尋框那一列開始，而不是從它下面 —— 多出來的這一段是要
                 // 借給換頁箭頭站的地方。grid 自己會在下面的 allocate 裡往下推，
                 // 所以視覺上內容仍從搜尋框之下開始。
-                appBox.set_origin(0, startY + searchHeight + spacing);
-                appBox.set_size(width, height - searchHeight - spacing);
+                const appHeight = height - searchHeight - spacing;
+                const appWidth = this._pnCanvasWidth(width, appHeight);
+                appBox.set_origin(
+                    Math.round((width - appWidth) / 2),
+                    startY + searchHeight + spacing);
+                appBox.set_size(appWidth, appHeight);
                 // 讓 grid 知道要讓出多少（searchHeight + spacing）
                 this._pnTopInset = searchHeight + spacing;
                 return appBox;
@@ -526,6 +538,7 @@ export default class PineNoteOskExtension extends Extension {
             gridLayout.layout_changed();
             this._pnInstallTopArrows();
             this._pnFloatArrows();
+            this._pnInstallLabelWrap();
             if (this._config?.trace)
                 console.log("[pn-osk] indicators gutter reclaimed");
         } else if (this._config?.trace) {
@@ -611,6 +624,116 @@ export default class PineNoteOskExtension extends Extension {
         this._pnArrowsMoved = false;
     }
 
+
+// 標籤寬度：第一輪先給一個接近現況格子（119 − tile padding）的值，量完
+    // 真正的 childSize 之後第二輪再由畫布反推。不用猜的那一版在下一個 commit。
+    // 格子是正方形，邊長由高度決定 —— 那是硬的。所以寬度不該是「螢幕有多寬」，
+    // 而是「要多寬，水平間距才會等於垂直間距」。算得出來就不必靠 max-column-spacing
+    // 去夾，也不會有夾完剩下的死留白。
+    _pnCanvasWidth(fullWidth, height) {
+        const lm = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
+        if (!lm?._getChildrenMaxSize)
+            return fullWidth;
+
+        // 每次都重新量：childSize 是快取的，而標籤的高度是在畫布算完之後才
+        // 生效的 —— 用上一幀的邊長算出來的寬度，會讓兩軸的縫差一截（19.4 對 14）。
+        // 26 個 item 重量一次的成本遠低於「版面永遠慢一拍」。
+        lm._childrenMaxSize = -1;
+        const cell = lm._getChildrenMaxSize();
+        const rows = lm.rowsPerPage;
+        const cols = lm.columnsPerPage;
+        const pad = lm.pagePadding;
+        if (!cell || rows < 2 || cols < 2 || !pad)
+            return fullWidth;
+
+        // 🔴 高度要跟 layout 拿，不要用我自己算的那個。我傳進來的 appHeight 是
+        // 「我給 AppDisplay 的框」，而垂直間距是 grid 用 _pageHeight 算的，兩者
+        // 差了 16px（grid 自己的邊界）。用錯的那個，公式再對也對不齊：
+        // 算出 19.3 的縫，而 layout 那邊是 14。同一個量只能有一個來源。
+        const h = lm._pageHeight || height;
+        const emptyV = h - pad.top - pad.bottom - cell * rows -
+            lm.rowSpacing * (rows - 1);
+        const gap = lm.rowSpacing + Math.max(emptyV, 0) / (rows - 1);
+
+        // 同樣的縫寬套到水平，反推畫布
+        const want = cell * cols + gap * (cols - 1) + pad.left + pad.right;
+        return Math.round(Math.min(fullWidth, Math.max(want, cell * cols)));
+    }
+
+    _pnLabelWidth() {
+        const lm = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
+        const cell = lm?._getChildrenMaxSize ? lm._getChildrenMaxSize() : 119;
+        return Math.max(96, cell - 12);
+    }
+
+    _pnApplyWrap(item) {
+        const label = item?.icon?.label;
+        if (!label)
+            return;
+        const ct = label.clutter_text;
+        if (item._pnWrapSaved === undefined) {
+            item._pnWrapSaved = {
+                lineWrap: ct.line_wrap,
+                lineWrapMode: ct.line_wrap_mode,
+                ellipsize: ct.ellipsize,
+                width: label.width,
+                height: label.height,
+                // 折行之前量一次單行高度 —— 折行之後就再也量不到了
+                oneLine: label.get_preferred_height(-1)[1],
+            };
+        }
+        // 先夾寬度再開折行 —— 順序反過來的話中間那一幀的自然寬度是整行文字
+        label.set_width(this._pnLabelWidth());
+        // 釘死兩行的高度。不釘的話 _getChildrenMaxSize 拿 get_preferred_height(-1)
+        // 量到的是「不限寬」＝一行，第二行不會有人替它出高度，第三行直接掉出畫面。
+        label.set_height(item._pnWrapSaved.oneLine * PN_LABEL_LINES);
+        ct.set({
+            line_wrap: true,
+            line_wrap_mode: Pango.WrapMode.WORD_CHAR,
+            // 折了還是放不下（例如一個長到沒有空白可斷的字）才省略
+            ellipsize: Pango.EllipsizeMode.END,
+        });
+    }
+
+    _pnInstallLabelWrap() {
+        const appDisplay = pnOverviewControls()?._appDisplay;
+        if (!appDisplay || this._pnWrapInstalled)
+            return;
+        this._pnWrapInstalled = true;
+
+        const apply = () => {
+            for (const item of appDisplay._orderedItems ?? [])
+                this._pnApplyWrap(item);
+            appDisplay._grid?.layout_manager?.layout_changed();
+        };
+        apply();
+        // 裝了新 app 之後 grid 會重建 —— 沒有這條，新來的那顆會是唯一被截斷的
+        this._pnWrapViewSignal = appDisplay.connect('view-loaded', apply);
+    }
+
+    _pnRemoveLabelWrap() {
+        const appDisplay = pnOverviewControls()?._appDisplay;
+        if (this._pnWrapViewSignal && appDisplay) {
+            appDisplay.disconnect(this._pnWrapViewSignal);
+            this._pnWrapViewSignal = 0;
+        }
+        for (const item of appDisplay?._orderedItems ?? []) {
+            const saved = item._pnWrapSaved;
+            const label = item?.icon?.label;
+            if (!saved || !label)
+                continue;
+            label.set_width(saved.width);
+            label.set_height(saved.height);
+            label.clutter_text.set({
+                line_wrap: saved.lineWrap,
+                line_wrap_mode: saved.lineWrapMode,
+                ellipsize: saved.ellipsize,
+            });
+            delete item._pnWrapSaved;
+        }
+        appDisplay?._grid?.layout_manager?.layout_changed();
+        this._pnWrapInstalled = false;
+    }
 
     _pnFloatArrows() {
         const gl = this._pnGridLayout;
@@ -768,6 +891,7 @@ export default class PineNoteOskExtension extends Extension {
     }
 
     _pnRemoveLaunchpad() {
+        this._pnRemoveLabelWrap();
         this._pnUnfloatArrows();
         this._pnRemoveTopArrows();
 
@@ -1153,6 +1277,82 @@ export default class PineNoteOskExtension extends Extension {
             composed: this._lastComposed ?? null,
         }, null, 2);
     }
+    GridInfo() {
+        const controls = pnOverviewControls();
+        const grid = controls?._appDisplay?._grid;
+        const lm = grid?.layout_manager;
+        if (!lm)
+            return JSON.stringify({error: "grid layout not found"}, null, 2);
+
+        const pad = lm.pagePadding;
+        // childSize 是私有計算，但方法是普通方法（不是 vfunc），叫得動。
+        // 它就是每個格子的邊長 —— 而且寬高共用同一個數字，格子必為正方形。
+        const childSize = lm._getChildrenMaxSize
+            ? lm._getChildrenMaxSize() : null;
+        const spacing = childSize !== null && lm._calculateSpacing
+            ? lm._calculateSpacing(childSize) : null;
+
+        // 一個 tile 的最小寬/高各是多少 —— 決定 childSize 的就是這兩個的較大者
+        const sample = (() => {
+            const page = lm._pages?.[0];
+            const item = page?.visibleChildren?.[0];
+            if (!item)
+                return null;
+            return {
+                name: item.name ?? item.app?.get_name?.() ?? "?",
+                minW: item.get_preferred_width(-1)[0],
+                natW: item.get_preferred_width(-1)[1],
+                minH: item.get_preferred_height(-1)[0],
+                natH: item.get_preferred_height(-1)[1],
+            };
+        })();
+
+        return JSON.stringify({
+            mode: {columns: lm.columnsPerPage, rows: lm.rowsPerPage},
+            gridModes: grid._gridModes ?? null,
+            page: {w: lm._pageWidth, h: lm._pageHeight},
+            padding: pad
+                ? {t: pad.top, r: pad.right, b: pad.bottom, l: pad.left}
+                : null,
+            spacingCss: {
+                column: lm.columnSpacing, row: lm.rowSpacing,
+                maxColumn: lm.maxColumnSpacing, maxRow: lm.maxRowSpacing,
+            },
+            iconSize: lm.iconSize,
+            fixedIconSize: lm.fixedIconSize,
+            childSize,
+            // [左側留白, 上側留白, 實際水平間距, 實際垂直間距]
+            computed: spacing,
+            nPages: lm.nPages,
+            sample,
+            // 第二輪要的：折行之後最高／最寬的 tile。畫布寬度得從這裡反推，
+            // 因為 childSize 是「所有 tile 的最小尺寸取最大」，不是平均。
+            extremes: (() => {
+                const items = [];
+                for (const page of lm._pages ?? []) {
+                    for (const it of page.visibleChildren ?? []) {
+                        items.push({
+                            name: it.name ?? it.app?.get_name?.() ?? "?",
+                            minW: it.get_preferred_width(-1)[0],
+                            minH: it.get_preferred_height(-1)[0],
+                            natH: it.get_preferred_height(-1)[1],
+                        });
+                    }
+                }
+                const by = k => [...items].sort((a, b) => b[k] - a[k]).slice(0, 4);
+                return {tallest: by("minH"), widest: by("minW")};
+            })(),
+            // 每格還能長多少：把行數/欄數塞滿頁面的上限
+            headroom: childSize !== null && pad ? {
+                byHeight: Math.floor((lm._pageHeight - pad.top - pad.bottom -
+                    lm.rowSpacing * (lm.rowsPerPage - 1)) / lm.rowsPerPage),
+                byWidth: Math.floor((lm._pageWidth - pad.left - pad.right -
+                    lm.columnSpacing * (lm.columnsPerPage - 1)) /
+                    lm.columnsPerPage),
+            } : null,
+        }, null, 2);
+    }
+
     ArrowInfo() {
         const gl = this._pnGridLayout;
         const controls = pnOverviewControls();

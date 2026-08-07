@@ -86,3 +86,24 @@
     color: #ffffff;
 }
 
+
+/* 名字改成折行之後，每格要多容納一行 —— 高度是這個版面唯一真正稀缺的軸
+   （量到的餘裕：垂直 4px、水平 21px）。這兩條各自還回去的空間，就是第二行
+   的容身處，順帶把圖示佔格子的比例從 54% 往上帶。 */
+.overview-tile,
+.grid-search-result {
+    padding: 6px;
+}
+
+.icon-grid {
+    page-padding-top: 12px;
+    page-padding-bottom: 12px;
+}
+
+/* 36px 的天花板是這個版面「排列很奇怪」的真正來源：水平方向多出來的空間先攤成
+   間距，撞到上限就停，剩下的變成左右兩條死留白（量到 57px）。畫布寬度既然改由
+   我們算，這個夾子就只會夾掉算好的答案 —— 抬到不會生效的高度。 */
+.icon-grid {
+    max-row-spacing: 999px;
+    max-column-spacing: 999px;
+}
