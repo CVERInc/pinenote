@@ -181,6 +181,7 @@ const IFACE = `
     <method name="Rebuild"/>
     <method name="ShowAppGrid"/>
     <method name="OpenFolder"/>
+    <method name="RenameFolder"/>
     <method name="GridInfo">
       <arg type="s" direction="out" name="info"/>
     </method>
@@ -419,8 +420,14 @@ export default class PineNoteOskExtension extends Extension {
             const monitor = Main.layoutManager.keyboardMonitor;
             const landscape = !monitor || monitor.width > monitor.height;
             this._pnBuiltLandscape = landscape;
-            if (purpose === Clutter.InputContentPurpose.TERMINAL &&
-                ext._config.k6Layout)
+            // 終端機是這個版面的出身，但 Esc／Tab／數字排在一般文字輸入裡一樣要用
+            // —— 資料夾改名沒有 Esc 就只能送出、不能取消。專用用途（密碼、數字、
+            // 電話、Email、URL）留給 GNOME：那些它會給專門的版面，蓋掉只會更糟。
+            const composeFor = [
+                Clutter.InputContentPurpose.TERMINAL,
+                Clutter.InputContentPurpose.NORMAL,
+            ];
+            if (composeFor.includes(purpose) && ext._config.k6Layout)
                 this._pnComposed = ext._composeLayout(groupName, landscape);
 
             const ret = ext._origUpdateLayout.call(this, groupName, purpose);
@@ -1364,22 +1371,31 @@ export default class PineNoteOskExtension extends Extension {
             }
         }
         if (!stock) {
-            console.warn('[pn-osk] no stock layout to compose from');
+            console.warn(`[pn-osk] no stock layout to compose from ` +
+                `(group=${groupName})`);
             return null;
         }
+        console.log(`[pn-osk] composing from ${groupName} ` +
+            `(${landscape ? "landscape" : "portrait"})`);
 
         const composed = {};
         for (const level of [0, 1]) {
             const rows = stock.levels?.[level]?.rows;
-            if (!rows || rows.length < 4)
+            if (!rows || rows.length < 4) {
+                console.warn(`[pn-osk] fallback: level ${level} has ` +
+                    `${rows ? rows.length : "no"} rows, need 4`);
                 return null;
+            }
             const portraitK6 =
                 !landscape && (this._config.portrait?.k6 ?? DEFAULTS.portrait.k6);
             let built = landscape || portraitK6
                 ? this._composeLevel(rows, level)
                 : this._composePortrait(rows, level);
-            if (!built)
+            if (!built) {
+                console.warn(`[pn-osk] fallback: compose returned null ` +
+                    `(level ${level}, ${landscape ? "landscape" : "portrait"})`);
                 return null;
+            }
             // Two layers: the top-level map applies whichever way up the
             // tablet is, the portrait one overrides it. Landscape had no
             // relabel at all before, so a rename like ?123 -> #+= could only be
@@ -1465,8 +1481,14 @@ export default class PineNoteOskExtension extends Extension {
         const homeChars = homeRow.slice(1, -1);
         const letterChars = letterRow.slice(1, -3);
 
-        if (!backspace || !enter || !hide || !space || qwertyChars.length !== 10)
+        if (!backspace || !enter || !hide || !space || qwertyChars.length !== 10) {
+            // 哪一個不見了要講出來 —— 「找不到某個鍵」和「字母數不對」是完全
+            // 不同的兩件事，而它們原本共用一個沉默的 return
+            console.warn("[pn-osk] compose bail:" +
+                ` backspace=${!!backspace} enter=${!!enter}` +
+                ` hide=${!!hide} space=${!!space} chars=${qwertyChars.length}`);
             return null;
+        }
 
         const extras = charKeys(faceFor(cfg.qwertyExtra, level));
         if (extras.length)
@@ -1676,6 +1698,20 @@ export default class PineNoteOskExtension extends Extension {
                 return;
             }
         }
+    }
+
+    RenameFolder() {
+        // 開資料夾並直接進改名狀態。這個狀態要人點兩下才到得了，而它是接下來
+        // 每一輪都要看的東西。
+        this.OpenFolder();
+        const appDisplay = pnOverviewControls()?._appDisplay;
+        const item = (appDisplay?._orderedItems ?? [])
+            .find(i => i.style_class?.includes("app-folder"));
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 400, () => {
+            if (item?._dialog?._editButton)
+                item._dialog._editButton.checked = true;
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     GridInfo() {

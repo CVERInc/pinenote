@@ -149,3 +149,22 @@
     background-color: #000000;
     color: #ffffff;
 }
+
+/* 改名輸入框。原廠是深底淺字，換到白色對話框裡就是一塊突兀的深色磚。
+   選取色也要一起換 —— 預設的藍在兩色面板上會變成一片看不出邊界的灰。 */
+.app-folder-dialog .folder-name-container .folder-name-entry {
+    background-color: #ffffff;
+    color: #000000;
+    border: 2px solid #000000;
+    caret-color: #000000;
+    /* 選取用淺灰不用黑：黑底白字在這裡沒有畫出來，整塊變成看不見內容的黑磚。 */
+    selection-background-color: #cccccc;
+    selected-color: #000000;
+}
+
+.app-folder-dialog .folder-name-container .folder-name-entry:focus {
+    background-color: #ffffff;
+    color: #000000;
+    border: 2px solid #000000;
+    box-shadow: none;
+}
