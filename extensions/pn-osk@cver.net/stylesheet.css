@@ -79,6 +79,14 @@
    然後又把 padding 砍成 0 去補救，等於用錯的旋鈕解決對的問題。幾何全部交還原廠，
    這裡只改這塊面板真正需要的東西：兩色電子紙上，半透明深灰會量化成雜訊。 */
 .page-navigation-arrow {
+    /* 跟資料夾對話框那顆筆（.icon-button）同一組尺寸。抄的是它的宣告不是它量出來
+       的 40px —— 用同一把尺，字級變了兩顆才會一起變。原廠箭頭是 padding 18 + 內容
+       24 = 60，筆是 padding 0.818em + 內容 1.091em ≈ 40。 */
+    padding: 0.818em;
+    width: 1.091em;
+    height: 1.091em;
+    icon-size: 1.091em;
+    border-radius: 999px;
     background-color: #000000;
     color: #ffffff;
 }
