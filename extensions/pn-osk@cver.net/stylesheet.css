@@ -99,8 +99,11 @@
 /* 名字改成折行之後，每格要多容納一行 —— 高度是這個版面唯一真正稀缺的軸
    （量到的餘裕：垂直 4px、水平 21px）。這兩條各自還回去的空間，就是第二行
    的容身處，順帶把圖示佔格子的比例從 54% 往上帶。 */
-.overview-tile,
-.grid-search-result {
+.icon-grid .overview-tile,
+.icon-grid .grid-search-result {
+    /* 🔴 一定要限定在 .icon-grid 底下。沒有限定的話 dash 也吃得到，而原廠有一條
+       `#dash … .overview-tile { padding-bottom: 12px }` 只覆寫 bottom —— 我們贏了
+       另外三邊、輸了 bottom，dash 的圖示就變成上 6 下 12，往下歪 3px。 */
     padding: 6px;
 }
 
