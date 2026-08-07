@@ -977,7 +977,9 @@ export default class PineNoteOskExtension extends Extension {
             style_class: "system-status-icon",
         });
         button.add_child(button._pnIcon);
-        // 觸控要自己接：button-press-event 在純觸控上不一定會來
+        // 觸控要自己接：button-press-event 在純觸控上不一定會來。
+        // （長按曾經做在這裡，三種寫法都沒開火，而那個功能在快速設定裡本來就有
+        // 一個看得見的開關 —— 見 _pnInstallPanel 的註解。）
         button.connect("button-press-event", () => {
             onActivate();
             return Clutter.EVENT_STOP;
@@ -1083,14 +1085,22 @@ export default class PineNoteOskExtension extends Extension {
 
     // 圖示指的是「按下去會發生什麼」，不是「這顆叫什麼」。直向時按了會轉成橫向
     // ⇒ 畫順時針；橫向時反過來。一顆永遠長一樣的旋轉鈕只說得出「這裡可以轉」。
+    _pnRotationLocked() {
+        return this._pnTouchSettings?.get_boolean("orientation-lock") ?? true;
+    }
+
     _pnSyncRotateIcon() {
         const icon = Main.panel.statusArea?.["pn-rotate"]?._pnIcon;
         const mon = Main.layoutManager.primaryMonitor;
         if (!icon || !mon)
             return;
-        icon.icon_name = mon.height > mon.width
-            ? "object-rotate-right-symbolic"
-            : "object-rotate-left-symbolic";
+        // 自動時畫「感測器在管」，鎖定時畫「按了會往這邊轉」。
+        // 兩種狀態各自畫的都是接下來會發生的事，而不是這顆按鈕叫什麼。
+        icon.icon_name = this._pnRotationLocked()
+            ? (mon.height > mon.width
+                ? "object-rotate-right-symbolic"
+                : "object-rotate-left-symbolic")
+            : "rotation-allowed-symbolic";
     }
 
     _pnInstallPanel() {
@@ -1118,8 +1128,17 @@ export default class PineNoteOskExtension extends Extension {
             Main.panel.addToStatusArea(key, b, 0, "right");
             this._pnPanelButtons.push(key);
         };
+        this._pnTouchSettings = new Gio.Settings({
+            schema_id: "org.gnome.settings-daemon.peripherals.touchscreen",
+        });
+        // 點一下是覆寫，所以要先鎖 —— 不鎖的話感測器下一秒就把它轉回去。
+        // 回到自動走 GNOME 快速設定裡那顆 Auto Rotate（同一個 gsetting），
+        // 它在偵測得到加速度計之後就會啟用，不必我們再做一個看不見的手勢。
         add("pn-rotate", "PN Rotate", "object-rotate-right-symbolic",
-            () => this._pnRotate());
+            () => {
+                this._pnTouchSettings.set_boolean("orientation-lock", true);
+                this._pnRotate();
+            });
         add("pn-refresh", "PN Refresh",
             `${this.path}/icons/pn-screen-refresh-symbolic.svg`,
             () => this._pnTriggerRefresh());
@@ -1127,6 +1146,9 @@ export default class PineNoteOskExtension extends Extension {
         this._pnSyncRotateIcon();
         this._pnPanelMonitorSignal = Main.layoutManager.connect(
             "monitors-changed", () => this._pnSyncRotateIcon());
+        // 快速設定裡也有同一個開關，從那邊改的時候圖示一樣要跟上
+        this._pnLockSignal = this._pnTouchSettings.connect(
+            "changed::orientation-lock", () => this._pnSyncRotateIcon());
     }
 
     _pnRemovePanel() {
@@ -1134,6 +1156,11 @@ export default class PineNoteOskExtension extends Extension {
             Main.layoutManager.disconnect(this._pnPanelMonitorSignal);
             this._pnPanelMonitorSignal = 0;
         }
+        if (this._pnLockSignal && this._pnTouchSettings) {
+            this._pnTouchSettings.disconnect(this._pnLockSignal);
+            this._pnLockSignal = 0;
+        }
+        this._pnTouchSettings = null;
         for (const key of this._pnPanelButtons ?? [])
             Main.panel.statusArea[key]?.destroy();
         this._pnPanelButtons = null;

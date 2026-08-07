@@ -231,6 +231,29 @@ echo "== done =="
 #  🔴 電子紙的 TTY 字太小太糊、不堪用 — 若要走「開機直進 SSH 的極簡系統」，
 #     console 字型是必須先解的第一關。
 
+echo "== [14] 自動旋轉：接通加速度計 =="
+# 這台有加速度計（silan sc7a20），但出廠狀態下自動旋轉是死的，死在兩個地方。
+#
+# ① iio-sensor-proxy 沒裝 ⇒ GNOME 看不到那顆晶片，快速設定裡的 Auto Rotate
+#    開關雖然在，卻是灰的。
+sudo apt-get install -y iio-sensor-proxy
+#
+# ② systemd 的 /usr/lib/udev/hwdb.d/60-sensor.hwdb 有一條標著 PineTab2 的
+#    ACCEL_MOUNT_MATRIX，比對鍵是 of:N<節點>T<型別>C<compatible> —— 裡面只有
+#    晶片，沒有機器身分。PineNote 用同一顆 silan,sc7a20、裝的方向不同，於是
+#    PineTab2 的校正被套過來，蓋掉裝置樹裡正確的值。
+#    症狀：四個實體方向被壓成兩個，而且兩個都是橫向（transform 0 與 2）。
+sudo install -m 0644 "$D/udev/61-sensor-pinenote.rules" /etc/udev/rules.d/
+sudo udevadm control --reload
+# 🔴 只觸發那一顆裝置。--subsystem-match=iio 會連 saradc 一起重發 ADD，而
+#    電源鍵（adc-keys）掛在那條 ADC 上 —— 實測會把機器弄睡。
+for d in /sys/bus/iio/devices/iio:device*; do
+  [ "$(cat "$d/name" 2>/dev/null)" = "sc7a20" ] && sudo udevadm trigger --action=add "$d"
+done
+sudo systemctl restart iio-sensor-proxy 2>/dev/null || true
+gsettings set org.gnome.settings-daemon.peripherals.touchscreen orientation-lock false
+echo "   已接通；Auto Rotate 在快速設定裡（面板上那顆旋轉鈕也會顯示目前模式）"
+
 echo "== [13] pn-osk：把虛擬鍵盤換成 65% 版面（GNOME 47 與 48 都吃） =="
 # 🔴 這一步以前不在腳本裡：README 有一整節在講這個鍵盤，而重刷後它不會回來。
 #    跟 Typing Mode 當年同一個形狀的 phantom feature。

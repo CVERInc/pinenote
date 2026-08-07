@@ -1,0 +1,19 @@
+# PineNote：把加速度計的安裝矩陣改回裝置樹裡的值。
+#
+# systemd 的 /usr/lib/udev/hwdb.d/60-sensor.hwdb 有一條
+#   sensor:modalias:of:NaccelerometerT_null_Csilan,sc7a20:*
+#     ACCEL_MOUNT_MATRIX=0, 0, -1; 1, 0, 0; 0, -1, 0
+# 註解寫著 PineTab2。它比對的是**晶片**（silan,sc7a20），而 PineNote 用同一顆、
+# 裝的方向不同 —— 於是 PineTab2 的校正被套到這台，蓋掉了裝置樹裡本來就正確的值
+# （sysfs mount_matrix = -1, 0, 0; 0, 1, 0; 0, 0, 1）。
+#
+# 後果：四個實體方向被壓成兩個。實測轉一圈，iio-sensor-proxy 只吐得出 normal 和
+# bottom-up —— 而 transform 0 和 2 都是橫向，所以畫面「轉直之後彈回橫的」，
+# 它其實從來沒有選過直向。
+#
+# 那條 hwdb 的比對鍵（of:N<name>T<type>C<compatible>）裡沒有任何機器身分，所以
+# 上游用現在的格式分不出這兩塊板子。這裡直接以裝置屬性覆寫。
+# 編號 61 是為了排在 60-sensor 的 hwdb 匯入之後。
+
+SUBSYSTEM=="iio", KERNEL=="iio:device*", ATTR{name}=="sc7a20", \
+  ENV{ACCEL_MOUNT_MATRIX}="-1, 0, 0; 0, 1, 0; 0, 0, 1"
