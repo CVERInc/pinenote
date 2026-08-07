@@ -180,6 +180,7 @@ const IFACE = `
     </method>
     <method name="Rebuild"/>
     <method name="ShowAppGrid"/>
+    <method name="OpenFolder"/>
     <method name="GridInfo">
       <arg type="s" direction="out" name="info"/>
     </method>
@@ -556,16 +557,8 @@ export default class PineNoteOskExtension extends Extension {
             // 之後 _pnSyncIconSize 照樣量，不一樣就更新。
             const cached = this._pnReadCachedIconSize();
             const lm0 = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
-            if (cached && lm0 && lm0.fixedIconSize !== cached) {
-                lm0.fixedIconSize = cached;
-                // 只設屬性不夠：真正在用的是 _iconSize，而它只在 adaptToSize
-                // 發現頁面尺寸變了才會重算。直接做 later 會做的事。
-                lm0._iconSize = cached;
-                for (const child of lm0._container ?? [])
-                    child.icon?.setIconSize?.(cached);
-                lm0._childrenMaxSize = -1;
-                lm0.layout_changed();
-            }
+            if (cached && lm0 && lm0.fixedIconSize !== cached)
+                this._pnApplyIconSize(lm0, cached);
             this._pnInstallModeChoice();
             this._pnInstallDialogWatch();
             if (this._config?.trace)
@@ -795,9 +788,7 @@ export default class PineNoteOskExtension extends Extension {
             this._pnIconSizePending = null;
             const l = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
             if (l && l.fixedIconSize !== size) {
-                l.fixedIconSize = size;
-                l._childrenMaxSize = -1;
-                l.layout_changed();
+                this._pnApplyIconSize(l, size);
                 this._pnWriteCachedIconSize(size);
                 console.log(`[pn-osk] icon size pinned to ${size} (overhead ${overhead})`);
             }
@@ -905,6 +896,30 @@ export default class PineNoteOskExtension extends Extension {
         }
     }
 
+    // 只設 fixedIconSize 不夠：真正在畫的是 _iconSize，而它只在 adaptToSize
+    // 發現頁面尺寸變了、排一個 BEFORE_REDRAW 的 later 時才重算。直接做那件事。
+    _pnApplyIconSize(lm, size) {
+        lm.fixedIconSize = size;
+        lm._iconSize = size;
+        for (const child of lm._container ?? [])
+            child.icon?.setIconSize?.(size);
+        lm._childrenMaxSize = -1;
+        lm.layout_changed();
+    }
+
+    // 資料夾的圖示跟 Launcher 一樣大。FolderGrid 是獨立的 layout manager，所以
+    // 外層釘的尺寸不會自動套過來；而它的預設是 IconSize.LARGE（96），在原廠
+    // 720 的對話框裡剛好塞得下，於是一旦把對話框縮小就會被擠成 64 —— 那一下
+    // 就是「先大再縮」。在 popup 之前釘好，第一幀就是對的。
+    _pnSyncFolderIconSize(view) {
+        const lm = view?._grid?.layout_manager;
+        const outer = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
+        const size = outer?.fixedIconSize;
+        if (!lm || !size || size < 16 || lm.fixedIconSize === size)
+            return;
+        this._pnApplyIconSize(lm, size);
+    }
+
     // 資料夾裡的項目是 FolderView 自己的一組，不在 appDisplay._orderedItems 裡。
     _pnApplyWrapToView(view) {
         for (const item of view?._orderedItems ?? [])
@@ -923,8 +938,10 @@ export default class PineNoteOskExtension extends Extension {
                 this._pnApplyWrap(item);
                 // 資料夾的內容現在就在（FolderIcon.view），不必等對話框建立 ——
                 // 等到那時候才套，第一幀已經用沒折行的尺寸畫過一次了。
-                if (item.view)
+                if (item.view) {
+                    this._pnSyncFolderIconSize(item.view);
                     this._pnApplyWrapToView(item.view);
+                }
             }
             this._pnStyleFolderIcons();
             appDisplay._grid?.layout_manager?.layout_changed();
@@ -1048,6 +1065,7 @@ export default class PineNoteOskExtension extends Extension {
         appDisplay._pnOrigAddFolderDialog = appDisplay.addFolderDialog;
         appDisplay.addFolderDialog = function (dialog) {
             appDisplay._pnOrigAddFolderDialog.call(this, dialog);
+            ext._pnSyncFolderIconSize(dialog._view);
             // dialog._view 是 FolderView，_grid 是 FolderGrid（它自己的 layout
             // manager，跟外層 grid 無關，所以釘死的圖示尺寸不會套到這裡）
             ext._pnApplyWrapToView(dialog._view);
@@ -1055,8 +1073,10 @@ export default class PineNoteOskExtension extends Extension {
             dialog.connect('open-state-changed', (o, isOpen) => {
                 ext._pnSyncArrowVisibility();
                 // 項目是延遲建立的 —— 包裝當下跑一次會漏掉還沒生出來的那些
-                if (isOpen)
+                if (isOpen) {
+                    ext._pnSyncFolderIconSize(dialog._view);
                     ext._pnApplyWrapToView(dialog._view);
+                }
             });
         };
     }
@@ -1596,6 +1616,17 @@ export default class PineNoteOskExtension extends Extension {
             composed: this._lastComposed ?? null,
         }, null, 2);
     }
+    OpenFolder() {
+        // FolderIcon.open() 就是 vfunc_clicked 呼叫的那個，不必模擬點擊
+        const appDisplay = pnOverviewControls()?._appDisplay;
+        for (const item of appDisplay?._orderedItems ?? []) {
+            if (item.style_class?.includes("app-folder") && item.open) {
+                item.open();
+                return;
+            }
+        }
+    }
+
     GridInfo() {
         const controls = pnOverviewControls();
         const grid = controls?._appDisplay?._grid;
@@ -1643,6 +1674,24 @@ export default class PineNoteOskExtension extends Extension {
             // [左側留白, 上側留白, 實際水平間距, 實際垂直間距]
             computed: spacing,
             nPages: lm.nPages,
+            // 資料夾內部是另一個 layout manager（FolderGrid），釘死的圖示尺寸
+            // 不會套到它身上 —— 所以它的 iconSize 是獨立收斂的。
+            folder: (() => {
+                const fIcon = (pnOverviewControls()?._appDisplay?._orderedItems ?? [])
+                    .find(i => i.style_class?.includes("app-folder"));
+                const flm = fIcon?.view?._grid?.layout_manager;
+                if (!flm)
+                    return null;
+                return {
+                    mode: {columns: flm.columnsPerPage, rows: flm.rowsPerPage},
+                    page: {w: flm._pageWidth, h: flm._pageHeight},
+                    iconSize: flm.iconSize,
+                    fixedIconSize: flm.fixedIconSize,
+                    childSize: flm._getChildrenMaxSize
+                        ? flm._getChildrenMaxSize() : null,
+                    nPages: flm.nPages,
+                };
+            })(),
             sample,
             // 第二輪要的：折行之後最高／最寬的 tile。畫布寬度得從這裡反推，
             // 因為 childSize 是「所有 tile 的最小尺寸取最大」，不是平均。
