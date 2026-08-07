@@ -1052,7 +1052,9 @@ export default class PineNoteOskExtension extends Extension {
         this._pnSyncIconSize();
 
         const mon = Main.layoutManager.primaryMonitor;
-        const entry = controls._searchEntryBin ?? controls._searchEntry;
+        // 先要 _searchEntry：那是畫得出圓角的那個框。_searchEntryBin 是它的
+        // 容器，上下帶著不對稱留白，中心差 3px —— 對齊容器等於對齊一個看不見的東西。
+        const entry = controls._searchEntry ?? controls._searchEntryBin;
         const {prev, next} = this._pnArrows;
         if (!mon || !entry || !prev || !next)
             return;
@@ -1635,6 +1637,19 @@ export default class PineNoteOskExtension extends Extension {
             stateValue: controls ? controls._stateAdjustment.value : null,
             prev: dump(this._pnArrows?.prev ?? null),
             next: dump(this._pnArrows?.next ?? null),
+            entries: (() => {
+                const c = pnOverviewControls();
+                const dump = a => {
+                    if (!a)
+                        return null;
+                    const [x, y] = a.get_transformed_position();
+                    return {x, y, w: a.width, h: a.height, centre: y + a.height / 2};
+                };
+                return {
+                    searchEntryBin: dump(c?._searchEntryBin),
+                    searchEntry: dump(c?._searchEntry),
+                };
+            })(),
             decoys: this._pnDecoys ? {
                 prev: dump(this._pnDecoys.prev),
                 next: dump(this._pnDecoys.next),
