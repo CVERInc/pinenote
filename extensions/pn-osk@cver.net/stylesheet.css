@@ -124,13 +124,10 @@
    選擇器要帶 .app-folder-dialog 前綴才蓋得過原廠 —— 對話框裡那幾條的特異性
    比外面那條高，我們外面那條 .page-navigation-arrow 在這裡是輸的。 */
 .app-folder-dialog {
-    /* 原廠寫死 720x720。在桌機上那是個小面板；這台橫向只有 702 高，所以它是
-       **比螢幕還高**，上下才會被切齊 —— 不是沒留 margin。620 在兩個方向都放得下
-       （短邊 702），四周各留 41。 */
-    width: 620px;
-    height: 620px;
+    /* 只換底色，幾何一律原廠。⚠️ 原廠是寫死 720x720，而這台橫向只有 702 高，
+       所以上下會貼齊螢幕 —— 那是量出來的（720 > 702），不是別的調整造成的。
+       要留白邊就把 width/height 設成 620，兩個方向都放得下。 */
     background-color: #ffffff;
-    border: 2px solid #000000;
 }
 
 .app-folder-dialog .overview-tile,
