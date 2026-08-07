@@ -907,6 +907,49 @@ export default class PineNoteOskExtension extends Extension {
         lm.layout_changed();
     }
 
+    // 改名的入口從那顆筆換成「點標題」。筆藏起來（toggle 的 checked 照樣設得動），
+    // 熱區加進 Shell.Stack —— 它是疊的不是排的，所以熱區自然就蓋住標題。
+    _pnInstallTitleTap(dialog) {
+        const btn = dialog?._editButton;
+        const stack = dialog?._folderNameLabel?.get_parent();
+        if (!btn || !stack || dialog._pnTitleTap)
+            return;
+
+        // 藏起來而不是塗掉：BoxLayout 不會替隱形的孩子留位置，而 ghostButton 的
+        // 尺寸綁在它身上 ⇒ 佔位一起歸零，標題置中到全寬。
+        btn.hide();
+
+        const tap = new St.Button({
+            name: "pn-folder-title-tap",
+            x_expand: true,
+            y_expand: true,
+            reactive: true,
+            can_focus: false,
+        });
+        stack.add_child(tap);
+        dialog._pnTitleTap = tap;
+
+        tap.connect("clicked", () => (btn.checked = true));
+
+        // 🔴 編輯中一定要讓開。不讓開的話熱區會蓋在 input 上，游標點不進去 ——
+        // 而且症狀是「改名功能壞了」，看不出是熱區造成的。
+        const sync = () => (tap.visible = !btn.checked);
+        dialog._pnTitleTapSignal = btn.connect("notify::checked", sync);
+        sync();
+    }
+
+    _pnRemoveTitleTap(dialog) {
+        if (!dialog?._pnTitleTap)
+            return;
+        if (dialog._pnTitleTapSignal) {
+            dialog._editButton?.disconnect(dialog._pnTitleTapSignal);
+            dialog._pnTitleTapSignal = 0;
+        }
+        dialog._pnTitleTap.destroy();
+        dialog._pnTitleTap = null;
+        dialog._editButton?.show();
+    }
+
     // 資料夾的圖示跟 Launcher 一樣大。FolderGrid 是獨立的 layout manager，所以
     // 外層釘的尺寸不會自動套過來；而它的預設是 IconSize.LARGE（96），在原廠
     // 720 的對話框裡剛好塞得下，於是一旦把對話框縮小就會被擠成 64 —— 那一下
@@ -1061,11 +1104,15 @@ export default class PineNoteOskExtension extends Extension {
         const appDisplay = pnOverviewControls()?._appDisplay;
         if (!appDisplay || appDisplay._pnOrigAddFolderDialog)
             return;
+        this._pnDialogs = new Set();
         const ext = this;
         appDisplay._pnOrigAddFolderDialog = appDisplay.addFolderDialog;
         appDisplay.addFolderDialog = function (dialog) {
             appDisplay._pnOrigAddFolderDialog.call(this, dialog);
             ext._pnSyncFolderIconSize(dialog._view);
+            ext._pnInstallTitleTap(dialog);
+            ext._pnDialogs.add(dialog);
+            dialog.connect("destroy", () => ext._pnDialogs.delete(dialog));
             // dialog._view 是 FolderView，_grid 是 FolderGrid（它自己的 layout
             // manager，跟外層 grid 無關，所以釘死的圖示尺寸不會套到這裡）
             ext._pnApplyWrapToView(dialog._view);
@@ -1082,6 +1129,10 @@ export default class PineNoteOskExtension extends Extension {
     }
 
     _pnRemoveDialogWatch() {
+        for (const dialog of this._pnDialogs ?? [])
+            this._pnRemoveTitleTap(dialog);
+        this._pnDialogs = null;
+
         const appDisplay = pnOverviewControls()?._appDisplay;
         if (!appDisplay?._pnOrigAddFolderDialog)
             return;
