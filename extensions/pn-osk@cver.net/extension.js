@@ -183,6 +183,7 @@ const IFACE = `
     <method name="ShowAppGrid"/>
     <method name="OpenFolder"/>
     <method name="RenameFolder"/>
+    <method name="Rotate"/>
     <method name="PanelInfo">
       <arg type="s" direction="out" name="info"/>
     </method>
@@ -968,10 +969,11 @@ export default class PineNoteOskExtension extends Extension {
     // 不是借用別人的按鈕 —— 借用的話每次套件升級都會被放回原位。
     _pnMakePanelButton(name, iconName, onActivate) {
         const button = new PanelMenu.Button(0.0, name, true);
-        button.add_child(new St.Icon({
+        button._pnIcon = new St.Icon({
             icon_name: iconName,
             style_class: "system-status-icon",
-        }));
+        });
+        button.add_child(button._pnIcon);
         // 觸控要自己接：button-press-event 在純觸控上不一定會來
         button.connect("button-press-event", () => {
             onActivate();
@@ -1002,57 +1004,90 @@ export default class PineNoteOskExtension extends Extension {
     }
 
     _pnRotate() {
-        const bus = Gio.DBus.session;
-        const call = (method, params) => bus.call_sync(
-            "org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig",
-            "org.gnome.Mutter.DisplayConfig", method, params, null,
-            Gio.DBusCallFlags.NONE, -1, null);
-
-        let state;
-        try {
-            state = call("GetCurrentState", null);
-        } catch (e) {
-            console.log(`[pn-osk] rotate: GetCurrentState failed: ${e.name}`);
+        // 🔴 一定要非同步。DisplayConfig 由 mutter 提供，而 mutter 就是這個行程 ——
+        // call_sync 會讓主迴圈等一個只有主迴圈能生的回覆，畫面凍到逾時為止
+        // （預設 25 秒，實測就是這樣：按一下卡一次，日誌事後才印出失敗）。
+        if (this._pnRotating)
             return;
-        }
+        this._pnRotating = true;
 
-        const [serial, monitors, logicalMonitors] = state.deepUnpack();
+        const bus = Gio.DBus.session;
+        const done = msg => {
+            this._pnRotating = false;
+            if (msg)
+                console.log(`[pn-osk] rotate: ${msg}`);
+        };
 
-        // 每個接頭現在用哪個 mode。ApplyMonitorsConfig 要的是 mode id，而
-        // GetCurrentState 的 logical_monitors 只給接頭名字 —— 差的就是這張表。
-        const currentMode = new Map();
-        for (const [spec, modes] of monitors) {
-            const connector = spec[0];
-            for (const mode of modes) {
-                const props = mode[6];
-                if (props["is-current"]?.deepUnpack?.() === true)
-                    currentMode.set(connector, mode[0]);
-            }
-        }
+        bus.call(
+            "org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig",
+            "org.gnome.Mutter.DisplayConfig", "GetCurrentState", null, null,
+            Gio.DBusCallFlags.NONE, -1, null,
+            (conn, res) => {
+                let state;
+                try {
+                    state = conn.call_finish(res);
+                } catch (e) {
+                    done(`GetCurrentState failed: ${e.message}`);
+                    return;
+                }
 
-        const out = [];
-        for (const [x, y, scale, transform, primary, mons] of logicalMonitors) {
-            // 0=正常 1=左轉 2=倒置 3=右轉。在直橫之間來回，不繞四個方向 ——
-            // 這塊面板只有兩種拿法。
-            const next = transform === 0 || transform === 2 ? 1 : 0;
-            const specs = mons
-                .map(m => [m[0], currentMode.get(m[0])])
-                .filter(([, mode]) => mode !== undefined)
-                .map(([connector, mode]) => [connector, mode, {}]);
-            if (specs.length !== mons.length) {
-                console.log("[pn-osk] rotate: a connector has no current mode");
-                return;
-            }
-            out.push([x, y, scale, next, primary, specs]);
-        }
+                const [serial, monitors, logicalMonitors] = state.deepUnpack();
 
-        try {
-            call("ApplyMonitorsConfig", new GLib.Variant(
-                "(uua(iiduba(ssa{sv}))a{sv})",
-                [serial, 2 /* persistent */, out, {}]));
-        } catch (e) {
-            console.log(`[pn-osk] rotate: apply failed: ${e.message}`);
-        }
+                // 每個接頭現在用哪個 mode。ApplyMonitorsConfig 要 mode id，而
+                // GetCurrentState 的 logical_monitors 只給接頭名字。
+                const currentMode = new Map();
+                for (const [spec, modes] of monitors) {
+                    for (const mode of modes) {
+                        if (mode[6]["is-current"]?.deepUnpack?.() === true)
+                            currentMode.set(spec[0], mode[0]);
+                    }
+                }
+
+                const out = [];
+                for (const [x, y, scale, transform, primary, mons] of logicalMonitors) {
+                    // 0=正常 1=左轉 2=倒置 3=右轉。只在直橫之間來回 ——
+                    // 這塊面板只有兩種拿法。
+                    const next = transform === 0 || transform === 2 ? 1 : 0;
+                    const specs = [];
+                    for (const m of mons) {
+                        const mode = currentMode.get(m[0]);
+                        if (mode === undefined) {
+                            done(`no current mode for ${m[0]}`);
+                            return;
+                        }
+                        specs.push([m[0], mode, {}]);
+                    }
+                    out.push([x, y, scale, next, primary, specs]);
+                }
+
+                bus.call(
+                    "org.gnome.Mutter.DisplayConfig",
+                    "/org/gnome/Mutter/DisplayConfig",
+                    "org.gnome.Mutter.DisplayConfig", "ApplyMonitorsConfig",
+                    new GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})",
+                        [serial, 2 /* persistent */, out, {}]),
+                    null, Gio.DBusCallFlags.NONE, -1, null,
+                    (c2, r2) => {
+                        try {
+                            c2.call_finish(r2);
+                            done(null);
+                        } catch (e) {
+                            done(`apply failed: ${e.message}`);
+                        }
+                    });
+            });
+    }
+
+    // 圖示指的是「按下去會發生什麼」，不是「這顆叫什麼」。直向時按了會轉成橫向
+    // ⇒ 畫順時針；橫向時反過來。一顆永遠長一樣的旋轉鈕只說得出「這裡可以轉」。
+    _pnSyncRotateIcon() {
+        const icon = Main.panel.statusArea?.["pn-rotate"]?._pnIcon;
+        const mon = Main.layoutManager.primaryMonitor;
+        if (!icon || !mon)
+            return;
+        icon.icon_name = mon.height > mon.width
+            ? "object-rotate-right-symbolic"
+            : "object-rotate-left-symbolic";
     }
 
     _pnInstallPanel() {
@@ -1084,9 +1119,17 @@ export default class PineNoteOskExtension extends Extension {
             () => this._pnRotate());
         add("pn-refresh", "PN Refresh", "view-refresh-symbolic",
             () => this._pnTriggerRefresh());
+
+        this._pnSyncRotateIcon();
+        this._pnPanelMonitorSignal = Main.layoutManager.connect(
+            "monitors-changed", () => this._pnSyncRotateIcon());
     }
 
     _pnRemovePanel() {
+        if (this._pnPanelMonitorSignal) {
+            Main.layoutManager.disconnect(this._pnPanelMonitorSignal);
+            this._pnPanelMonitorSignal = 0;
+        }
         for (const key of this._pnPanelButtons ?? [])
             Main.panel.statusArea[key]?.destroy();
         this._pnPanelButtons = null;
@@ -1900,6 +1943,10 @@ export default class PineNoteOskExtension extends Extension {
             // 誰在 statusArea 裡但沒出現在三個 box 中（隱藏或被別人收走）
             statusAreaRoles: Object.keys(panel.statusArea ?? {}),
         }, null, 2);
+    }
+
+    Rotate() {
+        this._pnRotate();
     }
 
     GridInfo() {
