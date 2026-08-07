@@ -539,6 +539,7 @@ export default class PineNoteOskExtension extends Extension {
             this._pnInstallTopArrows();
             this._pnFloatArrows();
             this._pnInstallLabelWrap();
+            this._pnInstallModeChoice();
             if (this._config?.trace)
                 console.log("[pn-osk] indicators gutter reclaimed");
         } else if (this._config?.trace) {
@@ -627,6 +628,46 @@ export default class PineNoteOskExtension extends Extension {
 
 // 標籤寬度：第一輪先給一個接近現況格子（119 − tile padding）的值，量完
     // 真正的 childSize 之後第二輪再由畫布反推。不用猜的那一版在下一個 commit。
+    // 🔴 模式（幾欄幾列）必須從螢幕比例決定，不能從頁面尺寸決定。
+    // 頁面寬度現在是我們算出來的，而 _findBestModeForSize 拿它回頭挑模式 ——
+    // 輸出變成輸入，於是轉向之後它讀到的是舊方向那個窄畫布，選了舊方向的模式，
+    // 舊方向的模式又讓畫布繼續窄下去。自我肯定的迴圈，鎖死在直向。
+    _pnInstallModeChoice() {
+        const grid = pnOverviewControls()?._appDisplay?._grid;
+        if (!grid || grid._pnOrigFindBestMode)
+            return;
+        grid._pnOrigFindBestMode = grid._findBestModeForSize;
+        grid._findBestModeForSize = () => {
+            const mon = Main.layoutManager.primaryMonitor;
+            const modes = grid._gridModes ?? [];
+            if (!mon || !modes.length)
+                return -1;
+            const ratio = mon.width / mon.height;
+            let best = -1;
+            let closest = Infinity;
+            for (let i = 0; i < modes.length; i++) {
+                const r = modes[i].columns / modes[i].rows;
+                if (Math.abs(ratio - r) < Math.abs(ratio - closest)) {
+                    closest = r;
+                    best = i;
+                }
+            }
+            return best;
+        };
+        grid._currentMode = -1;
+        grid.queue_relayout();
+    }
+
+    _pnRemoveModeChoice() {
+        const grid = pnOverviewControls()?._appDisplay?._grid;
+        if (!grid?._pnOrigFindBestMode)
+            return;
+        grid._findBestModeForSize = grid._pnOrigFindBestMode;
+        delete grid._pnOrigFindBestMode;
+        grid._currentMode = -1;
+        grid.queue_relayout();
+    }
+
     // 圖示大小該是常數，不是餘數。兩個方向各算一次「每格容得下多大」，取小的那個 ——
     // 這樣轉螢幕時圖示不動，動的是間距，跟 iPad 一樣。
     _pnSyncIconSize() {
@@ -679,7 +720,11 @@ export default class PineNoteOskExtension extends Extension {
             return;
 
         // 上限留在 96：那是主題與圖示主題都預期的最大尺寸，再上去是另一個題目。
-        const size = Math.max(16, Math.min(96, fits - overhead));
+        // 吸附到 4 的倍數。chromeV（面板＋搜尋列）只量得到當下這個方向，兩個方向
+        // 之間差了幾個 px，直接用會讓圖示在轉向時跳 1px —— 正是這整件事要消滅的
+        // 東西。吸附把量測雜訊吃掉，代價最多 3px。
+        const raw = Math.max(16, Math.min(96, fits - overhead));
+        const size = Math.floor(raw / 4) * 4;
         if (lm.fixedIconSize === size || this._pnIconSizePending === size)
             return;
         // 這個方法是從配置途中叫到的（那是唯一 _pageHeight 已經有值的時機）。
@@ -974,6 +1019,7 @@ export default class PineNoteOskExtension extends Extension {
 
     _pnRemoveLaunchpad() {
         this._pnRemoveLabelWrap();
+        this._pnRemoveModeChoice();
         this._pnUnfloatArrows();
         this._pnRemoveTopArrows();
 
