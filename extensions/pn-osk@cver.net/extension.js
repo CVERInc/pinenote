@@ -46,6 +46,7 @@ import Shell from 'gi://Shell';
 import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 
@@ -571,6 +572,7 @@ export default class PineNoteOskExtension extends Extension {
                 this._pnApplyIconSize(lm0, cached);
             this._pnInstallModeChoice();
             this._pnInstallDialogWatch();
+            this._pnInstallPanel();
             if (this._config?.trace)
                 console.log("[pn-osk] indicators gutter reclaimed");
         } else if (this._config?.trace) {
@@ -960,6 +962,139 @@ export default class PineNoteOskExtension extends Extension {
         dialog._editButton?.show();
     }
 
+    // ── 頂列 ──────────────────────────────────────────────────────────
+    // 這台上按得最兇的兩件事是「全域刷新」和「旋轉」，而旋轉原本埋在一個狀態
+    // 顯示器的選單裡第十幾項。兩個都升成單獨一顆，而且是我們自己呼叫底層介面，
+    // 不是借用別人的按鈕 —— 借用的話每次套件升級都會被放回原位。
+    _pnMakePanelButton(name, iconName, onActivate) {
+        const button = new PanelMenu.Button(0.0, name, true);
+        button.add_child(new St.Icon({
+            icon_name: iconName,
+            style_class: "system-status-icon",
+        }));
+        // 觸控要自己接：button-press-event 在純觸控上不一定會來
+        button.connect("button-press-event", () => {
+            onActivate();
+            return Clutter.EVENT_STOP;
+        });
+        button.connect("touch-event", (a, event) => {
+            if (event.type() === Clutter.EventType.TOUCH_END)
+                onActivate();
+            return Clutter.EVENT_STOP;
+        });
+        return button;
+    }
+
+    _pnTriggerRefresh() {
+        // org.pinenote.ebc 在**系統**匯流排上，由 pinenote-dbus-service 提供 ——
+        // 不是任何擴充的一部分，所以我們是平起平坐的呼叫者。
+        Gio.DBus.system.call(
+            "org.pinenote.ebc", "/ebc", "org.pinenote.ebc",
+            "TriggerGlobalRefresh", null, null,
+            Gio.DBusCallFlags.NONE, -1, null,
+            (bus, res) => {
+                try {
+                    bus.call_finish(res);
+                } catch (e) {
+                    console.log(`[pn-osk] refresh failed: ${e.name}`);
+                }
+            });
+    }
+
+    _pnRotate() {
+        const bus = Gio.DBus.session;
+        const call = (method, params) => bus.call_sync(
+            "org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig",
+            "org.gnome.Mutter.DisplayConfig", method, params, null,
+            Gio.DBusCallFlags.NONE, -1, null);
+
+        let state;
+        try {
+            state = call("GetCurrentState", null);
+        } catch (e) {
+            console.log(`[pn-osk] rotate: GetCurrentState failed: ${e.name}`);
+            return;
+        }
+
+        const [serial, monitors, logicalMonitors] = state.deepUnpack();
+
+        // 每個接頭現在用哪個 mode。ApplyMonitorsConfig 要的是 mode id，而
+        // GetCurrentState 的 logical_monitors 只給接頭名字 —— 差的就是這張表。
+        const currentMode = new Map();
+        for (const [spec, modes] of monitors) {
+            const connector = spec[0];
+            for (const mode of modes) {
+                const props = mode[6];
+                if (props["is-current"]?.deepUnpack?.() === true)
+                    currentMode.set(connector, mode[0]);
+            }
+        }
+
+        const out = [];
+        for (const [x, y, scale, transform, primary, mons] of logicalMonitors) {
+            // 0=正常 1=左轉 2=倒置 3=右轉。在直橫之間來回，不繞四個方向 ——
+            // 這塊面板只有兩種拿法。
+            const next = transform === 0 || transform === 2 ? 1 : 0;
+            const specs = mons
+                .map(m => [m[0], currentMode.get(m[0])])
+                .filter(([, mode]) => mode !== undefined)
+                .map(([connector, mode]) => [connector, mode, {}]);
+            if (specs.length !== mons.length) {
+                console.log("[pn-osk] rotate: a connector has no current mode");
+                return;
+            }
+            out.push([x, y, scale, next, primary, specs]);
+        }
+
+        try {
+            call("ApplyMonitorsConfig", new GLib.Variant(
+                "(uua(iiduba(ssa{sv}))a{sv})",
+                [serial, 2 /* persistent */, out, {}]));
+        } catch (e) {
+            console.log(`[pn-osk] rotate: apply failed: ${e.message}`);
+        }
+    }
+
+    _pnInstallPanel() {
+        if (this._pnPanelButtons)
+            return;
+        this._pnPanelButtons = [];
+        this._pnPanelHidden = [];
+
+        // 藏起來的，每一顆都有各自的理由（見檔頭）。藏 container 而不是 actor：
+        // 那是 panel 實際排版的那一層。
+        for (const role of [
+            "a11y",
+            "PN Switch Performance Modes",
+            "PN Trigger Global Refresh",
+        ]) {
+            const item = Main.panel.statusArea?.[role];
+            if (item?.container?.visible) {
+                item.container.hide();
+                this._pnPanelHidden.push(item);
+            }
+        }
+
+        const add = (key, name, icon, fn) => {
+            const b = this._pnMakePanelButton(name, icon, fn);
+            Main.panel.addToStatusArea(key, b, 0, "right");
+            this._pnPanelButtons.push(key);
+        };
+        add("pn-rotate", "PN Rotate", "object-rotate-right-symbolic",
+            () => this._pnRotate());
+        add("pn-refresh", "PN Refresh", "view-refresh-symbolic",
+            () => this._pnTriggerRefresh());
+    }
+
+    _pnRemovePanel() {
+        for (const key of this._pnPanelButtons ?? [])
+            Main.panel.statusArea[key]?.destroy();
+        this._pnPanelButtons = null;
+        for (const item of this._pnPanelHidden ?? [])
+            item.container?.show();
+        this._pnPanelHidden = null;
+    }
+
     // 資料夾的圖示跟 Launcher 一樣大。FolderGrid 是獨立的 layout manager，所以
     // 外層釘的尺寸不會自動套過來；而它的預設是 IconSize.LARGE（96），在原廠
     // 720 的對話框裡剛好塞得下，於是一旦把對話框縮小就會被擠成 64 —— 那一下
@@ -1292,6 +1427,7 @@ export default class PineNoteOskExtension extends Extension {
         this._pnRemoveLabelWrap();
         this._pnRemoveModeChoice();
         this._pnRemoveDialogWatch();
+        this._pnRemovePanel();
         this._pnUnfloatArrows();
         this._pnRemoveTopArrows();
 
