@@ -551,6 +551,21 @@ export default class PineNoteOskExtension extends Extension {
             this._pnInstallTopArrows();
             this._pnFloatArrows();
             this._pnInstallLabelWrap();
+
+            // 量測要等第一次配置，快取不用 —— 先套上去，第一幀就是對的。
+            // 之後 _pnSyncIconSize 照樣量，不一樣就更新。
+            const cached = this._pnReadCachedIconSize();
+            const lm0 = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
+            if (cached && lm0 && lm0.fixedIconSize !== cached) {
+                lm0.fixedIconSize = cached;
+                // 只設屬性不夠：真正在用的是 _iconSize，而它只在 adaptToSize
+                // 發現頁面尺寸變了才會重算。直接做 later 會做的事。
+                lm0._iconSize = cached;
+                for (const child of lm0._container ?? [])
+                    child.icon?.setIconSize?.(cached);
+                lm0._childrenMaxSize = -1;
+                lm0.layout_changed();
+            }
             this._pnInstallModeChoice();
             this._pnInstallDialogWatch();
             if (this._config?.trace)
@@ -685,6 +700,34 @@ export default class PineNoteOskExtension extends Extension {
         grid.queue_relayout();
     }
 
+    // 量出來的圖示尺寸留一份。它只能在第一次配置之後才算得出來（要 _pageHeight），
+    // 所以沒有快取的話，開機後第一幀一定是 _findBestIconSize 從梯子上挑的那個
+    // ——實測 96，而正確答案是 64，使用者看到的就是「先大再縮」。
+    _pnIconSizeCachePath() {
+        return GLib.build_filenamev([GLib.get_user_cache_dir(), "pn-osk-iconsize"]);
+    }
+
+    _pnReadCachedIconSize() {
+        try {
+            const [ok, data] = GLib.file_get_contents(this._pnIconSizeCachePath());
+            if (!ok)
+                return 0;
+            const n = parseInt(new TextDecoder().decode(data).trim(), 10);
+            return Number.isFinite(n) && n >= 16 && n <= 96 ? n : 0;
+        } catch {
+            return 0;
+        }
+    }
+
+    _pnWriteCachedIconSize(size) {
+        try {
+            GLib.file_set_contents(this._pnIconSizeCachePath(), `${size}\n`);
+        } catch (e) {
+            // 快取寫不進去只是下次會再閃一下，不值得讓它中斷別的事
+            console.log(`[pn-osk] icon size cache not written: ${e.name}`);
+        }
+    }
+
     // 圖示大小該是常數，不是餘數。兩個方向各算一次「每格容得下多大」，取小的那個 ——
     // 這樣轉螢幕時圖示不動，動的是間距，跟 iPad 一樣。
     _pnSyncIconSize() {
@@ -755,6 +798,7 @@ export default class PineNoteOskExtension extends Extension {
                 l.fixedIconSize = size;
                 l._childrenMaxSize = -1;
                 l.layout_changed();
+                this._pnWriteCachedIconSize(size);
                 console.log(`[pn-osk] icon size pinned to ${size} (overhead ${overhead})`);
             }
             return GLib.SOURCE_REMOVE;
@@ -875,8 +919,13 @@ export default class PineNoteOskExtension extends Extension {
         this._pnWrapInstalled = true;
 
         const apply = () => {
-            for (const item of appDisplay._orderedItems ?? [])
+            for (const item of appDisplay._orderedItems ?? []) {
                 this._pnApplyWrap(item);
+                // 資料夾的內容現在就在（FolderIcon.view），不必等對話框建立 ——
+                // 等到那時候才套，第一幀已經用沒折行的尺寸畫過一次了。
+                if (item.view)
+                    this._pnApplyWrapToView(item.view);
+            }
             this._pnStyleFolderIcons();
             appDisplay._grid?.layout_manager?.layout_changed();
         };
