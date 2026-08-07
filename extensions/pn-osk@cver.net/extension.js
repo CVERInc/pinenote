@@ -174,6 +174,11 @@ const IFACE = `
       <arg type="s" name="json" direction="out"/>
     </method>
     <method name="Rebuild"/>
+    <method name="ShowAppGrid"/>
+    <method name="ArrowInfo">
+      <arg type="s" name="json" direction="out"/>
+    </method>
+    <method name="HideOverview"/>
   </interface>
 </node>`;
 
@@ -245,6 +250,46 @@ function quantizeRow(row) {
         const w = quantize(k.width ?? 1);
         return w === (k.width ?? 1) ? k : {...k, width: w};
     });
+}
+
+// The app grid decides its column count first and then picks the largest icon
+// size that still fits, so widening a cell is a matter of asking for fewer
+// columns — not of setting icon-size, whose ceiling is 96 and which the layout
+// does not consult anyway. Stock modes are 3/4/6/8 columns; on this panel the
+// 8-column mode wins and app names ellipsize at about seven characters.
+const PN_GRID_MODES = [
+    {rows: 6, columns: 4},
+    {rows: 4, columns: 6},
+];
+
+// ControlsState.APP_GRID。overviewControls.js 沒有 export 這個 enum，而擴充又
+// import 不到模組內的 const，所以這裡寫死 —— 它是 shell 的公開狀態序號
+// (HIDDEN=0, WINDOW_PICKER=1, APP_GRID=2)，不是我們自己編的值。
+const PN_STATE_APP_GRID = 2;
+
+// BaseAppViewGridLayout 沒有 export，實例掛在一個內部容器的 layoutManager 上，
+// 沒有穩定的公開路徑 —— 用特徵找它（它是唯一擁有 _getIndicatorsWidth 的 layout）。
+function pnFindGridLayout(actor) {
+    if (!actor)
+        return null;
+    const lm = actor.layoutManager ?? actor.layout_manager;
+    if (lm && typeof lm._getIndicatorsWidth === "function")
+        return lm;
+    const children = actor.get_children ? actor.get_children() : [];
+    for (const child of children) {
+        const found = pnFindGridLayout(child);
+        if (found)
+            return found;
+    }
+    return null;
+}
+
+function pnOverviewControls() {
+    return Main.overview?._overview?._controls ?? null;
+}
+
+function pnAppGrid() {
+    return Main.overview?._overview?._controls?._appDisplay?._grid ?? null;
 }
 
 // The stock caps key carries an icon and no label. Swapping in a label means
@@ -397,9 +442,334 @@ export default class PineNoteOskExtension extends Extension {
         this._exportDBus();
         this._rebuild();
         console.log(`[pn-osk] enabled, build=${BUILD}`);
+
+        // app grid = 全螢幕啟動器：收回工作區預覽與 dash 佔的垂直空間
+        this._pnLaunchpadTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+            this._pnLaunchpadTimeoutId = 0;
+            this._pnInstallLaunchpad();
+            return GLib.SOURCE_REMOVE;
+        });
+
+        // app grid: fewer columns so the labels stop ellipsizing
+        this._pnGridTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+            const grid = pnAppGrid();
+            if (grid) {
+                grid.setGridModes(PN_GRID_MODES);
+                if (this._config?.trace)
+                    log('[pn-osk] app grid modes overridden');
+            }
+            this._pnGridTimeoutId = 0;
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
+    _pnInstallLaunchpad() {
+        const controls = pnOverviewControls();
+        const layout = controls?.layout_manager;
+        if (!layout || this._pnLaunchpadInstalled)
+            return;
+
+        // 1) 工作區預覽在 APP_GRID 下高度歸零。AppDisplay 的位置是從這個 box 的
+        //    高度算出來的，所以歸零之後它會自己往上移，不必碰任何座標。
+        this._pnOrigWorkspacesBox = layout._computeWorkspacesBoxForState;
+        layout._computeWorkspacesBoxForState = (state, ...args) => {
+            const box = this._pnOrigWorkspacesBox.call(layout, state, ...args);
+            if (state === PN_STATE_APP_GRID)
+                box.set_size(box.get_width(), 0);
+            return box;
+        };
+
+        // 2) AppDisplay 在 APP_GRID 下吃到螢幕底部。原本的算式會扣掉 dashHeight，
+        //    而我們正要把那塊還給它。
+        this._pnOrigAppDisplayBox = layout._getAppDisplayBoxForState;
+        layout._getAppDisplayBoxForState =
+            (state, box, searchHeight, dashHeight, workspacesBox, spacing) => {
+                if (state !== PN_STATE_APP_GRID) {
+                    return this._pnOrigAppDisplayBox.call(
+                        layout, state, box, searchHeight, dashHeight, workspacesBox, spacing);
+                }
+                const [width, height] = box.get_size();
+                const startY = layout._workAreaBox.y1;
+                const appBox = new Clutter.ActorBox();
+                // 從搜尋框那一列開始，而不是從它下面 —— 多出來的這一段是要
+                // 借給換頁箭頭站的地方。grid 自己會在下面的 allocate 裡往下推，
+                // 所以視覺上內容仍從搜尋框之下開始。
+                appBox.set_origin(0, startY + searchHeight + spacing);
+                appBox.set_size(width, height - searchHeight - spacing);
+                // 讓 grid 知道要讓出多少（searchHeight + spacing）
+                this._pnTopInset = searchHeight + spacing;
+                return appBox;
+            };
+
+        // 3) dash 在 APP_GRID 下讓開。佈局仍然會分配它（那段不是獨立函式，硬拆
+        //    風險大於收益），所以用不可見 + 不可點來讓它退場。
+        this._pnStateSignal = controls._stateAdjustment.connect('notify::value', () => {
+            const v = controls._stateAdjustment.value;
+            const inAppGrid = v > 1.5;
+            controls.dash.opacity = inAppGrid ? 0 : 255;
+            controls.dash.reactive = !inAppGrid;
+            // 零高度的 box 不會讓元件消失 —— 它會改用自己的最小尺寸把自己畫出來，
+            // 於是變成畫面右半邊那塊黑。要讓它真的退場得動 visible。
+            const wd = controls._workspacesDisplay;
+            if (wd)
+                wd.visible = !inAppGrid;
+        });
+
+
+        // 收回左右給箭頭的走道：那條留白與箭頭的容身處是同一個數字，
+        // 壓到 0 之後 grid 吃滿寬度，箭頭落在邊緣，翻頁另有觸控滑動。
+        const gridLayout = pnFindGridLayout(controls._appDisplay);
+        if (gridLayout) {
+            this._pnGridLayout = gridLayout;
+            this._pnOrigIndicatorsWidth = gridLayout._getIndicatorsWidth;
+            gridLayout._getIndicatorsWidth = () => 0;
+            gridLayout.layout_changed();
+            this._pnInstallTopArrows();
+            this._pnFloatArrows();
+            if (this._config?.trace)
+                console.log("[pn-osk] indicators gutter reclaimed");
+        } else if (this._config?.trace) {
+            console.log("[pn-osk] grid layout not found - gutter left alone");
+        }
+
+        layout.layout_changed();
+        this._pnLaunchpadInstalled = true;
+        if (this._config?.trace)
+            console.log('[pn-osk] launchpad layout installed');
+    }
+
+
+    _pnInstallTopArrows() {
+        const gl = this._pnGridLayout;
+        if (!gl || this._pnArrowsMoved)
+            return;
+
+        const proto = Object.getPrototypeOf(gl);
+        if (proto._pnPatched)
+            return;
+
+        const ext = this;
+        const origAllocate = proto.vfunc_allocate;
+        proto._pnOrigAllocate = origAllocate;
+        proto.vfunc_allocate = function (container, box) {
+            // 直接問搜尋框本人，不靠跨物件傳遞的變數 —— 那兩個 allocate
+            // 的時機不保證同步，第一輪必然拿到 0。
+            const controls = pnOverviewControls();
+            const entry = controls?._searchEntryBin ?? controls?._searchEntry;
+            const inset = entry ? entry.height + Math.round(entry.height * 0.15) : 0;
+            if (!inset) {
+                origAllocate.call(this, container, box);
+                return;
+            }
+
+            // grid 讓出頂部那一列
+            const gridBox = box.copy();
+            gridBox.y1 += inset;
+            this._grid.indicatorsPadding = new Clutter.Margin({left: 0, right: 0});
+            this._scrollView.allocate(gridBox);
+
+            // 箭頭擺在讓出來的那一列的兩端
+            const ltr = container.get_text_direction() !== Clutter.TextDirection.RTL;
+            const [width] = box.get_size();
+            const side = Math.round(width * 0.12);
+
+            const topLeft = box.copy();
+            topLeft.y2 = topLeft.y1 + inset;
+            topLeft.x2 = topLeft.x1 + side;
+
+            const topRight = box.copy();
+            topRight.y2 = topRight.y1 + inset;
+            topRight.x1 = topRight.x2 - side;
+
+            this._previousPageIndicator.allocate(ltr ? topLeft : topRight);
+            this._previousPageArrow.allocate_align_fill(
+                ltr ? topLeft : topRight, 0.5, 0.5, false, false);
+            this._nextPageIndicator.allocate(ltr ? topRight : topLeft);
+            this._nextPageArrow.allocate_align_fill(
+                ltr ? topRight : topLeft, 0.5, 0.5, false, false);
+
+            this._pageWidth = box.get_width();
+        };
+        proto._pnPatched = true;
+        this._pnArrowsMoved = true;
+        gl.layout_changed();
+        if (this._config?.trace)
+            console.log("[pn-osk] page arrows moved to the search row");
+    }
+
+    _pnRemoveTopArrows() {
+        const gl = this._pnGridLayout;
+        if (!gl)
+            return;
+        const proto = Object.getPrototypeOf(gl);
+        if (proto._pnOrigAllocate) {
+            proto.vfunc_allocate = proto._pnOrigAllocate;
+            delete proto._pnOrigAllocate;
+            delete proto._pnPatched;
+            gl.layout_changed();
+        }
+        this._pnArrowsMoved = false;
+    }
+
+
+    _pnFloatArrows() {
+        const gl = this._pnGridLayout;
+        const controls = pnOverviewControls();
+        if (!gl || !controls || this._pnArrowLayer)
+            return;
+
+        const prev = gl._previousPageArrow;
+        const next = gl._nextPageArrow;
+        if (!prev || !next)
+            return;
+
+        // 記住原本的家，disable 時要還回去
+        this._pnArrowHome = prev.get_parent();
+
+        this._pnArrowLayer = new St.Widget({
+            name: "pn-arrow-layer",
+            layout_manager: new Clutter.FixedLayout(),
+            reactive: false,
+            visible: false,
+        });
+        Main.layoutManager.uiGroup.add_child(this._pnArrowLayer);
+
+        for (const arrow of [prev, next]) {
+            arrow.get_parent()?.remove_child(arrow);
+            this._pnArrowLayer.add_child(arrow);
+            arrow.reactive = true;
+            // 這兩顆本來由 grid 的翻頁狀態控制顯隱，搬家之後那條線斷了，
+            // 所以固定顯示 —— 在啟動器上「還有下一頁」本來就該一直看得見。
+            arrow.opacity = 255;
+            // CENTER 對齊需要 parent 分配 box 才有尺寸，固定定位層不做這件事
+            arrow.x_align = Clutter.ActorAlign.START;
+            arrow.y_align = Clutter.ActorAlign.START;
+            arrow.show();
+        }
+
+        this._pnPositionArrows();
+        this._pnArrowStateSignal = controls._stateAdjustment.connect(
+            "notify::value", () => this._pnPositionArrows());
+        this._pnArrowMonitorSignal = Main.layoutManager.connect(
+            "monitors-changed", () => this._pnPositionArrows());
+    }
+
+    _pnPositionArrows() {
+        const controls = pnOverviewControls();
+        const layer = this._pnArrowLayer;
+        if (!controls || !layer)
+            return;
+
+        const inAppGrid = controls._stateAdjustment.value > 1.5;
+        layer.visible = inAppGrid;
+        layer.reactive = inAppGrid;
+        if (!inAppGrid)
+            return;
+
+        const mon = Main.layoutManager.primaryMonitor;
+        const entry = controls._searchEntryBin ?? controls._searchEntry;
+        const gl = this._pnGridLayout;
+        const prev = gl?._previousPageArrow;
+        const next = gl?._nextPageArrow;
+        if (!mon || !entry || !prev || !next)
+            return;
+
+        // 搜尋框那一列的垂直中心（用它自己的 allocation，不用推算）
+        const [, entryY] = entry.get_transformed_position();
+        const centerY = entryY + entry.height / 2;
+        const margin = Math.round(mon.width * 0.03);
+
+        // 不自己推座標系：uiGroup 的孩子用的是 stage 座標，而 monitor.width
+        // 是邏輯像素 —— 在 scale=2 下兩者差一倍。用 layer 自己的 allocation
+        // 當畫布，那是唯一保證同一個座標系的東西。
+        const layerW = layer.width || mon.width;
+        // 只管位置，尺寸交給 stylesheet。先前這裡 set_size(arrow.width || 48)
+        // 等於拿一個猜來的數字蓋掉樣式算出的值 —— 讀到 0 就把 0 寫回去，
+        // 於是那顆箭頭永遠是零寬。
+        const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor || 1;
+        const arrowW = 56 * scale;
+        const place = (arrow, x) => {
+            arrow.set_position(Math.round(x), Math.round(centerY - arrowW / 2));
+        };
+        // 先給畫布尺寸，再放東西 —— 反過來的話 place() 讀到的是舊的寬度
+        layer.set_position(mon.x, mon.y);
+        layer.set_size(mon.width, mon.height);
+
+        place(prev, margin);
+        place(next, mon.width - margin - arrowW);
+    }
+
+    _pnUnfloatArrows() {
+        const controls = pnOverviewControls();
+        if (this._pnArrowStateSignal && controls) {
+            controls._stateAdjustment.disconnect(this._pnArrowStateSignal);
+            this._pnArrowStateSignal = 0;
+        }
+        if (this._pnArrowMonitorSignal) {
+            Main.layoutManager.disconnect(this._pnArrowMonitorSignal);
+            this._pnArrowMonitorSignal = 0;
+        }
+        const gl = this._pnGridLayout;
+        if (this._pnArrowLayer) {
+            for (const arrow of [gl?._previousPageArrow, gl?._nextPageArrow]) {
+                if (!arrow)
+                    continue;
+                arrow.get_parent()?.remove_child(arrow);
+                this._pnArrowHome?.add_child(arrow);
+            }
+            Main.layoutManager.uiGroup.remove_child(this._pnArrowLayer);
+            this._pnArrowLayer.destroy();
+            this._pnArrowLayer = null;
+            this._pnArrowHome = null;
+        }
+    }
+
+    _pnRemoveLaunchpad() {
+        this._pnUnfloatArrows();
+        this._pnRemoveTopArrows();
+
+        if (this._pnGridLayout && this._pnOrigIndicatorsWidth) {
+            this._pnGridLayout._getIndicatorsWidth = this._pnOrigIndicatorsWidth;
+            this._pnGridLayout.layout_changed();
+            this._pnGridLayout = null;
+            this._pnOrigIndicatorsWidth = null;
+        }
+        const controls = pnOverviewControls();
+        const layout = controls?.layout_manager;
+        if (layout && this._pnOrigWorkspacesBox) {
+            layout._computeWorkspacesBoxForState = this._pnOrigWorkspacesBox;
+            this._pnOrigWorkspacesBox = null;
+        }
+        if (layout && this._pnOrigAppDisplayBox) {
+            layout._getAppDisplayBoxForState = this._pnOrigAppDisplayBox;
+            this._pnOrigAppDisplayBox = null;
+        }
+        if (controls && this._pnStateSignal) {
+            controls._stateAdjustment.disconnect(this._pnStateSignal);
+            this._pnStateSignal = 0;
+            controls.dash.opacity = 255;
+            controls.dash.reactive = true;
+        }
+        layout?.layout_changed();
+        this._pnLaunchpadInstalled = false;
+    }
+
+
     disable() {
+
+        if (this._pnLaunchpadTimeoutId) {
+            GLib.source_remove(this._pnLaunchpadTimeoutId);
+            this._pnLaunchpadTimeoutId = 0;
+        }
+        this._pnRemoveLaunchpad();
+
+        if (this._pnGridTimeoutId) {
+            GLib.source_remove(this._pnGridTimeoutId);
+            this._pnGridTimeoutId = 0;
+        }
+        const grid = pnAppGrid();
+        if (grid)
+            grid.setGridModes(null);   // null 讓它回到 shell 的預設
         const proto = Keyboard.prototype;
 
         if (this._origRelayout)
@@ -740,6 +1110,43 @@ export default class PineNoteOskExtension extends Extension {
             composed: this._lastComposed ?? null,
         }, null, 2);
     }
+    ArrowInfo() {
+        const gl = this._pnGridLayout;
+        const controls = pnOverviewControls();
+        const dump = a => a ? {
+            parent: a.get_parent()?.name || String(a.get_parent()),
+            visible: a.visible, opacity: a.opacity, mapped: a.mapped,
+            x: a.x, y: a.y, w: a.width, h: a.height,
+        } : null;
+        return JSON.stringify({
+            gridLayoutFound: !!gl,
+            layerExists: !!this._pnArrowLayer,
+            layerVisible: this._pnArrowLayer ? this._pnArrowLayer.visible : null,
+            stateValue: controls ? controls._stateAdjustment.value : null,
+            prev: dump(gl ? gl._previousPageArrow : null),
+            next: dump(gl ? gl._nextPageArrow : null),
+        }, null, 2);
+    }
+
+    ShowAppGrid() {
+        // Main.overview.showApps() 一步到位：開 overview 並切到 app grid 那一頁，
+        // 正好對應「頂列左上角 → dock 最右邊」那兩下。
+        // showApps() 只保證打開 overview，不保證停在 app grid（實測會留在
+        // window picker）。直接把狀態推到 APP_GRID，那是這個切換的真實依據。
+        Main.overview.show();
+        const controls = pnOverviewControls();
+        if (controls) {
+            controls._stateAdjustment.ease(PN_STATE_APP_GRID, {
+                duration: 250,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            });
+        }
+    }
+
+    HideOverview() {
+        Main.overview.hide();
+    }
+
 
     Rebuild() {
         this._config = readConfig();

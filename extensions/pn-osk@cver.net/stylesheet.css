@@ -37,3 +37,48 @@
 #keyboard {
     padding-bottom: 4px;
 }
+
+/* --- app grid legibility in pure black-and-white --- */
+/* GNOME 48 draws app names in a light grey. In grayscale mode that reads as
+ * grey; with bw_mode=1 the panel has only black and white, so a mid grey is
+ * either dithered into noise or lost outright. Pure black is the only value
+ * that survives the quantisation intact. */
+.overview-tile,
+.overview-tile .overview-icon,
+.grid-search-result,
+.grid-search-result .overview-icon {
+    color: #000000;
+}
+
+/* Widening the cell rather than shrinking the type: the grid is adaptive, so a
+ * larger icon means fewer columns, and fewer columns means each label gets more
+ * room. It also makes the touch target bigger, which this panel needs more than
+ * it needs another app per row. */
+.overview-tile .overview-icon,
+.grid-search-result .overview-icon {
+    icon-size: 160px;
+}
+
+/* A folder tile is drawn as a dark rounded rectangle. In grayscale that reads
+ * as a tint; with bw_mode=1 there is no tint to be had, so it quantises to a
+ * solid black block and swallows the icons inside it. An outline says the same
+ * thing ("these are grouped") without spending any ink. */
+.app-folder {
+    background-color: transparent;
+    border: 2px solid #000000;
+}
+
+/* The page arrows have no size of their own: the theme only styles them inside
+ * the folder dialog, and in the grid they were stretched to fill the gutter we
+ * reclaimed. Once they live in a fixed-position layer nobody hands them a box,
+ * and CENTER alignment collapses them to zero. Give them their own dimensions.
+ * Black on white because this panel quantises everything else away. */
+.page-navigation-arrow {
+    width: 56px;
+    height: 56px;
+    border-radius: 28px;
+    background-color: #000000;
+    color: #ffffff;
+    icon-size: 28px;
+}
+
