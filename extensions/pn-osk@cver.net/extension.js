@@ -652,6 +652,10 @@ export default class PineNoteOskExtension extends Extension {
                     best = i;
                 }
             }
+            // 🔴 原版不是「回傳索引給呼叫端」—— 它自己就呼叫 _setGridMode，而
+            // vfunc_allocate 對回傳值一個字都沒用。只回傳的版本＝模式從安裝那一刻
+            // 起就凍住（凍在安裝時的方向），而且看起來完全正常，因為安裝時剛好對。
+            grid._setGridMode(best);
             return best;
         };
         grid._currentMode = -1;
