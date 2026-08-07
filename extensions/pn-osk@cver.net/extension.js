@@ -1429,9 +1429,15 @@ export default class PineNoteOskExtension extends Extension {
             return [first, last];
         })();
 
+        // 🔴 尺寸只問一顆：隱藏的那顆保留著舊的偏好尺寸（實測 52 對 40），
+        // 各問各的會讓兩顆用不同的 h 算中心，落點差 6px。優先問還映射著的那顆。
+        const sizeFrom = [prev, next].find(a => a.mapped) ?? prev;
+        const [, arrowW] = sizeFrom.get_preferred_width(-1);
+        const [, arrowH] = sizeFrom.get_preferred_height(-1);
+
         const place = (arrow, alignRight) => {
-            const [, w] = arrow.get_preferred_width(-1);
-            const [, h] = arrow.get_preferred_height(-1);
+            const w = arrowW;
+            const h = arrowH;
             const centre = columnCentres?.[alignRight ? 1 : 0];
             // 任何一項算壞就退回貼邊。箭頭放錯位置還看得見，NaN 是直接消失。
             const x = Number.isFinite(centre)
