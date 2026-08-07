@@ -74,6 +74,10 @@
  * and CENTER alignment collapses them to zero. Give them their own dimensions.
  * Black on white because this panel quantises everything else away. */
 .page-navigation-arrow {
+    /* 主題給了它 padding，所以 width 只是內容框 —— 量到的是 92 而不是 56，
+       大到壓在頂列上。歸零之後這個數字才是它實際佔的大小。 */
+    padding: 0;
+    margin: 0;
     width: 56px;
     height: 56px;
     border-radius: 28px;

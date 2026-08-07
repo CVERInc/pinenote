@@ -625,6 +625,7 @@ export default class PineNoteOskExtension extends Extension {
 
         // 記住原本的家，disable 時要還回去
         this._pnArrowHome = prev.get_parent();
+        this._pnArrows = {prev, next};
 
         this._pnArrowLayer = new St.Widget({
             name: "pn-arrow-layer",
@@ -632,7 +633,14 @@ export default class PineNoteOskExtension extends Extension {
             reactive: false,
             visible: false,
         });
-        Main.layoutManager.uiGroup.add_child(this._pnArrowLayer);
+        // addChrome 而不是 uiGroup.add_child：後者是硬塞一個 actor 進別人的
+        // 容器，排版不歸我們管，set_size 只是建議。addChrome 是 shell 給
+        // 「浮在畫面上的自有 UI」的正式入口，它會照我們給的座標放。
+        Main.layoutManager.addChrome(this._pnArrowLayer, {
+            trackFullscreen: false,
+            affectsStruts: false,
+            affectsInputRegion: true,
+        });
 
         for (const arrow of [prev, next]) {
             arrow.get_parent()?.remove_child(arrow);
@@ -646,6 +654,15 @@ export default class PineNoteOskExtension extends Extension {
             arrow.y_align = Clutter.ActorAlign.START;
             arrow.show();
         }
+
+        // grid 的 allocate 仍會直接對這兩個屬性指到的 actor 下 allocate，
+        // 把它們壓回零寬的 indicators box。換成隱形替身，讓它去擺替身。
+        this._pnDecoys = {
+            prev: new St.Widget({name: "pn-arrow-decoy-prev", visible: false}),
+            next: new St.Widget({name: "pn-arrow-decoy-next", visible: false}),
+        };
+        gl._previousPageArrow = this._pnDecoys.prev;
+        gl._nextPageArrow = this._pnDecoys.next;
 
         this._pnPositionArrows();
         this._pnArrowStateSignal = controls._stateAdjustment.connect(
@@ -668,9 +685,8 @@ export default class PineNoteOskExtension extends Extension {
 
         const mon = Main.layoutManager.primaryMonitor;
         const entry = controls._searchEntryBin ?? controls._searchEntry;
-        const gl = this._pnGridLayout;
-        const prev = gl?._previousPageArrow;
-        const next = gl?._nextPageArrow;
+        const prev = this._pnArrows?.prev;
+        const next = this._pnArrows?.next;
         if (!mon || !entry || !prev || !next)
             return;
 
@@ -682,21 +698,23 @@ export default class PineNoteOskExtension extends Extension {
         // 不自己推座標系：uiGroup 的孩子用的是 stage 座標，而 monitor.width
         // 是邏輯像素 —— 在 scale=2 下兩者差一倍。用 layer 自己的 allocation
         // 當畫布，那是唯一保證同一個座標系的東西。
-        const layerW = layer.width || mon.width;
         // 只管位置，尺寸交給 stylesheet。先前這裡 set_size(arrow.width || 48)
         // 等於拿一個猜來的數字蓋掉樣式算出的值 —— 讀到 0 就把 0 寫回去，
         // 於是那顆箭頭永遠是零寬。
-        const scale = St.ThemeContext.get_for_stage(global.stage).scale_factor || 1;
-        const arrowW = 56 * scale;
-        const place = (arrow, x) => {
-            arrow.set_position(Math.round(x), Math.round(centerY - arrowW / 2));
+        // 寬度問 actor 自己要（natural width），不要拿 css 的 56px 乘 scale_factor
+        // 去推 —— 那等於在兩個座標系之間猜換算，而它本人知道答案。
+        const place = (arrow, xFromRight) => {
+            const [, w] = arrow.get_preferred_width(-1);
+            const [, h] = arrow.get_preferred_height(-1);
+            const x = xFromRight === null ? margin : mon.width - margin - w;
+            arrow.set_position(Math.round(x), Math.round(centerY - h / 2));
         };
         // 先給畫布尺寸，再放東西 —— 反過來的話 place() 讀到的是舊的寬度
         layer.set_position(mon.x, mon.y);
         layer.set_size(mon.width, mon.height);
 
-        place(prev, margin);
-        place(next, mon.width - margin - arrowW);
+        place(prev, null);
+        place(next, true);
     }
 
     _pnUnfloatArrows() {
@@ -710,17 +728,25 @@ export default class PineNoteOskExtension extends Extension {
             this._pnArrowMonitorSignal = 0;
         }
         const gl = this._pnGridLayout;
+        if (gl && this._pnArrows) {
+            gl._previousPageArrow = this._pnArrows.prev;
+            gl._nextPageArrow = this._pnArrows.next;
+        }
+        this._pnDecoys?.prev?.destroy();
+        this._pnDecoys?.next?.destroy();
+        this._pnDecoys = null;
         if (this._pnArrowLayer) {
-            for (const arrow of [gl?._previousPageArrow, gl?._nextPageArrow]) {
+            for (const arrow of [this._pnArrows?.prev, this._pnArrows?.next]) {
                 if (!arrow)
                     continue;
                 arrow.get_parent()?.remove_child(arrow);
                 this._pnArrowHome?.add_child(arrow);
             }
-            Main.layoutManager.uiGroup.remove_child(this._pnArrowLayer);
+            Main.layoutManager.removeChrome(this._pnArrowLayer);
             this._pnArrowLayer.destroy();
             this._pnArrowLayer = null;
             this._pnArrowHome = null;
+            this._pnArrows = null;
         }
     }
 
@@ -1123,8 +1149,30 @@ export default class PineNoteOskExtension extends Extension {
             layerExists: !!this._pnArrowLayer,
             layerVisible: this._pnArrowLayer ? this._pnArrowLayer.visible : null,
             stateValue: controls ? controls._stateAdjustment.value : null,
-            prev: dump(gl ? gl._previousPageArrow : null),
-            next: dump(gl ? gl._nextPageArrow : null),
+            prev: dump(this._pnArrows?.prev ?? null),
+            next: dump(this._pnArrows?.next ?? null),
+            decoys: this._pnDecoys ? {
+                prev: dump(this._pnDecoys.prev),
+                next: dump(this._pnDecoys.next),
+            } : null,
+            // 兩顆走同一段程式碼卻不同結果 —— 把它們的實際差異印出來
+            diff: (() => {
+                const a = this._pnArrows?.prev ?? null;
+                const b = this._pnArrows?.next ?? null;
+                if (!a || !b) return null;
+                const probe = o => ({
+                    styleClass: o.style_class,
+                    xAlign: String(o.x_align), yAlign: String(o.y_align),
+                    xExpand: o.x_expand, yExpand: o.y_expand,
+                    minW: o.get_preferred_width(-1)[0],
+                    natW: o.get_preferred_width(-1)[1],
+                    minH: o.get_preferred_height(-1)[0],
+                    natH: o.get_preferred_height(-1)[1],
+                    fixedPos: o.fixed_position_set,
+                    clip: o.has_clip,
+                });
+                return {prev: probe(a), next: probe(b)};
+            })(),
         }, null, 2);
     }
 
