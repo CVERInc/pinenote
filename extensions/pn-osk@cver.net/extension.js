@@ -627,6 +627,78 @@ export default class PineNoteOskExtension extends Extension {
 
 // 標籤寬度：第一輪先給一個接近現況格子（119 − tile padding）的值，量完
     // 真正的 childSize 之後第二輪再由畫布反推。不用猜的那一版在下一個 commit。
+    // 圖示大小該是常數，不是餘數。兩個方向各算一次「每格容得下多大」，取小的那個 ——
+    // 這樣轉螢幕時圖示不動，動的是間距，跟 iPad 一樣。
+    _pnSyncIconSize() {
+        const lm = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
+        const grid = pnOverviewControls()?._appDisplay?._grid;
+        const mon = Main.layoutManager.primaryMonitor;
+        const pad = lm?.pagePadding;
+        if (!lm || !grid || !mon || !pad || !lm._pageHeight)
+            return;
+
+        // 格子 = 圖示 + 固定開銷（兩行標籤 + tile padding）。這個差值跟圖示大小無關，
+        // 所以現在量一次就能拿去推算任何圖示尺寸下的格子大小。
+        const overhead = lm._getChildrenMaxSize() - lm.iconSize;
+        if (overhead <= 0)
+            return;
+
+        // 面板 + 搜尋列 + grid 自己的邊界。用量的，不要用推的 —— 這一段今天已經
+        // 讓兩軸的縫差了 16px 一次。
+        const chromeV = mon.height - lm._pageHeight;
+
+        const modes = grid._gridModes ?? [];
+        const pickMode = (w, h) => {
+            const ratio = (w - pad.left - pad.right) / (h - pad.top - pad.bottom);
+            let best = null;
+            let closest = Infinity;
+            for (const m of modes) {
+                const r = m.columns / m.rows;
+                if (Math.abs(ratio - r) < Math.abs(ratio - closest)) {
+                    closest = r;
+                    best = m;
+                }
+            }
+            return best;
+        };
+
+        let fits = Infinity;
+        // 現在這個方向，以及轉過去的那個方向
+        for (const [w, h] of [[mon.width, mon.height], [mon.height, mon.width]]) {
+            const pageH = h - chromeV;
+            const mode = pickMode(w, pageH);
+            if (!mode || pageH <= 0)
+                continue;
+            const byHeight = (pageH - pad.top - pad.bottom -
+                lm.rowSpacing * (mode.rows - 1)) / mode.rows;
+            const byWidth = (w - pad.left - pad.right -
+                lm.columnSpacing * (mode.columns - 1)) / mode.columns;
+            fits = Math.min(fits, Math.floor(Math.min(byHeight, byWidth)));
+        }
+        if (!Number.isFinite(fits))
+            return;
+
+        // 上限留在 96：那是主題與圖示主題都預期的最大尺寸，再上去是另一個題目。
+        const size = Math.max(16, Math.min(96, fits - overhead));
+        if (lm.fixedIconSize === size || this._pnIconSizePending === size)
+            return;
+        // 這個方法是從配置途中叫到的（那是唯一 _pageHeight 已經有值的時機）。
+        // 在那裡改屬性再 layout_changed 等於在配置中途要求重新配置 —— 排到 idle
+        // 去做，讓這一幀先畫完。
+        this._pnIconSizePending = size;
+        GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+            this._pnIconSizePending = null;
+            const l = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
+            if (l && l.fixedIconSize !== size) {
+                l.fixedIconSize = size;
+                l._childrenMaxSize = -1;
+                l.layout_changed();
+                console.log(`[pn-osk] icon size pinned to ${size} (overhead ${overhead})`);
+            }
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
     // 格子是正方形，邊長由高度決定 —— 那是硬的。所以寬度不該是「螢幕有多寬」，
     // 而是「要多寬，水平間距才會等於垂直間距」。算得出來就不必靠 max-column-spacing
     // 去夾，也不會有夾完剩下的死留白。
@@ -634,6 +706,7 @@ export default class PineNoteOskExtension extends Extension {
         const lm = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
         if (!lm?._getChildrenMaxSize)
             return fullWidth;
+        this._pnSyncIconSize();
 
         // 每次都重新量：childSize 是快取的，而標籤的高度是在畫布算完之後才
         // 生效的 —— 用上一幀的邊長算出來的寬度，會讓兩軸的縫差一截（19.4 對 14）。
@@ -826,6 +899,8 @@ export default class PineNoteOskExtension extends Extension {
         if (controls._stateAdjustment.value <= 1.5)
             return;
 
+        this._pnSyncIconSize();
+
         const mon = Main.layoutManager.primaryMonitor;
         const entry = controls._searchEntryBin ?? controls._searchEntry;
         const {prev, next} = this._pnArrows;
@@ -865,6 +940,13 @@ export default class PineNoteOskExtension extends Extension {
         for (const [obj, id] of this._pnArrowVisSignals ?? [])
             obj.disconnect(id);
         this._pnArrowVisSignals = null;
+
+        const lm = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
+        if (lm && lm.fixedIconSize !== -1) {
+            lm.fixedIconSize = -1;
+            lm._childrenMaxSize = -1;
+            lm.layout_changed();
+        }
 
         const gl = this._pnGridLayout;
         if (gl && this._pnArrows) {
