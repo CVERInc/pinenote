@@ -64,8 +64,9 @@
  * solid black block and swallows the icons inside it. An outline says the same
  * thing ("these are grouped") without spending any ink. */
 .app-folder {
+    /* 框改由 JS 畫在 _iconBin 上 —— 'app-folder' 這個 class 在整個 tile 上，
+       在這裡畫框會連名字一起包進去。這裡只保留把原廠的底色拿掉。 */
     background-color: transparent;
-    border: 2px solid #000000;
 }
 
 /* The page arrows have no size of their own: the theme only styles them inside

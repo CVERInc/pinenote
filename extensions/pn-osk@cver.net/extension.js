@@ -812,6 +812,7 @@ export default class PineNoteOskExtension extends Extension {
         const ct = label.clutter_text;
         if (item._pnWrapSaved === undefined) {
             item._pnWrapSaved = {
+                yAlign: ct.y_align,
                 lineWrap: ct.line_wrap,
                 lineWrapMode: ct.line_wrap_mode,
                 ellipsize: ct.ellipsize,
@@ -827,11 +828,37 @@ export default class PineNoteOskExtension extends Extension {
         // 量到的是「不限寬」＝一行，第二行不會有人替它出高度，第三行直接掉出畫面。
         label.set_height(item._pnWrapSaved.oneLine * PN_LABEL_LINES);
         ct.set({
+            // BaseIcon 建構時設的是 CENTER —— 單行名字會浮在預留的兩行正中間，
+            // 跟圖示之間空一截。靠上才貼著圖示。
+            y_align: Clutter.ActorAlign.START,
             line_wrap: true,
             line_wrap_mode: Pango.WrapMode.WORD_CHAR,
             // 折了還是放不下（例如一個長到沒有空白可斷的字）才省略
             ellipsize: Pango.EllipsizeMode.END,
         });
+    }
+
+    // 資料夾外框。'app-folder' 這個 style class 掛在整個 tile 上，所以在 CSS 裡
+    // 畫框會連名字一起包住。真正該框的是那 2x2 預覽 —— 它是 createFolderIcon 生的
+    // 裸 St.Widget，沒有 class，CSS 選不到；但它的容器 _iconBin 只有它那麼大
+    // （x_align CENTER ⇒ 拿自然寬度），所以框畫在 bin 上就剛好。
+    _pnStyleFolderIcons() {
+        const appDisplay = pnOverviewControls()?._appDisplay;
+        for (const item of appDisplay?._orderedItems ?? []) {
+            if (!item.style_class?.includes("app-folder"))
+                continue;
+            const bin = item.icon?._iconBin;
+            if (!bin || bin._pnStyled)
+                continue;
+            bin._pnStyled = true;
+            // 🔴 不能用 border 或 padding：它們會長大，而 _getChildrenMaxSize 取
+            // 所有 tile 的最大值 ⇒ 一顆資料夾的裝飾會把整個 grid 的格子撐大
+            // （實測 128 -> 142，圖示 64 -> 48，垂直間距變成負的）。
+            // inset box-shadow 不參與配置，GNOME 自己的 focus ring 就是這樣畫的。
+            bin.set_style(
+                "border: 1px solid #cccccc;" +
+                "border-radius: 18px;");
+        }
     }
 
     // 資料夾裡的項目是 FolderView 自己的一組，不在 appDisplay._orderedItems 裡。
@@ -850,6 +877,7 @@ export default class PineNoteOskExtension extends Extension {
         const apply = () => {
             for (const item of appDisplay._orderedItems ?? [])
                 this._pnApplyWrap(item);
+            this._pnStyleFolderIcons();
             appDisplay._grid?.layout_manager?.layout_changed();
         };
         apply();
@@ -871,6 +899,7 @@ export default class PineNoteOskExtension extends Extension {
             label.set_width(saved.width);
             label.set_height(saved.height);
             label.clutter_text.set({
+                y_align: saved.yAlign,
                 line_wrap: saved.lineWrap,
                 line_wrap_mode: saved.lineWrapMode,
                 ellipsize: saved.ellipsize,
@@ -943,6 +972,19 @@ export default class PineNoteOskExtension extends Extension {
             "notify::value", () => this._pnPositionArrows());
         this._pnArrowMonitorSignal = Main.layoutManager.connect(
             "monitors-changed", () => this._pnPositionArrows());
+        // 狀態動畫跑完 ≠ 版面安定。箭頭的座標來自搜尋框和 grid 的實際位置，
+        // 所以要等它們真的配置好 —— allocation 每次安定都會發一次，轉向也是。
+        this._pnArrowAllocTarget = controls._appDisplay;
+        this._pnArrowAllocSignal = this._pnArrowAllocTarget?.connect(
+            "notify::allocation", () => {
+                if (this._pnArrowIdle)
+                    return;
+                this._pnArrowIdle = GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
+                    this._pnArrowIdle = 0;
+                    this._pnPositionArrows();
+                    return GLib.SOURCE_REMOVE;
+                });
+            });
     }
 
     // 資料夾對話框打開時，我們的浮動箭頭要退場。它是 addChrome 上去的、浮在整個
@@ -1024,12 +1066,37 @@ export default class PineNoteOskExtension extends Extension {
         // 等於拿一個猜來的數字蓋掉樣式算出的值 —— 讀到 0 就把 0 寫回去。
         // 寬度問 actor 自己要（natural width），不要拿 css 的 px 乘 scale_factor
         // 去推 —— 那等於在兩個座標系之間猜換算，而它本人知道答案。
+        // 箭頭對齊第一／最後一欄的欄心。畫布現在是算出來的、比螢幕窄，所以
+        // 「貼螢幕邊緣」跟「跟 app 同一條垂直線」已經不是同一件事了。欄心跟 grid
+        // 要（_calculateSpacing 回的 leftEmpty 和 hSpacing），不要自己推。
+        const columnCentres = (() => {
+            const grid = controls._appDisplay?._grid;
+            const lm = grid?.layout_manager;
+            if (!lm?._getChildrenMaxSize || !lm._calculateSpacing)
+                return null;
+            const cell = lm._getChildrenMaxSize();
+            const [leftEmpty, , hSpacing] = lm._calculateSpacing(cell);
+            const cols = lm.columnsPerPage;
+            if (!cell || !cols)
+                return null;
+            // 不用 get_transformed_position：它在 actor 還沒配置好時會回無效值，
+            // 而 NaN 會一路傳到 set_position，箭頭就從畫面上消失。畫布是我們自己
+            // 置中的、寬度 layout 也記著，左緣直接算得出來。
+            const gridX = mon.x + (mon.width - lm._pageWidth) / 2;
+            const first = gridX + leftEmpty + cell / 2;
+            const last = first + (cols - 1) * (cell + hSpacing);
+            return [first, last];
+        })();
+
         const place = (arrow, alignRight) => {
             const [, w] = arrow.get_preferred_width(-1);
             const [, h] = arrow.get_preferred_height(-1);
-            const x = alignRight ? mon.width - margin - w : margin;
-            arrow.set_position(
-                Math.round(mon.x + x), Math.round(centerY - h / 2));
+            const centre = columnCentres?.[alignRight ? 1 : 0];
+            // 任何一項算壞就退回貼邊。箭頭放錯位置還看得見，NaN 是直接消失。
+            const x = Number.isFinite(centre)
+                ? centre - w / 2
+                : mon.x + (alignRight ? mon.width - margin - w : margin);
+            arrow.set_position(Math.round(x), Math.round(centerY - h / 2));
         };
         place(prev, false);
         place(next, true);
@@ -1044,6 +1111,15 @@ export default class PineNoteOskExtension extends Extension {
         if (this._pnArrowMonitorSignal) {
             Main.layoutManager.disconnect(this._pnArrowMonitorSignal);
             this._pnArrowMonitorSignal = 0;
+        }
+        if (this._pnArrowAllocSignal && this._pnArrowAllocTarget) {
+            this._pnArrowAllocTarget.disconnect(this._pnArrowAllocSignal);
+            this._pnArrowAllocSignal = 0;
+            this._pnArrowAllocTarget = null;
+        }
+        if (this._pnArrowIdle) {
+            GLib.source_remove(this._pnArrowIdle);
+            this._pnArrowIdle = 0;
         }
         for (const [obj, id] of this._pnArrowVisSignals ?? [])
             obj.disconnect(id);
