@@ -191,3 +191,17 @@
     padding: 0;
     margin: 0;
 }
+
+/* 鄰居（quickSettings）。六顆要一致間距，而剩下那 10 個像素在它的左內距裡：
+   它左緣到 Wi-Fi 中心是 24.5 邏輯像素，一致所需的是 14.5。
+
+   🔴 只往下收，永遠不給負值。負的 margin 不會被 St 忽略也不會被夾住 ——
+   它會變成負的配置寬度，一路傳到 offscreen framebuffer 被當成無號整數
+   （−64 → 4294967232），然後 g_error 中止整個 gnome-shell。見 upstream/。 */
+#panel .pn-panel-neighbour {
+    -natural-hpadding: 2px;
+    -minimum-hpadding: 2px;
+    /* -natural-hpadding 是對稱的，收左邊就會連右邊一起收，於是整組被推向螢幕
+       邊緣（電量右緣從 17.5 掉到 9.5 邏輯像素）。用正的 margin 把邊界補回來。 */
+    margin-right: 8px;
+}

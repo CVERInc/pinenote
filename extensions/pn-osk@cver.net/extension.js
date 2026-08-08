@@ -1299,6 +1299,17 @@ export default class PineNoteOskExtension extends Extension {
         add("pn-tone", "PN Tone", `${this.path}/icons/pn-tone.svg`,
             () => this._pnToneToggle());
 
+        // 六顆一致，不是 3+3。我們三顆已經收到底（見 stylesheet），剩下那道縫
+        // 整個在鄰居身上：quickSettings 左緣到 Wi-Fi 中心是 24.5 邏輯像素，而
+        // 一致所需的是 14.5。它沒有自己的 class 可以選，所以掛一個。
+        //
+        // 🔴 只往下收，永遠不給負值。2026-08-08 試過在自己按鈕上放
+        // `margin-right: -10px`，St 不會忽略它也不會夾住它：負的配置寬度一路
+        // 傳到 offscreen framebuffer，被當成無號整數變成 4294967232（0xFFFFFFC0
+        // ＝ −64），g_error 中止整個 gnome-shell。見 upstream/。
+        this._pnNeighbour = Main.panel.statusArea?.["quickSettings"];
+        this._pnNeighbour?.add_style_class_name("pn-panel-neighbour");
+
         this._pnSyncRotateIcon();
         this._pnPanelMonitorSignal = Main.layoutManager.connect(
             "monitors-changed", () => this._pnSyncRotateIcon());
@@ -1321,6 +1332,8 @@ export default class PineNoteOskExtension extends Extension {
             GLib.Source.remove(id);
         this._pnToneTimers = null;
         this._pnToneSettings = null;
+        this._pnNeighbour?.remove_style_class_name("pn-panel-neighbour");
+        this._pnNeighbour = null;
         for (const [box, id] of this._pnPanelAddSignals ?? [])
             box.disconnect(id);
         this._pnPanelAddSignals = null;
