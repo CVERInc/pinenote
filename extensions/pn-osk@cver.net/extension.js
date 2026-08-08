@@ -186,6 +186,11 @@ const IFACE = `
     <method name="GridInfo">
       <arg type="s" direction="out" name="info"/>
     </method>
+    <method name="ShowKeyboard"/>
+    <method name="HideKeyboard"/>
+    <method name="Palette">
+      <arg type="s" direction="out" name="json"/>
+    </method>
     <method name="ArrowInfo">
       <arg type="s" name="json" direction="out"/>
     </method>
@@ -1715,6 +1720,122 @@ export default class PineNoteOskExtension extends Extension {
                 item._dialog._editButton.checked = true;
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    // 這片面板有 16 階（0,17,…,255），所以介面的灰只要落在少數幾根分得很開的
+    // 梯級上就不會被再量化，也不會在黑白模式下互相糊掉。敵人從來不是灰，是**彼此
+    // 靠太近的灰**。梯級取 0/85/170/255 —— 全是 17 的整數倍，正好是面板的第
+    // 0、5、10、15 階。
+    //
+    // 🔑 這支不寫任何 CSS，它**讀畫出來的結果**。對著選擇器寫規則的東西會安靜地
+    // 爛掉（PNEink 的 `#keyboard` 就是：規則還在、主題有載入、GNOME 48 上指不到
+    // 任何東西，鍵盤因此一直是原廠灰而沒有人發現）。走 actor 樹讀 theme node 不會
+    // 有這個問題 —— 名字改了它就是不再出現在清單上，而不是變成一條沉默的死規則。
+    // 調色要看玻璃，而看玻璃要鍵盤在畫面上。這台是從 SSH 開的，所以給它一條
+    // 不必動用手指的路 —— 跟 Capture／Tone／Rotate 同一個理由。
+    ShowKeyboard() {
+        const kb = Main.keyboard;
+        if (kb?.open)
+            kb.open(Main.layoutManager.bottomIndex ?? 0);
+        else
+            kb?._keyboard?.open?.();
+    }
+
+    HideKeyboard() {
+        const kb = Main.keyboard;
+        if (kb?.close)
+            kb.close();
+        else
+            kb?._keyboard?.close?.();
+    }
+
+    Palette() {
+        const RUNGS = [0, 85, 170, 255];
+        const out = {
+            ladder: RUNGS,
+            counts: {onLadder: 0, offRung: 0, chromatic: 0, translucent: 0},
+            offRung: {}, chromatic: {}, translucent: {}, shadows: {}, gradients: {},
+            actorsVisited: 0, widgetsRead: 0, errors: 0,
+        };
+
+        const bump = (bucket, key) => {
+            out[bucket][key] = (out[bucket][key] ?? 0) + 1;
+        };
+        const label = actor => {
+            const cls = actor.get_style_class_name?.() || "";
+            const name = actor.get_name?.() || "";
+            return `${actor.constructor?.$gtype?.name ?? "?"}${name ? "#" + name : ""}${cls ? "." + cls.split(/\s+/).join(".") : ""}`;
+        };
+        // Clutter.Color 的成員在不同版本間換過名字，兩種都認
+        const rgba = c => c && [c.red ?? c.r, c.green ?? c.g, c.blue ?? c.b, c.alpha ?? c.a];
+
+        const classify = (who, prop, c) => {
+            const v = rgba(c);
+            if (!v || v.some(x => x === undefined))
+                return;
+            const [r, g, b, a] = v;
+            const key = `${who} {${prop}} rgba(${r},${g},${b},${a})`;
+            if (a === 0)
+                return;                      // 完全透明＝沒畫，不算違規
+            if (a < 255) {
+                out.counts.translucent++; bump("translucent", key); return;
+            }
+            if (r !== g || g !== b) {
+                out.counts.chromatic++; bump("chromatic", key); return;
+            }
+            if (RUNGS.includes(r))
+                out.counts.onLadder++;
+            else {
+                out.counts.offRung++; bump("offRung", key);
+            }
+        };
+
+        const walk = actor => {
+            out.actorsVisited++;
+            if (actor.visible === false)
+                return;                      // 看不見的不算
+            if (actor instanceof St.Widget) {
+                try {
+                    const n = actor.get_theme_node();
+                    const who = label(actor);
+                    out.widgetsRead++;
+                    classify(who, "background", n.get_background_color());
+                    classify(who, "color", n.get_foreground_color());
+                    for (const [side, nm] of [[St.Side.TOP, "border-top"],
+                                              [St.Side.LEFT, "border-left"]]) {
+                        if (n.get_border_width(side) > 0)
+                            classify(who, nm, n.get_border_color(side));
+                    }
+                    if (n.get_box_shadow?.())
+                        bump("shadows", who);
+                    // 🩸 `get_background_gradient()` 在 GJS 裡永遠回傳一個陣列，
+                    // 拿它當真假值用會把每個 StBin 都報成漸層（第一版就是這樣，
+                    // 而 StBin 18 次那個數字就是指紋：容器不可能有漸層）。
+                    // 要讀的是 type，NONE 才代表沒有。
+                    const grad = n.get_background_gradient?.();
+                    const gtype = Array.isArray(grad) ? grad[0] : grad;
+                    if (gtype && gtype !== St.GradientType.NONE)
+                        bump("gradients", `${who} gradient=${gtype}`);
+                    if (n.get_background_image?.())
+                        bump("gradients", `${who} image`);
+                } catch (e) {
+                    out.errors++;
+                }
+            }
+            for (const child of actor.get_children?.() ?? [])
+                walk(child);
+        };
+
+        try {
+            walk(global.stage);
+        } catch (e) {
+            out.fatal = e.message;
+        }
+        // 只留最常出現的，不然清單沒人看得完
+        const top = obj => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, 25);
+        for (const k of ["offRung", "chromatic", "translucent", "shadows", "gradients"])
+            out[k] = top(out[k]);
+        return JSON.stringify(out, null, 1);
     }
 
     GridInfo() {

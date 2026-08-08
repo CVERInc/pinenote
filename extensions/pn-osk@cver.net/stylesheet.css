@@ -182,3 +182,44 @@
     background-color: transparent;
     border: none;
 }
+
+/* ── e-ink 的數值：鍵盤 ────────────────────────────────────────────────
+   這片面板有 16 階，而那 16 階**剛好就是三位簡寫的灰**：0x11 = 17，所以
+   #000…#fff 十六個全是 17 的倍數，一個不漏。⇒ 規則只有一句話：**灰一律寫
+   三位簡寫**，就永遠落在格子上、不會在編碼時被再量化一次。（四位數或六位
+   不重複的寫法就是違規，肉眼看得出來，不必查表。）
+
+   量出來的兩個反例，這一段就是為了修它們：
+   - 原廠 Adwaita 有層次但擠在一起：背景 0、一般鍵 114、特殊鍵 93、文字 253。
+     兩種鍵只差 21，在黑白模式下會抖成幾乎一樣的網點，等於白做一層。
+   - PNEink 把整片壓成一階：鍵面、鍵盤背景、後面的終端機全是 255（實測各只有
+     一個色階），所以按鍵不會「浮起來」，只剩黑框在切格子。
+
+   保留原廠的層次結構，把間距拉到最開。維護者的說法是 opacity：底 100%、
+   功能鍵 80%、字鍵 0%。
+   ⚠️ 但不能真的用 alpha —— 80% 黑疊在黑色鍵盤背景上還是黑色，功能鍵會直接
+   消失。要壓平成不透明值（疊在白底上的 80% 黑＝51＝#333）。 */
+#keyboard {
+    background-color: #aaa;
+}
+
+#keyboard .keyboard-key {
+    background-color: #fff;
+    color: #000;
+    border: none;
+    box-shadow: none;
+}
+
+/* 功能鍵退到後面。GNOME 給非字元鍵掛 .default-key。 */
+#keyboard .keyboard-key.default-key {
+    background-color: #333;
+    color: #fff;
+    border: 2px solid #333;
+}
+
+#keyboard .keyboard-key:active,
+#keyboard .keyboard-key:checked {
+    background-color: #000;
+    color: #fff;
+    border: 2px solid #000;
+}
