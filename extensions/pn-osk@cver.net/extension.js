@@ -50,7 +50,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 
-const BUILD = 23;
+const BUILD = 24;
 
 const DEFAULTS = {
     fillWidth: true,
@@ -184,6 +184,7 @@ const IFACE = `
     <method name="OpenFolder"/>
     <method name="RenameFolder"/>
     <method name="Rotate"/>
+    <method name="Tone"/>
     <method name="PanelInfo">
       <arg type="s" direction="out" name="info"/>
     </method>
@@ -380,6 +381,54 @@ function box(actor) {
         return {error: e.message};
     }
 }
+
+// ── 顯示色調 ────────────────────────────────────────────────────────────
+// 驅動有四種 bw_mode，PineNote Helper 把四種都攤在一張選單上，並在面板放一個
+// `BW+D:1` 的標籤。那是驅動的詞彙：D 是抖動、1 是波形編號。實際會用到的只有
+// 兩種讀法 —— 文字要銳利而且不閃，照片要有階調 —— 所以這裡只留兩個，換法跟
+// 旋轉一樣是一顆按鈕。
+//
+// 🔴 狀態的擁有者是 pnhelper 的 gsetting，不是驅動。pnhelper 在 enable 時會把
+// 記住的值套回去，所以只改驅動的話下次登入就被蓋掉（2026-08-06 那次「開機後
+// 波形被蓋回灰階」就是這個）。上游自己的選單也只寫這個 key，其餘交給它的
+// changed 處理器 —— 走同一條路，一次切換就只有一次全域刷新。萬一沒人在聽，
+// 下面的死線守衛會自己補上，而且會出聲。
+const PN_TONE_SCHEMA = 'org.gnome.shell.extensions.pnhelper';
+const PN_TONE_SCHEMA_DIR =
+    '/usr/share/gnome-shell/extensions/pnhelper@m-weigand.github.com/schemas';
+
+// bw_mode 0=灰階 1=BW+抖動 2=純 BW 3=DU4，各自配一個 partial 波形。我們只送
+// 前兩個，但讀的時候要認得四種：這個值不只我們在寫。
+const PN_TONE_GRAY = 0;
+const PN_TONE_MONO = 1;
+const PN_TONE_WAVEFORM = {[PN_TONE_GRAY]: 4 /* GC16 */, [PN_TONE_MONO]: 1 /* A2 */};
+
+// 量到的順序：SetBwMode → BwModeChanged → SetDefaultWaveform → WaveformChanged
+// 都在同一個主迴圈轉次裡走完，只有全域刷新排在 500ms 後。所以這不是取樣點，
+// 是死線 —— 過了還沒動，就是沒有人在聽。
+const PN_TONE_DEADLINE_MS = 400;
+const PN_TONE_REFRESH_MS = 500;
+
+// 頂列上藏起來的東西。理由寫在這裡而不是「見檔頭」—— 檔頭沒有這一段，那句
+// 指標從第一天就指著不存在的東西。
+const PN_HIDDEN_PANEL_ROLES = [
+    // 無障礙圖示。它亮著是因為 screen-keyboard-enabled 為真，而這台沒有實體鍵
+    // 盤：螢幕鍵盤是主要輸入裝置，不是輔助功能。設定留著，只是不再回報。
+    "a11y",
+    // `Q`／`N`：品質對效能模式。維護者不知道它做什麼，也從來沒按過；狀態在
+    // gsettings 裡，按鈕消失不影響它。
+    "PN Switch Performance Modes",
+    // 他們的全域刷新鈕。不是移除，是被 pn-refresh 取代。
+    "PN Trigger Global Refresh",
+    // `BW+D:1`。連同它的選單一起收起來，換到的是 pn-tone 那顆兩態按鈕。
+    //
+    // ⚠️ 誠實記一筆：這一顆不只裝了那兩個模式。門檻滑桿、DU4、反相、波形清單、
+    // 自動刷新、休眠清畫面、USB MTP —— 這些我們沒有取代，只是拿掉了它們的入口。
+    // 當初那條「沒取代就別藏，那是替別人決定他不再需要」的原則，在這裡是維護者
+    // 自己放行的（2026-08-08：「那個 BW+D1 我覺得可以拿掉了」）。全部仍可從
+    // gsettings 與系統匯流排到達，README 有清單。
+    "Pinenote Helper Indicator",
+];
 
 export default class PineNoteOskExtension extends Extension {
     enable() {
@@ -1083,6 +1132,107 @@ export default class PineNoteOskExtension extends Extension {
             });
     }
 
+    // ── 色調：兩個模式，一顆按鈕 ─────────────────────────────────────
+    _pnToneOpenSettings() {
+        // pnhelper 的 schema 沒有註冊到系統路徑，要指名它自己的 schemas 目錄。
+        // 找不到不是錯誤，是「pnhelper 不在」，下面的守衛會接手。
+        try {
+            const src = Gio.SettingsSchemaSource.new_from_directory(
+                PN_TONE_SCHEMA_DIR, Gio.SettingsSchemaSource.get_default(), true);
+            const schema = src.lookup(PN_TONE_SCHEMA, false);
+            if (schema)
+                return new Gio.Settings({settings_schema: schema});
+        } catch (e) {
+            console.log(`[pn-osk] tone: no pnhelper schema: ${e.message}`);
+        }
+        return null;
+    }
+
+    _pnToneRead(then) {
+        Gio.DBus.system.call(
+            "org.pinenote.ebc", "/ebc", "org.pinenote.ebc", "GetBwMode",
+            null, new GLib.VariantType("(y)"),
+            Gio.DBusCallFlags.NONE, -1, null,
+            (bus, res) => {
+                try {
+                    then(bus.call_finish(res).deepUnpack()[0]);
+                } catch (e) {
+                    console.log(`[pn-osk] tone: GetBwMode failed: ${e.message}`);
+                }
+            });
+    }
+
+    _pnToneLater(ms, fn) {
+        // 一次性計時器，但要收得回來：擴充停用之後才開火的 callback 會打進一個
+        // 已經拆掉的物件裡。
+        const id = GLib.timeout_add(GLib.PRIORITY_DEFAULT, ms, () => {
+            this._pnToneTimers?.delete(id);
+            fn();
+            return GLib.SOURCE_REMOVE;
+        });
+        this._pnToneTimers?.add(id);
+    }
+
+    _pnToneApplyDirect(mode) {
+        const call = (method, params, then) =>
+            Gio.DBus.system.call(
+                "org.pinenote.ebc", "/ebc", "org.pinenote.ebc", method,
+                params, null, Gio.DBusCallFlags.NONE, -1, null,
+                (bus, res) => {
+                    try {
+                        bus.call_finish(res);
+                        then?.();
+                    } catch (e) {
+                        console.log(`[pn-osk] tone: ${method} failed: ${e.message}`);
+                    }
+                });
+        // 順序不能反：先換模式再換波形，這樣驅動要做的 bw 轉換是在新模式底下做
+        // 的。這條是照抄上游 _change_bw_mode 的註解，沒有自己重新推導。
+        call("SetBwMode", new GLib.Variant("(y)", [mode]), () =>
+            call("SetDefaultWaveform",
+                new GLib.Variant("(y)", [PN_TONE_WAVEFORM[mode]]), () =>
+                    this._pnToneLater(PN_TONE_REFRESH_MS,
+                        () => this._pnTriggerRefresh())));
+    }
+
+    _pnToneSet(mode) {
+        this._pnToneSettings?.set_uint("bw-mode", mode);
+        // 守衛：pnhelper 可能沒裝、沒啟用，或哪天不再聽這個 key。到了死線還沒
+        // 動就自己做，並且說一聲 —— 按了什麼都沒發生是這裡最糟的失敗形狀，而
+        // 它跟「按了但我沒看出差別」在玻璃上長得一模一樣。
+        this._pnToneLater(PN_TONE_DEADLINE_MS, () => this._pnToneRead(now => {
+            if (now === mode)
+                return;
+            console.log(`[pn-osk] tone: bw-mode still ${now}, applying here`);
+            this._pnToneApplyDirect(mode);
+        }));
+    }
+
+    _pnToneToggle() {
+        this._pnToneRead(now =>
+            // 四種模式裡只有 0 是灰階，另外三種都是某種黑白。別人可能把它設成
+            // 2 或 3，這顆按鈕對那些狀態也要答得出話。
+            this._pnToneSet(now === PN_TONE_GRAY ? PN_TONE_MONO : PN_TONE_GRAY));
+    }
+
+    // 畫的是「按下去會變成什麼」，跟旋轉鈕同一個規矩，而且在這裡更站得住腳：
+    // 現在是哪一種，玻璃上看得比任何圖示都清楚，按鈕不必再講一次。
+    //
+    // 🔴 圖示裡不能有灰色。這台是兩色面板，半透明的灰會被量化成雜訊（app grid
+    // 那一輪就是為了這個把整組元件改成純黑白），而在黑白模式底下灰更是只剩抖
+    // 動網點 —— 圖示會在它自己描述的那個模式裡糊掉。所以兩顆都是純黑白的形狀：
+    // 斜坡（連續階調）跟兩塊色票（一共兩個顏色）。
+    _pnSyncToneIcon() {
+        const icon = Main.panel.statusArea?.["pn-tone"]?._pnIcon;
+        if (!icon)
+            return;
+        this._pnToneRead(now => {
+            const next = now === PN_TONE_GRAY ? "mono" : "gray";
+            icon.gicon = Gio.icon_new_for_string(
+                `${this.path}/icons/pn-tone-${next}-symbolic.svg`);
+        });
+    }
+
     // 圖示指的是「按下去會發生什麼」，不是「這顆叫什麼」。直向時按了會轉成橫向
     // ⇒ 畫順時針；橫向時反過來。一顆永遠長一樣的旋轉鈕只說得出「這裡可以轉」。
     _pnRotationLocked() {
@@ -1103,25 +1253,33 @@ export default class PineNoteOskExtension extends Extension {
             : "rotation-allowed-symbolic";
     }
 
+    // 藏 container 而不是 actor：那是 panel 實際排版的那一層。
+    _pnHidePanelItems() {
+        for (const role of PN_HIDDEN_PANEL_ROLES) {
+            const item = Main.panel.statusArea?.[role];
+            if (item?.container?.visible) {
+                item.container.hide();
+                this._pnPanelHidden?.push(item);
+            }
+        }
+    }
+
     _pnInstallPanel() {
         if (this._pnPanelButtons)
             return;
         this._pnPanelButtons = [];
         this._pnPanelHidden = [];
+        this._pnToneTimers = new Set();
 
-        // 藏起來的，每一顆都有各自的理由（見檔頭）。藏 container 而不是 actor：
-        // 那是 panel 實際排版的那一層。
-        for (const role of [
-            "a11y",
-            "PN Switch Performance Modes",
-            "PN Trigger Global Refresh",
-        ]) {
-            const item = Main.panel.statusArea?.[role];
-            if (item?.container?.visible) {
-                item.container.hide();
-                this._pnPanelHidden.push(item);
-            }
-        }
+        this._pnHidePanelItems();
+        // 🔴 藏一次不夠。pnhelper 停用再啟用 —— 套件升級就會做這件事，我自己
+        // 測守衛的時候也做了 —— 會把它的按鈕重新加回來，而且是**全新的物件**，
+        // 我們啟動時藏的那幾個已經不在了。症狀是頂列突然多出三顆，而擴充仍然
+        // ACTIVE、日誌一個字都沒有。所以面板長出新東西的時候要再看一次。
+        this._pnPanelAddSignals = [Main.panel._centerBox, Main.panel._rightBox]
+            .filter(Boolean)
+            .map(box => [box, box.connect("child-added",
+                () => this._pnHidePanelItems())]);
 
         const add = (key, name, icon, fn) => {
             const b = this._pnMakePanelButton(name, icon, fn);
@@ -1142,6 +1300,16 @@ export default class PineNoteOskExtension extends Extension {
         add("pn-refresh", "PN Refresh",
             `${this.path}/icons/pn-screen-refresh-symbolic.svg`,
             () => this._pnTriggerRefresh());
+        this._pnToneSettings = this._pnToneOpenSettings();
+        add("pn-tone", "PN Tone",
+            `${this.path}/icons/pn-tone-gray-symbolic.svg`,
+            () => this._pnToneToggle());
+
+        this._pnSyncToneIcon();
+        // 誰改的都跟 —— 上游的選單、gsettings、命令列，全都會經過驅動這個訊號。
+        this._pnToneDbusSignal = Gio.DBus.system.signal_subscribe(
+            "org.pinenote.ebc", "org.pinenote.ebc", "BwModeChanged", "/ebc",
+            null, Gio.DBusSignalFlags.NONE, () => this._pnSyncToneIcon());
 
         this._pnSyncRotateIcon();
         this._pnPanelMonitorSignal = Main.layoutManager.connect(
@@ -1161,11 +1329,29 @@ export default class PineNoteOskExtension extends Extension {
             this._pnLockSignal = 0;
         }
         this._pnTouchSettings = null;
+        if (this._pnToneDbusSignal) {
+            Gio.DBus.system.signal_unsubscribe(this._pnToneDbusSignal);
+            this._pnToneDbusSignal = 0;
+        }
+        for (const id of this._pnToneTimers ?? [])
+            GLib.Source.remove(id);
+        this._pnToneTimers = null;
+        this._pnToneSettings = null;
+        for (const [box, id] of this._pnPanelAddSignals ?? [])
+            box.disconnect(id);
+        this._pnPanelAddSignals = null;
         for (const key of this._pnPanelButtons ?? [])
             Main.panel.statusArea[key]?.destroy();
         this._pnPanelButtons = null;
-        for (const item of this._pnPanelHidden ?? [])
-            item.container?.show();
+        // 清單裡可能有好幾代：pnhelper 重新加過按鈕的話，先前那幾個已經被它
+        // destroy 掉了，碰到會丟例外，而那會讓後面的還原整串跳過。
+        for (const item of this._pnPanelHidden ?? []) {
+            try {
+                item.container?.show();
+            } catch (e) {
+                // 已經不在了，本來就不需要還原
+            }
+        }
         this._pnPanelHidden = null;
     }
 
@@ -1984,6 +2170,12 @@ export default class PineNoteOskExtension extends Extension {
 
     Rotate() {
         this._pnRotate();
+    }
+
+    // 跟 Rotate 同一個理由：這兩顆的效果都只出現在玻璃上，而這台是從 SSH 開的。
+    // 走這條跟真的按下去走的是同一個函式，不是另一條測試專用的路。
+    Tone() {
+        this._pnToneToggle();
     }
 
     GridInfo() {

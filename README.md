@@ -353,6 +353,59 @@ What works is `sudo systemctl restart gdm3`. `AutomaticLoginEnable` fires on
 GDM startup — not after a session ends — so this is also how you get back from
 the greeter if you already killed the shell. Open windows close either way.
 
+## The panel it taps
+
+Three things get pressed on this tablet more than anything else: clear the
+ghosting, turn the screen, change the tone. All three were already reachable and
+all three were buried — the refresh behind a Pinenote Helper button, the rotation
+about ten items down a status indicator's menu, the tone behind a panel label
+reading `BW+D:1`. They are one tap each now, and they call the interfaces
+themselves rather than borrowing the neighbour's buttons, which a package upgrade
+puts back where it found them.
+
+`BW+D:1` is the driver's vocabulary: bw_mode 1 is black-and-white with dithering,
+and the 1 after the colon is the A2 waveform paired with it. Behind the label sat
+four modes, a threshold slider, an invert toggle and a row of waveform numbers.
+Two of those are readings a person actually chooses between:
+
+| Mode | bw_mode | partial waveform | what it is for |
+|---|---|---|---|
+| Black and white | 1, dithered | A2 | text: crisp, and it never flashes |
+| Greyscale | 0 | GC16 | pictures: sixteen tones, and it flashes |
+
+One button, two states, the same shape as the rotation button beside it.
+
+**The state belongs to Pinenote Helper, not to the driver.** Its `bw-mode`
+gsetting is re-applied whenever that extension is enabled, so changing the driver
+alone works until the next login and then silently reverts — which is what
+happened here on 2026-08-06 and got written up as a race. Upstream's own menu
+items write that key and leave the work to its `changed` handler, so this button
+does the same: one write, one global refresh, and the mode survives a login. If
+nothing has moved 400ms later — Pinenote Helper missing, disabled, or no longer
+listening to that key — the button applies the change itself and says so in the
+journal. Both branches have been made to fire; the second one by disabling the
+extension and pressing the button.
+
+**The icon cannot use grey.** This is a two-colour panel. Translucent greys
+quantise to noise, and in black-and-white mode there are no greys at all, so an
+icon describing greyscale would dissolve inside the mode it names. Tone is drawn
+as shape instead: a solid wedge for a continuous ramp, two chips for a palette
+with exactly two colours. The first attempt drew four rising bars, which at 16px
+is the signal-strength icon, and the Wi-Fi indicator is three icons away.
+
+**Hiding a neighbour's button is not a one-time act.** Disabling and re-enabling
+Pinenote Helper — which a package upgrade does — adds its indicators back as new
+objects, and the ones hidden at startup no longer exist. The panel grows three
+buttons back while this extension stays ACTIVE and logs nothing. The panel boxes
+are watched for `child-added` and the list is applied again.
+
+What went with the label is still reachable, just not from the top bar: the
+toggles (auto-refresh, clear screen on suspend, dither invert) are gsettings keys
+under `org.gnome.shell.extensions.pnhelper`, the waveform picker is
+`SetDefaultWaveform` on `org.pinenote.ebc`, and the USB MTP gadget is
+`org.pinenote.usb`. Both interfaces are on the system bus. None of them is a
+daily decision.
+
 ## A rotation glitch we could not reproduce
 
 The panel is native landscape and GNOME rotates it to portrait. Turning the
@@ -382,10 +435,14 @@ they separate the client from the compositor:
 
 ## Upstream
 
-The A2 waveform is not exposed in PineNote Helper's menu, although the code for it exists —
-`_add_waveform_buttons()` sits commented out in `extension.js`, and so does the line that
-would make *BW+Dither* select A2. Re-enabling them is what makes this workflow reachable from
-the GUI instead of from `/sys`. Our contribution back to PNDeb is tracked here as it lands.
+[PR #25](https://github.com/PNDeb/pinenote-gnome-extension/pull/25) uncomments
+`_add_waveform_buttons()`, which is what puts A2 in Pinenote Helper's menu at all. It was
+opened against a version where that call and the line pairing *BW+Dither* with A2 were both
+commented out. The `1.8.dev` package installed here has both enabled already, so on this
+device the change has arrived by another route and the patch has nothing left to do.
+
+Nothing here patches Pinenote Helper. The waveform this workflow needs is chosen by the tone
+button above, through the same D-Bus interface the extension itself calls.
 
 ## License
 
