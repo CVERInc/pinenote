@@ -1750,9 +1750,15 @@ export default class PineNoteOskExtension extends Extension {
     }
 
     Palette() {
-        const RUNGS = [0, 85, 170, 255];
+        // 🩸 第一版把這裡寫死成 [0,85,170,255]（等距四階）。後來調色盤改成不等距
+        // 的 0/51/170/255，而檢查器沒跟著改，於是 #333 被報成違規 —— 梯級變了，
+        // 尺沒變，量到的就是別的東西。真正的規則不是「哪四個值」，是**落在面板的
+        // 16 階原生格子上**：0x11 = 17，所以格子剛好等於三位簡寫的灰 #000…#fff。
+        // 寫得成 #NNN 就合規，寫不成就不合規。
+        const STEP = 17;
+        const onGrid = v => v % STEP === 0;
         const out = {
-            ladder: RUNGS,
+            grid: `multiples of ${STEP} (#000-#fff shorthand greys)`,
             counts: {onLadder: 0, offRung: 0, chromatic: 0, translucent: 0},
             offRung: {}, chromatic: {}, translucent: {}, shadows: {}, gradients: {},
             actorsVisited: 0, widgetsRead: 0, errors: 0,
@@ -1783,7 +1789,7 @@ export default class PineNoteOskExtension extends Extension {
             if (r !== g || g !== b) {
                 out.counts.chromatic++; bump("chromatic", key); return;
             }
-            if (RUNGS.includes(r))
+            if (onGrid(r))
                 out.counts.onLadder++;
             else {
                 out.counts.offRung++; bump("offRung", key);

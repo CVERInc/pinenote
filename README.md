@@ -355,6 +355,40 @@ What works is `sudo systemctl restart gdm3`. `AutomaticLoginEnable` fires on
 GDM startup — not after a session ends — so this is also how you get back from
 the greeter if you already killed the shell. Open windows close either way.
 
+## The four values it draws with
+
+The panel has sixteen levels — 0 to 255 in steps of 17 — and `0x11` is 17, so
+those sixteen levels are exactly the sixteen three-digit shorthand greys, `#000`
+through `#fff`. The whole rule is: **write greys as `#NNN`**. Anything that
+cannot be written that way is off the grid and will be quantised again on its way
+to the panel, which is where mid-tones turn into noise.
+
+| | | for |
+|---|---|---|
+| ink | `#000` | text, emphatic borders, icons |
+| sunk | `#333` | components that recede, borders |
+| shadow | `#aaa` | container beds, panel beds, softening |
+| paper | `#fff` | white ground, foreground components |
+
+Alpha cannot express these. Black at 80% over a black background is still black,
+so a translucent value has to be flattened to an opaque one before it means
+anything.
+
+Two kinds of colour rule live here and conflating them is how the theme this
+replaced went stale:
+
+- **Physics** — moving an off-grid value onto the grid, removing alpha,
+  resolving a shadow. This should be computed at runtime by walking the actor
+  tree and reading what each widget actually resolved to, not written against
+  selector names that may not exist next release. The CSS here is a reference
+  implementation that proves the values are right; `Palette()` reports 918
+  resolved colours with nothing off the grid, no alpha and no chroma.
+- **Design** — deliberately arranging things differently from upstream. That
+  stays as CSS. The keyboard is the case: stock builds it from a black bed with
+  keys at 114 and special keys at 93, twenty-one apart, which dithers into one
+  texture. Ours is a `#aaa` bed, `#fff` keys, `#333` function keys — not the
+  stock values moved closer to the grid, a different arrangement.
+
 ## The panel it taps
 
 `extensions/pn-panel@cver.net`. It began inside the keyboard extension and was

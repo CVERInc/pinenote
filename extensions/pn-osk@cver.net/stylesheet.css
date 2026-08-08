@@ -1,3 +1,23 @@
+/* ── e-ink 的四個值 ───────────────────────────────────────────────────────
+   這片面板有 16 階（0…255，每階 17），而 0x11 = 17，所以那 16 階**剛好就是
+   三位簡寫的灰** #000…#fff，一個不漏。⇒ 規則一句話：**灰一律寫成三位簡寫**。
+   寫得成就在格子上，寫不成（#252525、rgba(...,0.8)）就是違規，肉眼可審。
+
+     墨 #000   文字、需強調的邊框、圖示
+     沉 #333   退到後面的元件、邊框
+     影 #aaa   容器底、面板底、虛化
+     紙 #fff   白底、前景元件；靠墨沉影去達成強調
+
+   ⚠️ 不能用 alpha 表達這些。80% 黑疊在黑上還是黑 —— 要壓平成不透明值。
+
+   🔴 這裡的顏色規則分兩種，混在一起就會重蹈 PNEink：
+     **物理**（把落在格子外的值搬回格子、消 alpha、處理陰影）＝ 該由量化器
+       在執行期讀 actor 樹算出來，不該對著選擇器寫。今天先用 CSS 當參考實作，
+       證明值是對的（Palette 稽核 918 個顏色全綠），之後逐條被演算法取代。
+     **設計**（我們刻意換一種排法，而不是把原廠的值搬近）＝ 永遠是 CSS。
+       鍵盤就是：原廠是灰鍵配黑底、兩種鍵只差 21，那不是搬得近就能救的。
+   ──────────────────────────────────────────────────────────────────── */
+
 /* The word-suggestions strip sits above the keys and is given ~98px of the
  * band whether or not anything ever appears in it. On a terminal it never
  * does: suggestions come from predictive input, and there is none here.
@@ -38,16 +58,17 @@
     padding-bottom: 4px;
 }
 
-/* --- app grid legibility in pure black-and-white --- */
-/* GNOME 48 draws app names in a light grey. In grayscale mode that reads as
- * grey; with bw_mode=1 the panel has only black and white, so a mid grey is
- * either dithered into noise or lost outright. Pure black is the only value
- * that survives the quantisation intact. */
+/* --- app grid legibility --- */
+/* GNOME 48 draws app names in a light grey that lands between the panel's
+ * levels, so it dithers into noise in black-and-white mode. Take it to the top
+ * of the grid instead: #fff on the dark ground survives both modes intact.
+ * （2026-08-08：這條原本寫的是 #000，因為當時底下是 PNEink 的白。主題拿掉之後
+ *   它就是黑字黑底 —— 顏色規則綁在別人的極性上，就是這樣壞的。） */
 .overview-tile,
 .overview-tile .overview-icon,
 .grid-search-result,
 .grid-search-result .overview-icon {
-    color: #000000;
+    color: #fff;
 }
 
 /* Widening the cell rather than shrinking the type: the grid is adaptive, so a
@@ -87,12 +108,12 @@
     height: 1.091em;
     icon-size: 1.091em;
     border-radius: 999px;
-    background-color: #000000;
-    color: #ffffff;
+    background-color: #333;
+    color: #fff;
 }
 
 .page-navigation-arrow > StIcon {
-    color: #ffffff;
+    color: #fff;
 }
 
 
@@ -133,7 +154,7 @@
        會被擠成 64，而那一下就是「先大再縮」。釘在 _pnSyncFolderIconSize。 */
     width: 620px;
     height: 620px;
-    background-color: #ffffff;
+    background-color: #333;
 }
 
 .app-folder-dialog .overview-tile,
@@ -142,30 +163,29 @@
 .app-folder-dialog .grid-search-result .overview-icon,
 .app-folder-dialog .folder-name-container .folder-name-label,
 .app-folder-dialog .folder-name-container .folder-name-entry {
-    color: #000000;
+    color: #fff;
 }
 
 .app-folder-dialog .page-navigation-arrow {
-    background-color: #000000;
-    color: #ffffff;
+    background-color: #000;
+    color: #fff;
 }
 
-/* 改名輸入框。原廠是深底淺字，換到白色對話框裡就是一塊突兀的深色磚。
-   選取色也要一起換 —— 預設的藍在兩色面板上會變成一片看不出邊界的灰。 */
+/* 改名輸入框＝凹陷的欄位，所以比容器（#333）更深一階到 #000，邊框用 #aaa 把它
+   框出來。選取色不能用純白或純黑：兩者都會讓「選取」和「有字」變成同一塊。 */
 .app-folder-dialog .folder-name-container .folder-name-entry {
-    background-color: #ffffff;
-    color: #000000;
-    border: 2px solid #000000;
-    caret-color: #000000;
-    /* 選取用淺灰不用黑：黑底白字在這裡沒有畫出來，整塊變成看不見內容的黑磚。 */
-    selection-background-color: #cccccc;
-    selected-color: #000000;
+    background-color: #000;
+    color: #fff;
+    border: 2px solid #aaa;
+    caret-color: #fff;
+    selection-background-color: #aaa;
+    selected-color: #000;
 }
 
 .app-folder-dialog .folder-name-container .folder-name-entry:focus {
-    background-color: #ffffff;
-    color: #000000;
-    border: 2px solid #000000;
+    background-color: #000;
+    color: #fff;
+    border: 2px solid #fff;
     box-shadow: none;
 }
 
@@ -222,4 +242,39 @@
     background-color: #000;
     color: #fff;
     border: 2px solid #000;
+}
+
+
+/* ── e-ink 的數值：Palette() 點名的那幾個 ──────────────────────────────
+   都是原廠落在格子外的值。換成最近的階，看起來幾乎一樣，但不會被再量化，
+   在黑白模式下也不會跟鄰居糊在一起。 */
+
+/* 圖示磚與 dash 底 #252525(37) → #333(51)；搜尋框底 #232323(35) → #333 */
+.overview-icon,
+.dash-background,
+.search-entry {
+    background-color: #333;
+}
+
+/* 捲軸把手 #5e5e5e(94) → #aaa(170)：它要在自己的凹槽上看得見 */
+#hhandle,
+#vhandle {
+    background-color: #aaa;
+}
+
+/* 提示字與搜尋圖示原本是白色 70% 不透明（疊在黑上＝179）。#aaa 是 170，
+   差 9 —— 換掉幾乎看不出來，但 alpha 消失了，而 alpha 一定落在階與階之間。 */
+.search-entry,
+.search-entry .hint-text,
+.search-entry StIcon.search-entry-icon,
+StLabel.hint-text {
+    color: #aaa;
+}
+
+/* 陰影在抖動下是雜訊，而且它本質上是連續漸層，沒有任何一階放得下它。
+   五處全拿掉：我們自己那三顆面板鈕、Activities、快速設定、搜尋框、dash。 */
+#panel .panel-button,
+.search-entry,
+.dash-background {
+    box-shadow: none;
 }
