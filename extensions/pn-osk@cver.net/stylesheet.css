@@ -168,3 +168,17 @@
     border: 2px solid #000000;
     box-shadow: none;
 }
+
+/* 總覽裡那塊工作區預覽的四個角。PNEink 主題（`pneink` 套件，不是我們的）寫著
+   `.workspace-background { background-color:#000000; border-radius:5px; border:2px }`，
+   而 GNOME 是用**大得多的半徑**去裁那張桌布的。兩個半徑對不上，中間那圈黑就
+   露出來 —— 量到的：離角落遠的地方黑邊 4 個裝置像素（＝主題的 2px 邊框，正確），
+   靠近角落膨脹到 33，往下 40 像素才收斂回去。四個角各一塊黑楔形。
+
+   不去猜 GNOME 那個半徑是多少：底色拿掉，就沒有東西可以露出來了。桌布本身仍
+   然被裁成圓角，那是 shell 畫的，一直都對。
+   （主題是別人的套件，改在那邊會被升級蓋掉，所以覆寫寫在我們自己這份。） */
+.workspace-background {
+    background-color: transparent;
+    border: none;
+}
