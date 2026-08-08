@@ -40,6 +40,8 @@ import Pango from 'gi://Pango';
 // 名字最多兩行。三行的名字（ImageMagick (color depth=q16)）在這台上是異數，
 // 讓它省略，不要讓它去撐高每一格。
 const PN_LABEL_LINES = 2;
+import Cogl from 'gi://Cogl';
+import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Shell from 'gi://Shell';
@@ -185,6 +187,17 @@ const IFACE = `
     <method name="RenameFolder"/>
     <method name="GridInfo">
       <arg type="s" direction="out" name="info"/>
+    </method>
+    <method name="Posterise">
+      <arg type="u" direction="in" name="levels"/>
+      <arg type="b" direction="in" name="invert"/>
+      <arg type="s" direction="out" name="json"/>
+    </method>
+    <method name="Quantise">
+      <arg type="s" direction="out" name="json"/>
+    </method>
+    <method name="Unquantise">
+      <arg type="s" direction="out" name="json"/>
     </method>
     <method name="ShowKeyboard"/>
     <method name="HideKeyboard"/>
@@ -1733,6 +1746,268 @@ export default class PineNoteOskExtension extends Extension {
     // 有這個問題 —— 名字改了它就是不再出現在清單上，而不是變成一條沉默的死規則。
     // 調色要看玻璃，而看玻璃要鍵盤在畫面上。這台是從 SSH 開的，所以給它一條
     // 不必動用手指的路 —— 跟 Capture／Tone／Rotate 同一個理由。
+    // ── 量化器 ───────────────────────────────────────────────────────────
+    // Palette() 只回報；這支動手。一個選擇器都不出現 —— 它讀的是每個元件**算出來
+    // 的**顏色，所以名字改了它就是量到別的東西，而不是變成一條沉默的死規則。
+    //
+    // 決定每個值的方式：
+    //   彩色     取亮度轉灰再吸附。顏色在這片玻璃上本來就會變成某個灰，吸附只是
+    //            讓那個灰可預測。
+    //   半透明   用父層算出來的背景壓平再吸附 —— 這是要走「樹」而不是走清單的
+    //            原因：alpha 的意義取決於它底下是什麼。
+    //   全透明   不碰。alpha 0 是「不畫」，不是一個顏色。
+    //   陰影     移除。它是連續漸層，十六格裡沒有一格放得下它。
+    //
+    // 🔴 這是「物理」不是「設計」：它只把值搬到最近的格子，不換排法。想換排法
+    // （例如鍵盤的白鍵配灰床）就得寫 CSS，那不是搬得近能變出來的。
+    _pnQuantise(apply) {
+        const STEP = 17;
+        const snap = v => Math.max(0, Math.min(255, Math.round(v / STEP) * STEP));
+        const lum = (r, g, b) => 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        const rgba = c => {
+            if (!c) return null;
+            const v = [c.red ?? c.r, c.green ?? c.g, c.blue ?? c.b, c.alpha ?? c.a];
+            return v.some(x => x === undefined) ? null : v;
+        };
+        // 把一個顏色壓平到不透明的格子值。under = 它底下那一層已經算好的灰。
+        const flatten = (c, under) => {
+            const v = rgba(c);
+            if (!v || v[3] === 0)
+                return null;                  // 不畫就別畫
+            const [r, g, b, a] = v;
+            const grey = lum(r, g, b);
+            const mixed = a === 255 ? grey : (a / 255) * grey + (1 - a / 255) * under;
+            return snap(mixed);
+        };
+        const out = {applied: 0, cleared: 0, visited: 0, errors: 0, changes: {}};
+
+        const walk = (actor, under) => {
+            out.visited++;
+            if (actor.visible === false)
+                return;
+            let myBg = under;
+            if (actor instanceof St.Widget) {
+                try {
+                    if (!apply) {
+                        if (actor._pnQuantised) {
+                            actor.set_style(actor._pnStyleBefore ?? null);
+                            actor._pnQuantised = false;
+                            out.cleared++;
+                        }
+                    } else {
+                        const n = actor.get_theme_node();
+                        const bits = [];
+                        const bg = flatten(n.get_background_color(), under);
+                        if (bg !== null) {
+                            myBg = bg;
+                            const orig = rgba(n.get_background_color());
+                            if (orig[0] !== bg || orig[1] !== bg || orig[2] !== bg || orig[3] !== 255)
+                                bits.push(`background-color: rgb(${bg},${bg},${bg})`);
+                        }
+                        const fg = flatten(n.get_foreground_color(), myBg);
+                        if (fg !== null) {
+                            const orig = rgba(n.get_foreground_color());
+                            if (orig[0] !== fg || orig[1] !== fg || orig[2] !== fg || orig[3] !== 255)
+                                bits.push(`color: rgb(${fg},${fg},${fg})`);
+                        }
+                        for (const side of [St.Side.TOP, St.Side.RIGHT,
+                                            St.Side.BOTTOM, St.Side.LEFT]) {
+                            if (n.get_border_width(side) <= 0)
+                                continue;
+                            const bc = flatten(n.get_border_color(side), myBg);
+                            const orig = rgba(n.get_border_color(side));
+                            if (bc !== null && (orig[0] !== bc || orig[3] !== 255)) {
+                                bits.push(`border-color: rgb(${bc},${bc},${bc})`);
+                                break;        // St 的 border-color 是四邊一起設
+                            }
+                        }
+                        if (n.get_box_shadow?.())
+                            bits.push("box-shadow: none");
+                        if (bits.length) {
+                            if (!actor._pnQuantised) {
+                                actor._pnStyleBefore = actor.get_style();
+                                actor._pnQuantised = true;
+                            }
+                            actor.set_style(`${actor._pnStyleBefore ?? ""}; ${bits.join("; ")};`);
+                            out.applied++;
+                            for (const b of bits) {
+                                const k = b.split(":")[0].trim();
+                                out.changes[k] = (out.changes[k] ?? 0) + 1;
+                            }
+                        }
+                    }
+                } catch (e) {
+                    out.errors++;
+                }
+            }
+            for (const child of actor.get_children?.() ?? [])
+                walk(child, myBg);
+        };
+
+        try {
+            walk(global.stage, 0);
+        } catch (e) {
+            out.fatal = e.message;
+        }
+        return JSON.stringify(out, null, 1);
+    }
+
+    // ── 量化 shader ──────────────────────────────────────────────────────
+    // 逐元件那條路（下面的 _pnQuantise）讀的是語意屬性，所以碰得到背景色卻碰不到
+    // 圖示；這條路相反 —— 它是後製濾鏡，看到的只有像素，所以什麼都涵蓋（包括新
+    // 開的選單、hover 狀態），代價是它也分不出圖示。
+    //
+    // 「只動介面不動內容」＝ 只掛在 chrome 的 actor 上，不掛 global.window_group。
+    // 那正是 Apple 智慧型反轉的語意。（今天測 a11y 反相時看到的貓變負片，就是因為
+    // 那是全螢幕的，沒有這條分界。）
+    // 掛在哪，就是「物理」與「內容」的分界線 —— effect 作用在整棵子樹上，沒辦法
+    // 排除某個子孫，所以唯一的槓桿是**掛低一點**。
+    //
+    // 🐈 工作區預覽裡是桌布和視窗縮圖，那是內容不是介面（反相過的貓就是證據）。
+    // 它剛好是總覽 controls 底下的獨立分支，所以列舉兄弟、跳過它就好。
+    // 用物件比對而不是名字比對：名字會改，而改了之後名字比對會安靜地失效。
+    // 掛在哪，就是「物理」與「內容」的分界線 —— effect 作用在整棵子樹上，沒辦法
+    // 排除某個子孫。
+    //
+    // 🩸 試過「掛低一點」：不掛整個總覽、只掛 controls 的孩子、跳過工作區那一支。
+    // 結果更糟 —— 總覽的深色底**不是** controls 的孩子，於是底沒反相、內容反相了，
+    // app 名字又一次變成黑字黑底。⇒ **反相只有在底和內容一起反的時候才成立。**
+    //
+    // 🐈 正解用的是「反相是自身反元素」：整個總覽照常掛，然後在工作區那一支掛一個
+    // **只反相、不量化**的子效果，父層再反一次就抵銷。貓因此不是負片。
+    // ⚠️ 但它仍然會被量化 —— 量化不可逆，子效果救不回來。完全排除在這個架構下
+    // 做不到，這是 shader 便宜的代價。
+    _pnPosteriseActors() {
+        const list = [];
+        if (Main.panel)
+            list.push(["panel", Main.panel]);
+        if (Main.layoutManager?.modalDialogGroup)
+            list.push(["modals", Main.layoutManager.modalDialogGroup]);
+        if (Main.layoutManager?.overviewGroup)
+            list.push(["overview", Main.layoutManager.overviewGroup]);
+        return list;
+    }
+
+    // 內容分支：掛反向效果去抵銷父層的反相。用物件比對拿到它，不比對名字。
+    _pnContentActors() {
+        const controls = Main.overview?._overview?.controls;
+        const wd = controls?._workspacesDisplay;
+        return wd ? [["workspaces", wd]] : [];
+    }
+
+    // 拆的時候走全樹，不依賴上面那份清單 —— 清單會隨 GNOME 版本和狀態變動，
+    // 而依清單拆會留下拆不掉的孤兒。
+    _pnPosteriseClearAll(name) {
+        let n = 0;
+        const walk = a => {
+            if (a.get_effect?.(name)) {
+                a.remove_effect_by_name(name);
+                n++;
+            }
+            for (const c of a.get_children?.() ?? [])
+                walk(c);
+        };
+        try {
+            walk(global.stage);
+        } catch (e) {
+            // 走到一半失敗也要把已經拆掉的算進去
+        }
+        return n;
+    }
+
+    Posterise(levels, invert) {
+        const NAME = "pn-posterise";
+        const out = {levels, invert, attached: [], removed: [], errors: []};
+        this._pnPosteriseClasses ??= new Map();
+        const key = `${levels}${invert ? "i" : ""}`;
+
+        if (levels > 1 && !this._pnPosteriseClasses.has(key)) {
+            // 🔴 levels=4 走的不是均分。均分的四階是 0/85/170/255，而正典那四個值
+            // 是 0/51/170/255 —— 維護者特別要求「不要線性」，沉在 #333 不在 #555。
+            // 均分會把 #333 推成 #555，於是 CSS 裡寫的值和玻璃上出現的值對不起來。
+            // 這裡直接吸附到指定的那四個，門檻取相鄰兩值的中點。
+            // 🔴 順序有意義：**先反相亮度再吸附**。反過來（先吸附再反相）會把
+            // 51 變成 204、170 變成 85 —— 那是正典四值的鏡像，不是正典四值。
+            // 不等距的調色盤在反相下不封閉，這是它跟均分階最大的差別。
+            const PALETTE = `
+                float q = l < 0.1     ? 0.0
+                        : l < 0.4333  ? 0.2
+                        : l < 0.8333  ? 0.6667
+                        : 1.0;`;
+            const div = (levels - 1).toFixed(1);
+            const EVEN = `float q = floor(l * ${div} + 0.5) / ${div};`;
+            // cogl_color_out 是 premultiplied，要先解開再算亮度，最後乘回去。
+            const CODE = `
+                float a = cogl_color_out.a;
+                vec3 rgb = a > 0.0 ? cogl_color_out.rgb / a : cogl_color_out.rgb;
+                float l = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+                ${invert ? "l = 1.0 - l;" : ""}
+                ${levels === 4 ? PALETTE : EVEN}
+                cogl_color_out = vec4(vec3(q) * a, a);
+            `;
+            try {
+                this._pnPosteriseClasses.set(key, GObject.registerClass(
+                    {GTypeName: `PnPosterise${levels}${invert ? "Inv" : ""}`},
+                    class extends Shell.GLSLEffect {
+                        vfunc_build_pipeline() {
+                            this.add_glsl_snippet(
+                                Cogl.SnippetHook.FRAGMENT, "", CODE, false);
+                        }
+                    }));
+            } catch (e) {
+                out.errors.push(`registerClass(${levels}): ${e.message}`);
+            }
+        }
+
+        out.removed = this._pnPosteriseClearAll(NAME);
+        for (const [label, actor] of this._pnPosteriseActors()) {
+            try {
+                if (levels <= 1)
+                    continue;
+                const cls = this._pnPosteriseClasses.get(key);
+                if (!cls) {
+                    out.errors.push(`${label}: no class`);
+                    continue;
+                }
+                actor.add_effect_with_name(NAME, new cls());
+                out.attached.push(label);
+            } catch (e) {
+                out.errors.push(`${label}: ${e.message}`);
+            }
+        }
+        // 內容分支：只在有反相時才需要抵銷（沒反相就沒有東西要抵銷）
+        if (levels > 1 && invert) {
+            this._pnInvertClass ??= GObject.registerClass(
+                {GTypeName: "PnInvertOnly"},
+                class extends Shell.GLSLEffect {
+                    vfunc_build_pipeline() {
+                        this.add_glsl_snippet(Cogl.SnippetHook.FRAGMENT, "", `
+                            float a = cogl_color_out.a;
+                            vec3 rgb = a > 0.0 ? cogl_color_out.rgb / a : cogl_color_out.rgb;
+                            cogl_color_out = vec4((1.0 - rgb) * a, a);
+                        `, false);
+                    }
+                });
+            for (const [label, actor] of this._pnContentActors()) {
+                try {
+                    actor.add_effect_with_name(NAME, new this._pnInvertClass());
+                    out.attached.push(`counter:${label}`);
+                } catch (e) {
+                    out.errors.push(`counter:${label}: ${e.message}`);
+                }
+            }
+        }
+        return JSON.stringify(out);
+    }
+
+    Quantise() {
+        return this._pnQuantise(true);
+    }
+
+    Unquantise() {
+        return this._pnQuantise(false);
+    }
+
     ShowKeyboard() {
         const kb = Main.keyboard;
         if (kb?.open)
