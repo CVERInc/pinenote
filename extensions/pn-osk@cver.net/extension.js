@@ -1922,18 +1922,30 @@ export default class PineNoteOskExtension extends Extension {
         const key = `${levels}${invert ? "i" : ""}`;
 
         if (levels > 1 && !this._pnPosteriseClasses.has(key)) {
-            // 🔴 levels=4 走的不是均分。均分的四階是 0/85/170/255，而正典那四個值
-            // 是 0/51/170/255 —— 維護者特別要求「不要線性」，沉在 #333 不在 #555。
-            // 均分會把 #333 推成 #555，於是 CSS 裡寫的值和玻璃上出現的值對不起來。
-            // 這裡直接吸附到指定的那四個，門檻取相鄰兩值的中點。
-            // 🔴 順序有意義：**先反相亮度再吸附**。反過來（先吸附再反相）會把
-            // 51 變成 204、170 變成 85 —— 那是正典四值的鏡像，不是正典四值。
-            // 不等距的調色盤在反相下不封閉，這是它跟均分階最大的差別。
-            const PALETTE = `
-                float q = l < 0.1     ? 0.0
-                        : l < 0.4333  ? 0.2
-                        : l < 0.8333  ? 0.6667
-                        : 1.0;`;
+            // 🔴 這些不是均分。均分的四階是 0/85/170/255，而正典是 0/51/170/255 ——
+            // 維護者特別要求「不要線性」，沉在 #333 不在 #555。均分會把 #333 悄悄
+            // 推成 #555，於是 CSS 裡寫的值和玻璃上出現的值對不起來。
+            //
+            // 加階有兩種，風險不同：
+            //   填空隙（#777，第 7 階）—— 最大的洞在 #333→#aaa 之間（7 階），
+            //     補進去之後間距變 3/4/3/5，兩個模式下都安全。
+            //   加鄰居（#ddd，第 13 階）—— 貼著紙，給「弱強調」（淡邊框、細分隔）
+            //     用。⚠️ 在黑白模式下 #fff 是實白、#ddd 是 13% 黑點，1px 的線會
+            //     變成斷續的點。好不好看只有玻璃判得了。
+            const PALETTES = {
+                4: [0, 51, 170, 255],
+                5: [0, 51, 119, 170, 255],
+                6: [0, 51, 119, 170, 221, 255],
+            };
+            const buildSnap = vals => {
+                let code = "";
+                for (let i = 0; i < vals.length - 1; i++) {
+                    const mid = ((vals[i] + vals[i + 1]) / 2 / 255).toFixed(4);
+                    code += `l < ${mid} ? ${(vals[i] / 255).toFixed(4)} : `;
+                }
+                return `float q = ${code}${(vals.at(-1) / 255).toFixed(4)};`;
+            };
+            const PALETTE = PALETTES[levels] ? buildSnap(PALETTES[levels]) : null;
             const div = (levels - 1).toFixed(1);
             const EVEN = `float q = floor(l * ${div} + 0.5) / ${div};`;
             // cogl_color_out 是 premultiplied，要先解開再算亮度，最後乘回去。
@@ -1942,7 +1954,7 @@ export default class PineNoteOskExtension extends Extension {
                 vec3 rgb = a > 0.0 ? cogl_color_out.rgb / a : cogl_color_out.rgb;
                 float l = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
                 ${invert ? "l = 1.0 - l;" : ""}
-                ${levels === 4 ? PALETTE : EVEN}
+                ${PALETTE ?? EVEN}
                 cogl_color_out = vec4(vec3(q) * a, a);
             `;
             try {
