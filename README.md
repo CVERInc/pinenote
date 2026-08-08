@@ -51,6 +51,8 @@ It is idempotent, and it installs:
 - **The keyboard** — `extensions/pn-osk@cver.net` installed and enabled, with
   `pn-osk.example.json` dropped in as `~/.config/pn-osk.json` if you do not have
   one yet. An existing config is never overwritten.
+- **The panel** — `extensions/pn-panel@cver.net` installed and enabled. Separate
+  from the keyboard on purpose; see *The panel it taps*.
 - **Terminal legibility** — pure black on pure white, no cursor blink, a large monospace face.
 - **A guard on `pinenote-dbus-service`** — without it the whole clearing half can die silently;
   see *When the ghosting stops clearing* below.
@@ -354,6 +356,13 @@ GDM startup — not after a session ends — so this is also how you get back fr
 the greeter if you already killed the shell. Open windows close either way.
 
 ## The panel it taps
+
+`extensions/pn-panel@cver.net`. It began inside the keyboard extension and was
+carved out once it worked, because those two share no state: none of the panel
+code reads the keyboard's config, and its install had been sitting inside an
+`if` that tested whether the app grid had been found — an accident of where the
+code was written rather than a dependency. Someone who wants a tone button
+should not have to accept a rebuilt keyboard with it.
 
 Three things get pressed on this tablet more than anything else: clear the
 ghosting, turn the screen, change the tone. All three were already reachable and

@@ -1,11 +1,11 @@
 {
   "uuid": "pn-osk@cver.net",
   "name": "PineNote Shell",
-  "description": "Makes GNOME behave on a 10.3\" e-ink tablet that spends nearly all its time in a two-colour mode. Keyboard: the stock on-screen keyboard reserves a full-width band but draws its keys inside a fixed aspect ratio, so in landscape a third of that band is blank while the labels are too narrow to spell Tab or Ctrl; this fills the width you were already paying for and adds a digit row with Esc, which the stock layout has no key for at all. Launcher: the app grid gives its whole page to the icons, app names wrap to two lines instead of ellipsizing after seven characters, the icon size is pinned so it does not change when the tablet is rotated, and the canvas width is computed so the gaps come out equal on both axes. Colour: panel elements that ship as translucent greys quantise to noise in that mode, so the app grid, the folder dialog and the page arrows are black and white. Panel: the three things this tablet presses most often — clear the ghosting, rotate, and switch between black-and-white and greyscale — are one tap each in the top bar, in place of a label reading BW+D:1 and a menu of four driver modes; the tone button carries a real grey ramp and lets the panel dither it, so the icon shows the mode it is in rather than being drawn twice. Everything is measured on the device rather than assumed; the reasoning is in the README.",
+  "description": "Makes GNOME behave on a 10.3\" e-ink tablet that spends nearly all its time in a two-colour mode. Keyboard: the stock on-screen keyboard reserves a full-width band but draws its keys inside a fixed aspect ratio, so in landscape a third of that band is blank while the labels are too narrow to spell Tab or Ctrl; this fills the width you were already paying for and adds a digit row with Esc, which the stock layout has no key for at all. Launcher: the app grid gives its whole page to the icons, app names wrap to two lines instead of ellipsizing after seven characters, the icon size is pinned so it does not change when the tablet is rotated, and the canvas width is computed so the gaps come out equal on both axes. Colour: panel elements that ship as translucent greys quantise to noise in that mode, so the app grid, the folder dialog and the page arrows are black and white. The three e-ink controls that used to live here are now their own extension, pn-panel@cver.net. Everything is measured on the device rather than assumed; the reasoning is in the README.",
   "shell-version": [
     "47",
     "48"
   ],
-  "version": 3,
+  "version": 4,
   "settings-schema": null
 }

@@ -1,0 +1,11 @@
+{
+  "uuid": "pn-panel@cver.net",
+  "name": "PineNote Panel",
+  "description": "Three e-ink controls as single taps in the top bar of a PineNote, instead of buried in menus. Refresh clears the ghosting A2 leaves behind. Rotate flips between the panel's two orientations and draws what pressing it will do rather than what it is called. Tone switches between black-and-white with dithering, which is crisp and never flashes, and sixteen-level greyscale, which flashes but has tones — one button, and its icon carries a real grey ramp, so the panel's own conversion turns it into halftone dots when you are in the mode that does that to grey. The mode is stored where Pinenote Helper keeps it, because that is what survives a login, and applied directly if nothing else does. Pinenote Helper's own panel items are hidden, including the BW+D:1 label this replaces; everything behind them is still reachable from gsettings and the system bus. Measured on the device rather than assumed; the reasoning is in the README.",
+  "shell-version": [
+    "47",
+    "48"
+  ],
+  "version": 1,
+  "settings-schema": null
+}

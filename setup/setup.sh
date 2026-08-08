@@ -276,20 +276,40 @@ fi
 # 新裝的擴充目錄要重啟 session 才掃得到，所以 enable 這一步可能先失敗；
 # 直接把 uuid 寫進清單，下次 shell 起來就會載入。用 python 而不是 sed 改這個
 # 陣列：清單為空時是 "@as []"，字串接合會生出 "@as [, 'x']" 這種壞語法。
-gnome-extensions enable pn-osk@cver.net 2>/dev/null || python3 - <<'PY'
-import subprocess
+pn_enable_extension() {
+  # 新裝的擴充目錄要重啟 session 才掃得到，所以 enable 這一步可能先失敗；
+  # 直接把 uuid 寫進清單，下次 shell 起來就會載入。用 python 而不是 sed 改這個
+  # 陣列：清單為空時是 "@as []"，字串接合會生出 "@as [, 'x']" 這種壞語法。
+  gnome-extensions enable "$1" 2>/dev/null && return 0
+  PN_UUID="$1" python3 - <<'PYEOF'
+import os, subprocess
 
-UUID = "pn-osk@cver.net"
+UUID = os.environ["PN_UUID"]
 cur = subprocess.run(["gsettings", "get", "org.gnome.shell", "enabled-extensions"],
                      capture_output=True, text=True).stdout.strip()
 body = cur[cur.index("[") + 1:cur.rindex("]")]
 items = [s.strip().strip("'") for s in body.split(",") if s.strip()]
 if UUID in items:
-    print("   -> 已在 enabled-extensions 內")
+    print("   -> %s 已在 enabled-extensions 內" % UUID)
 else:
     items.append(UUID)
     val = "[" + ", ".join("'%s'" % i for i in items) + "]"
     subprocess.run(["gsettings", "set", "org.gnome.shell",
                     "enabled-extensions", val], check=True)
-    print("   -> 已加入 enabled-extensions")
-PY
+    print("   -> %s 已加入 enabled-extensions" % UUID)
+PYEOF
+}
+
+pn_enable_extension pn-osk@cver.net
+
+echo "== [15] pn-panel：頂列三顆 e-ink 控制（刷新／旋轉／色調） =="
+# 這三顆本來住在 pn-osk 裡，跟鍵盤和啟動器共用一個擴充卻不共用任何狀態。
+# 拆出來是為了讓只想要這三顆的人不必連帶接受一副被重造的鍵盤。
+P="$HOME/.local/share/gnome-shell/extensions/pn-panel@cver.net"
+mkdir -p "$P/icons"
+install -m 0644 "$D/../extensions/pn-panel@cver.net/extension.js" \
+                "$D/../extensions/pn-panel@cver.net/metadata.json" \
+                "$D/../extensions/pn-panel@cver.net/stylesheet.css" "$P/"
+# 自製圖示。漏掉的話按鈕會是空白的，而空白按鈕看起來就是壞掉。
+install -m 0644 "$D/../extensions/pn-panel@cver.net/icons/"*.svg "$P/icons/"
+pn_enable_extension pn-panel@cver.net
