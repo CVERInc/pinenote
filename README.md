@@ -363,12 +363,29 @@ through `#fff`. The whole rule is: **write greys as `#NNN`**. Anything that
 cannot be written that way is off the grid and will be quantised again on its way
 to the panel, which is where mid-tones turn into noise.
 
-| | | for |
-|---|---|---|
-| ink | `#000` | text, emphatic borders, icons |
-| sunk | `#333` | components that recede, borders |
-| shadow | `#aaa` | container beds, panel beds, softening |
-| paper | `#fff` | white ground, foreground components |
+| | | | for |
+|---|---|---|---|
+| ink | 墨 | `#000` | text, emphatic borders, icons |
+| sunk | 沉 | `#333` | components that recede |
+| slate | 岩 | `#777` | separators, secondary containers, disabled states |
+| shadow | 影 | `#aaa` | container beds, panel beds |
+| wash | 暈 | `#ddd` | the faintest emphasis, sitting on paper |
+| paper | 紙 | `#fff` | ground, foreground components |
+
+They are named for the **role** they play, not for how bright they are. Chinese
+ink painting has a canonical vocabulary for exactly this range — 焦濃重淡清, the
+five tones of one ink — and it is tempting on a device like this, but it names
+density. A stylesheet needs to know what a value is *for*, and two values with the
+same density can have different jobs. `slate` is mass that does not speak;
+`wash` is ink spread so thin on the paper that it reads as a surface rather than
+a mark.
+
+⚠️ The last two are not equally safe. `slate` sits in the middle of the widest
+gap and is far from its neighbours in both modes. `wash` is deliberately close to
+`paper`, which is what makes it useful and what makes it fragile: in
+black-and-white mode `paper` is solid and `wash` is a thirteen-percent dot
+pattern, so a hairline at that value is a dotted line rather than a line. Use it
+for areas, not for hairlines.
 
 Alpha cannot express these. Black at 80% over a black background is still black,
 so a translucent value has to be flattened to an opaque one before it means
