@@ -10,7 +10,7 @@ someone has to review — the reproducible part is the report.
 | [Icon size lands below what fits](gnome-shell-icon-size-steps.md) | [gnome-shell#9336](https://gitlab.gnome.org/GNOME/gnome-shell/-/issues/9336) | closed as a duplicate of [#2173](https://gitlab.gnome.org/GNOME/gnome-shell/-/issues/2173); the mechanism and the `fixed-icon-size` escape hatch were added there as a comment, since five years of that thread had not named either |
 | [Accel matrix matched by chip, not board](systemd-hwdb-sc7a20-two-boards.md) | [systemd#43321](https://github.com/systemd/systemd/issues/43321) | open — maintainer asked for a PR; the current match key cannot express one, and the thread now has the `udevadm test` output showing why |
 | [Tapping selected text does not raise the OSK](gtk-osk-selected-text.md) | [gtk#8345](https://gitlab.gnome.org/GNOME/gtk/-/issues/8345) | open |
-| [A negative CSS margin aborts the shell](gnome-shell-negative-css-margin-abort.md) | gnome-shell, not filed yet | written 2026-08-08; searched and not a duplicate of #7339. Not yet reduced to a minimal extension, and the user-theme path is untested — both are named in the report rather than glossed |
+| [A negative CSS margin aborts the shell](gnome-shell-negative-css-margin-abort.md) | gnome-shell, not filed yet | written 2026-08-08. Root cause found: `cairo_format_stride_for_width()` returns −1 for a negative width and `st_theme_node_prerender_background()` multiplies it unchecked, so the allocation becomes 2³² − panel-height-in-device-pixels. Confirmed by predicting the byte count from the panel height and hitting it twice. Reduced to one CSS declaration, needing no extension code and no extension at all |
 
 ## How these get written
 
