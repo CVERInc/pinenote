@@ -52,7 +52,11 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 
-const BUILD = 24;
+const BUILD = 25;
+
+// Logical pixels kept clear under the app grid so the page indicators are not
+// flush with the screen edge.
+const PN_PAGE_INDICATOR_ROOM = 28;
 
 const DEFAULTS = {
     fillWidth: true,
@@ -541,7 +545,14 @@ export default class PineNoteOskExtension extends Extension {
                 // 從搜尋框那一列開始，而不是從它下面 —— 多出來的這一段是要
                 // 借給換頁箭頭站的地方。grid 自己會在下面的 allocate 裡往下推，
                 // 所以視覺上內容仍從搜尋框之下開始。
-                const appHeight = height - searchHeight - spacing;
+                // Reserve a band at the bottom for the page indicators. Handing
+                // the whole screen to the grid pushed them against the edge:
+                // measured, their ink ended 5 device pixels from the bottom in
+                // landscape and off it in portrait. The dots are ~13 device
+                // pixels tall, so this leaves roughly their own height again
+                // below them.
+                const appHeight =
+                    height - searchHeight - spacing - PN_PAGE_INDICATOR_ROOM;
                 const appWidth = this._pnCanvasWidth(width, appHeight);
                 appBox.set_origin(
                     Math.round((width - appWidth) / 2),
