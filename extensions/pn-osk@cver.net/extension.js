@@ -1018,6 +1018,11 @@ export default class PineNoteOskExtension extends Extension {
     // 不是借用別人的按鈕 —— 借用的話每次套件升級都會被放回原位。
     _pnMakePanelButton(name, icon, onActivate) {
         const button = new PanelMenu.Button(0.0, name, true);
+        // 三顆要看起來是一組。原廠 .panel-button 的左右內距是為了滑鼠指標留的，
+        // 三顆各留一份就把它們推得比右邊那組系統圖示還開 —— 而那組之所以緊，是
+        // 因為它整組**只是一顆按鈕**。我們沒辦法照抄那個結構（三顆各要能單獨按），
+        // 所以改成收內距。實際數字在 stylesheet，那裡 disable/enable 就重讀。
+        button.add_style_class_name("pn-panel-button");
         // icon 可以是主題裡的名字，也可以是我們自己帶的檔案
         button._pnIcon = new St.Icon({
             ...(icon.startsWith("/")
