@@ -386,12 +386,33 @@ listening to that key — the button applies the change itself and says so in th
 journal. Both branches have been made to fire; the second one by disabling the
 extension and pressing the button.
 
-**The icon cannot use grey.** This is a two-colour panel. Translucent greys
-quantise to noise, and in black-and-white mode there are no greys at all, so an
-icon describing greyscale would dissolve inside the mode it names. Tone is drawn
-as shape instead: a solid wedge for a continuous ramp, two chips for a palette
-with exactly two colours. The first attempt drew four rising bars, which at 16px
-is the signal-strength icon, and the Wi-Fi indicator is three icons away.
+**The icon is one file, and the panel draws its own state.** It borrows the
+refresh button's frame outline exactly — both are things that act on the screen
+itself, so the difference belongs inside the frame — and fills it with a real
+grey ramp, `#555` to `#EEE`. In greyscale mode that is a smooth gradient. In
+black-and-white mode the driver converts it, so the same file renders as a row of
+dots thinning out from coarse to fine: the icon becomes a live sample of what
+this mode does to grey. There is no second icon and no state to keep in sync,
+because the hardware is a more accurate instrument here than anything that could
+be drawn, and there are only two modes, so *the other one* is what pressing does.
+
+Two consequences. The file must not be named `-symbolic`, or the recolouring pass
+flattens the ramp to solid black. And a screenshot can never show the dots —
+dithering happens in the driver, below the framebuffer that `Capture()` reads —
+so this is one of the few things on this device that only the glass can verify.
+
+An earlier attempt drew tone as four rising bars, which at 16px is the
+signal-strength icon, and the Wi-Fi indicator is three icons away.
+
+**A correction that this feature depended on.** The reasoning above was first
+written as "this is a two-colour panel, so the icon cannot use grey" — copied out
+of this repository's own extension description, which says the same, and used as
+though it were a fact about the hardware. It is not. The framebuffer is 4bpp:
+1872 × 1404 ÷ 2 = 1,314,144 bytes, exactly the size of the driver's off-screen
+image, and GC16 means sixteen greys. This panel is the same class as a Kindle.
+What is true is that the tablet spends nearly all of its time in a two-colour
+*mode*, which is a choice made to stop the flashing — and it is that choice, not
+a hardware limit, that makes a grey ramp turn into dots.
 
 **Hiding a neighbour's button is not a one-time act.** Disabling and re-enabling
 Pinenote Helper — which a package upgrade does — adds its indicators back as new

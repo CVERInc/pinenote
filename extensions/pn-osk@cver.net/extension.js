@@ -1218,21 +1218,6 @@ export default class PineNoteOskExtension extends Extension {
     // 畫的是「按下去會變成什麼」，跟旋轉鈕同一個規矩，而且在這裡更站得住腳：
     // 現在是哪一種，玻璃上看得比任何圖示都清楚，按鈕不必再講一次。
     //
-    // 🔴 圖示裡不能有灰色。這台是兩色面板，半透明的灰會被量化成雜訊（app grid
-    // 那一輪就是為了這個把整組元件改成純黑白），而在黑白模式底下灰更是只剩抖
-    // 動網點 —— 圖示會在它自己描述的那個模式裡糊掉。所以兩顆都是純黑白的形狀：
-    // 斜坡（連續階調）跟兩塊色票（一共兩個顏色）。
-    _pnSyncToneIcon() {
-        const icon = Main.panel.statusArea?.["pn-tone"]?._pnIcon;
-        if (!icon)
-            return;
-        this._pnToneRead(now => {
-            const next = now === PN_TONE_GRAY ? "mono" : "gray";
-            icon.gicon = Gio.icon_new_for_string(
-                `${this.path}/icons/pn-tone-${next}-symbolic.svg`);
-        });
-    }
-
     // 圖示指的是「按下去會發生什麼」，不是「這顆叫什麼」。直向時按了會轉成橫向
     // ⇒ 畫順時針；橫向時反過來。一顆永遠長一樣的旋轉鈕只說得出「這裡可以轉」。
     _pnRotationLocked() {
@@ -1301,15 +1286,13 @@ export default class PineNoteOskExtension extends Extension {
             `${this.path}/icons/pn-screen-refresh-symbolic.svg`,
             () => this._pnTriggerRefresh());
         this._pnToneSettings = this._pnToneOpenSettings();
-        add("pn-tone", "PN Tone",
-            `${this.path}/icons/pn-tone-gray-symbolic.svg`,
+        // 🔑 只有一張圖，而且**故意**不跟旋轉鈕同一個規矩（那顆畫的是「按了會
+        // 怎樣」）。這顆畫的是現況，因為現況是免費且誠實的：圖示裡面是真的灰，
+        // 灰階模式下是平滑斜坡，黑白模式下驅動把它換算成網點 —— 同一張圖自己
+        // 就變了，而且變成的正是這個模式對「灰」做的那件事。硬體當儀表，比我
+        // 畫兩個狀態更準，也少一張圖。模式只有兩個，所以「按了會怎樣」＝另一個。
+        add("pn-tone", "PN Tone", `${this.path}/icons/pn-tone.svg`,
             () => this._pnToneToggle());
-
-        this._pnSyncToneIcon();
-        // 誰改的都跟 —— 上游的選單、gsettings、命令列，全都會經過驅動這個訊號。
-        this._pnToneDbusSignal = Gio.DBus.system.signal_subscribe(
-            "org.pinenote.ebc", "org.pinenote.ebc", "BwModeChanged", "/ebc",
-            null, Gio.DBusSignalFlags.NONE, () => this._pnSyncToneIcon());
 
         this._pnSyncRotateIcon();
         this._pnPanelMonitorSignal = Main.layoutManager.connect(
@@ -1329,10 +1312,6 @@ export default class PineNoteOskExtension extends Extension {
             this._pnLockSignal = 0;
         }
         this._pnTouchSettings = null;
-        if (this._pnToneDbusSignal) {
-            Gio.DBus.system.signal_unsubscribe(this._pnToneDbusSignal);
-            this._pnToneDbusSignal = 0;
-        }
         for (const id of this._pnToneTimers ?? [])
             GLib.Source.remove(id);
         this._pnToneTimers = null;
