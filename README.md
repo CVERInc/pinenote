@@ -417,11 +417,18 @@ names wrap to two lines. Everything else — label colours, the folder plate,
 the scrollbar handle, the search hint, the dialog — is upstream's, seen
 through the shader.
 
-That leaves a useful property: every colour still written in the stylesheet
-sits **outside** the shader (the keyboard and the page arrows, both of which
-live in their own layers), so every value in the file means what it says.
-Nothing in there is written in pre-inversion coordinates waiting to be
-misread.
+Moving something can carry it out of the shader's reach without meaning to.
+The page arrows are lifted into the chrome layer, which sits outside
+`overviewGroup`, so for a while they were the one thing whose colour we still
+had to decide — not because we wanted to, but because we had moved them past
+the physics. The fix is to hand the effect to them individually rather than to
+paint them; upstream gives them no ground outside the folder dialog, so they
+come out as a bare chevron.
+
+That leaves a useful property: the only colours still written in the
+stylesheet are the keyboard's, and the keyboard has a layer of its own that
+the shader never touches. Every value in the file means what it says. Nothing
+is written in pre-inversion coordinates waiting to be misread.
 
 Measured on the app grid afterwards: the whole screen resolves to those six
 values and nothing else, bar 0.2% of pixels in the panel band that are still

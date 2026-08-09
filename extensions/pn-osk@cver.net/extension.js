@@ -52,7 +52,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 
-const BUILD = 27;
+const BUILD = 28;
 
 // 這片面板的物理，是預設狀態不是一個開關。之前它靠我手打 D-Bus，那時候 CSS 還在
 // 撐場面所以只是懶；CSS 覆寫剝掉之後這兩個常數就是承重牆 —— 沒有它們，登入進來
@@ -524,7 +524,7 @@ export default class PineNoteOskExtension extends Extension {
 
         // 量化器。跟上面兩條同一個 2 秒的理由：這些 actor 在 enable() 當下還沒
         // 全部就位，而 _pnContentActors 要的 _workspacesDisplay 尤其晚。
-        this._pnPosteriseTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+        this._pnPosteriseTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
             this._pnPosteriseTimeoutId = 0;
             try {
                 const out = this.Posterise(PN_POSTERISE_LEVELS, PN_POSTERISE_INVERT);
@@ -1902,6 +1902,12 @@ export default class PineNoteOskExtension extends Extension {
             list.push(["modals", Main.layoutManager.modalDialogGroup]);
         if (Main.layoutManager?.overviewGroup)
             list.push(["overview", Main.layoutManager.overviewGroup]);
+        // 翻頁箭頭走 addChrome，那是 overviewGroup **外面** —— 我們只想搬它的位置，
+        // 卻順手把它搬出了量化器的射程，於是顏色變成我們得自己決定的事。掛回來。
+        for (const [which, arrow] of Object.entries(this._pnArrows ?? {})) {
+            if (arrow)
+                list.push([`arrow:${which}`, arrow]);
+        }
         return list;
     }
 
