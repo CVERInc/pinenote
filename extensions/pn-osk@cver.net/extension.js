@@ -52,7 +52,13 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 
-const BUILD = 26;
+const BUILD = 27;
+
+// 這片面板的物理，是預設狀態不是一個開關。之前它靠我手打 D-Bus，那時候 CSS 還在
+// 撐場面所以只是懶；CSS 覆寫剝掉之後這兩個常數就是承重牆 —— 沒有它們，登入進來
+// 看到的是原廠深色 Adwaita，而不是我們宣稱做出來的那個東西。
+const PN_POSTERISE_LEVELS = 6;
+const PN_POSTERISE_INVERT = true;
 
 // Logical pixels kept clear under the app grid so the page indicators are not
 // flush with the screen edge.
@@ -515,6 +521,19 @@ export default class PineNoteOskExtension extends Extension {
             this._pnGridTimeoutId = 0;
             return GLib.SOURCE_REMOVE;
         });
+
+        // 量化器。跟上面兩條同一個 2 秒的理由：這些 actor 在 enable() 當下還沒
+        // 全部就位，而 _pnContentActors 要的 _workspacesDisplay 尤其晚。
+        this._pnPosteriseTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
+            this._pnPosteriseTimeoutId = 0;
+            try {
+                const out = this.Posterise(PN_POSTERISE_LEVELS, PN_POSTERISE_INVERT);
+                console.log(`[pn-osk] posterise at enable: ${out}`);
+            } catch (e) {
+                logError(e, "[pn-osk] posterise at enable");
+            }
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _pnInstallLaunchpad() {
@@ -910,36 +929,6 @@ export default class PineNoteOskExtension extends Extension {
         });
     }
 
-    // 資料夾的底板。'app-folder' 這個 style class 掛在整個 tile 上，所以在 CSS 裡
-    // 上底色會連名字一起鋪。真正該鋪的是那 2x2 預覽 —— 它是 createFolderIcon 生的
-    // 裸 St.Widget，沒有 class；它的容器 _iconBin 只有它那麼大（x_align CENTER ⇒
-    // 拿自然寬度），所以鋪在 bin 上就剛好。試過 `.app-folder .overview-icon > StBin`
-    // 這條 CSS，量到的結果是完全沒生效（底板量出來仍是 255＝紙），所以留在 JS。
-    _pnStyleFolderIcons() {
-        const appDisplay = pnOverviewControls()?._appDisplay;
-        for (const item of appDisplay?._orderedItems ?? []) {
-            if (!item.style_class?.includes("app-folder"))
-                continue;
-            const bin = item.icon?._iconBin;
-            if (!bin || bin._pnStyled)
-                continue;
-            bin._pnStyled = true;
-            // 🔴 不能用 border 或 padding：它們會長大，而 _getChildrenMaxSize 取
-            // 所有 tile 的最大值 ⇒ 一顆資料夾的裝飾會把整個 grid 的格子撐大
-            // （實測 128 -> 142，圖示 64 -> 48，垂直間距變成負的）。底色不參與配置。
-            //
-            // 原本這裡畫的是 1px #ccc 的細框，那是兩色時代的遺留：當時底板只會被
-            // 量化成一整塊墨，所以改用「線」去說「這幾個是一組」。六色之後線反而更糟
-            // —— #ccc 反相後落在 0.2，量化吸到沉 #333，本來想要的「淡淡一條」變成
-            // 全站唯一一條全力的細線。暈就是為這件事存在的：只鋪面積，別畫細線。
-            // 這裡寫的是**反相前**的值，跟這份 stylesheet 其他地方同一個座標系：
-            // #333 上螢幕是暈 #ddd。
-            bin.set_style(
-                "background-color: #333;" +
-                "border-radius: 18px;");
-        }
-    }
-
     // 只設 fixedIconSize 不夠：真正在畫的是 _iconSize，而它只在 adaptToSize
     // 發現頁面尺寸變了、排一個 BEFORE_REDRAW 的 later 時才重算。直接做那件事。
     _pnApplyIconSize(lm, size) {
@@ -1030,7 +1019,6 @@ export default class PineNoteOskExtension extends Extension {
                     this._pnApplyWrapToView(item.view);
                 }
             }
-            this._pnStyleFolderIcons();
             appDisplay._grid?.layout_manager?.layout_changed();
         };
         apply();
@@ -1376,6 +1364,14 @@ export default class PineNoteOskExtension extends Extension {
         const grid = pnAppGrid();
         if (grid)
             grid.setGridModes(null);   // null 讓它回到 shell 的預設
+
+        if (this._pnPosteriseTimeoutId) {
+            GLib.source_remove(this._pnPosteriseTimeoutId);
+            this._pnPosteriseTimeoutId = 0;
+        }
+        // 走整棵樹拆，不是走當初掛上去的那份清單 —— actor 會被重建，清單會留孤兒。
+        this._pnPosteriseClearAll("pn-posterise");
+
         const proto = Keyboard.prototype;
 
         if (this._origRelayout)

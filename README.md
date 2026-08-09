@@ -355,7 +355,7 @@ What works is `sudo systemctl restart gdm3`. `AutomaticLoginEnable` fires on
 GDM startup — not after a session ends — so this is also how you get back from
 the greeter if you already killed the shell. Open windows close either way.
 
-## The four values it draws with
+## The six values it draws with
 
 The panel has sixteen levels — 0 to 255 in steps of 17 — and `0x11` is 17, so
 those sixteen levels are exactly the sixteen three-digit shorthand greys, `#000`
@@ -394,16 +394,39 @@ Two kinds of colour rule live here and conflating them is how the theme this
 replaced went stale:
 
 - **Physics** — moving an off-grid value onto the grid, removing alpha,
-  resolving a shadow. This should be computed at runtime by walking the actor
-  tree and reading what each widget actually resolved to, not written against
-  selector names that may not exist next release. The CSS here is a reference
-  implementation that proves the values are right; `Palette()` reports 918
-  resolved colours with nothing off the grid, no alpha and no chroma.
+  resolving a shadow. This is computed at runtime rather than written against
+  selector names that may not exist next release: a `Shell.GLSLEffect` on the
+  panel, the modal group and the overview takes each fragment's luminance,
+  inverts it, and snaps it to the six values. It is applied at `enable()`, not
+  behind a switch. There is no moment when rendering a colour this panel cannot
+  show is the right answer, and a switch would mean every value had to look
+  right under two polarities — which is the exact mechanism that made the
+  previous theme's values rot.
 - **Design** — deliberately arranging things differently from upstream. That
   stays as CSS. The keyboard is the case: stock builds it from a black bed with
   keys at 114 and special keys at 93, twenty-one apart, which dithers into one
   texture. Ours is a `#aaa` bed, `#fff` keys, `#333` function keys — not the
   stock values moved closer to the grid, a different arrangement.
+
+The CSS used to carry a reference implementation of the first kind, value by
+value, as a way of proving the six were right. Once the shader existed that
+became a second, staler answer to a question already answered, so it was
+deleted. What the app grid keeps is three arrangements and no colours at all:
+the dock is removed, the page arrows are lifted out of the gutters, and app
+names wrap to two lines. Everything else — label colours, the folder plate,
+the scrollbar handle, the search hint, the dialog — is upstream's, seen
+through the shader.
+
+That leaves a useful property: every colour still written in the stylesheet
+sits **outside** the shader (the keyboard and the page arrows, both of which
+live in their own layers), so every value in the file means what it says.
+Nothing in there is written in pre-inversion coordinates waiting to be
+misread.
+
+Measured on the app grid afterwards: the whole screen resolves to those six
+values and nothing else, bar 0.2% of pixels in the panel band that are still
+unexplained. Upstream's folder tile arrives as a `wash` plate with a `slate`
+hairline on `paper` — three values, none of them ours.
 
 ## The panel it taps
 

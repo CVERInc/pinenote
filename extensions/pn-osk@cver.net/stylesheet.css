@@ -64,36 +64,6 @@
     padding-bottom: 4px;
 }
 
-/* --- app grid legibility --- */
-/* GNOME 48 draws app names in a light grey that lands between the panel's
- * levels, so it dithers into noise in black-and-white mode. Take it to the top
- * of the grid instead: #fff on the dark ground survives both modes intact.
- * （2026-08-08：這條原本寫的是 #000，因為當時底下是 PNEink 的白。主題拿掉之後
- *   它就是黑字黑底 —— 顏色規則綁在別人的極性上，就是這樣壞的。） */
-.overview-tile,
-.overview-tile .overview-icon,
-.grid-search-result,
-.grid-search-result .overview-icon {
-    color: #fff;
-}
-
-/* Widening the cell rather than shrinking the type: the grid is adaptive, so a
- * larger icon means fewer columns, and fewer columns means each label gets more
- * room. It also makes the touch target bigger, which this panel needs more than
- * it needs another app per row. */
-.overview-tile .overview-icon,
-.grid-search-result .overview-icon {
-    icon-size: 160px;
-}
-
-/* Upstream draws a folder as a dark rounded rectangle behind the whole tile,
- * name included. It is the right idea in the wrong place: the thing that needs
- * a plate is the 2x2 preview, not the label. So the stock ground comes off here
- * and a plate goes on the preview's own bin, in _pnStyleFolderIcons. */
-.app-folder {
-    background-color: transparent;
-}
-
 /* The page arrows have no size of their own: the theme only styles them inside
  * the folder dialog, and in the grid they were stretched to fill the gutter we
  * reclaimed. Once they live in a fixed-position layer nobody hands them a box,
@@ -158,53 +128,6 @@
        會被擠成 64，而那一下就是「先大再縮」。釘在 _pnSyncFolderIconSize。 */
     width: 620px;
     height: 620px;
-    background-color: #333;
-}
-
-.app-folder-dialog .overview-tile,
-.app-folder-dialog .grid-search-result,
-.app-folder-dialog .overview-tile .overview-icon,
-.app-folder-dialog .grid-search-result .overview-icon,
-.app-folder-dialog .folder-name-container .folder-name-label,
-.app-folder-dialog .folder-name-container .folder-name-entry {
-    color: #fff;
-}
-
-.app-folder-dialog .page-navigation-arrow {
-    background-color: #000;
-    color: #fff;
-}
-
-/* 改名輸入框＝凹陷的欄位，所以比容器（#333）更深一階到 #000，邊框用 #aaa 把它
-   框出來。選取色不能用純白或純黑：兩者都會讓「選取」和「有字」變成同一塊。 */
-.app-folder-dialog .folder-name-container .folder-name-entry {
-    background-color: #000;
-    color: #fff;
-    border: 2px solid #aaa;
-    caret-color: #fff;
-    selection-background-color: #aaa;
-    selected-color: #000;
-}
-
-.app-folder-dialog .folder-name-container .folder-name-entry:focus {
-    background-color: #000;
-    color: #fff;
-    border: 2px solid #fff;
-    box-shadow: none;
-}
-
-/* 總覽裡那塊工作區預覽的四個角。PNEink 主題（`pneink` 套件，不是我們的）寫著
-   `.workspace-background { background-color:#000000; border-radius:5px; border:2px }`，
-   而 GNOME 是用**大得多的半徑**去裁那張桌布的。兩個半徑對不上，中間那圈黑就
-   露出來 —— 量到的：離角落遠的地方黑邊 4 個裝置像素（＝主題的 2px 邊框，正確），
-   靠近角落膨脹到 33，往下 40 像素才收斂回去。四個角各一塊黑楔形。
-
-   不去猜 GNOME 那個半徑是多少：底色拿掉，就沒有東西可以露出來了。桌布本身仍
-   然被裁成圓角，那是 shell 畫的，一直都對。
-   （主題是別人的套件，改在那邊會被升級蓋掉，所以覆寫寫在我們自己這份。） */
-.workspace-background {
-    background-color: transparent;
-    border: none;
 }
 
 /* ── e-ink 的數值：鍵盤 ────────────────────────────────────────────────
@@ -246,38 +169,4 @@
     background-color: #000;
     color: #fff;
     border: 2px solid #000;
-}
-
-
-/* ── e-ink 的數值：Palette() 點名的那幾個 ──────────────────────────────
-   都是原廠落在格子外的值。換成最近的階，看起來幾乎一樣，但不會被再量化，
-   在黑白模式下也不會跟鄰居糊在一起。 */
-
-/* 🩸 這裡原本寫著「圖示磚與 dash 底 #252525(37) → #333(51)」，標題掛著「物理」。
-   但 37 最近的格子是 34（#222），不是 51 —— 我把它吸附到**我們的四個值**而不是
-   **格子**，於是把 GNOME 刻意做成幾乎看不見的磚，變成一塊明顯的框。那不是修
-   物理，那是改設計，而且是躲在物理的標題底下改的。
-   刪掉，交給量化器：它照定義取最近的格子，不可能犯這個錯。 */
-
-/* 捲軸把手 #5e5e5e(94) → #aaa(170)：它要在自己的凹槽上看得見 */
-#hhandle,
-#vhandle {
-    background-color: #aaa;
-}
-
-/* 提示字與搜尋圖示原本是白色 70% 不透明（疊在黑上＝179）。#aaa 是 170，
-   差 9 —— 換掉幾乎看不出來，但 alpha 消失了，而 alpha 一定落在階與階之間。 */
-.search-entry,
-.search-entry .hint-text,
-.search-entry StIcon.search-entry-icon,
-StLabel.hint-text {
-    color: #aaa;
-}
-
-/* 陰影在抖動下是雜訊，而且它本質上是連續漸層，沒有任何一階放得下它。
-   五處全拿掉：我們自己那三顆面板鈕、Activities、快速設定、搜尋框、dash。 */
-#panel .panel-button,
-.search-entry,
-.dash-background {
-    box-shadow: none;
 }
