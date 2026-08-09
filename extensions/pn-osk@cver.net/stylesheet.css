@@ -86,13 +86,11 @@
     icon-size: 160px;
 }
 
-/* A folder tile is drawn as a dark rounded rectangle. In grayscale that reads
- * as a tint; with bw_mode=1 there is no tint to be had, so it quantises to a
- * solid black block and swallows the icons inside it. An outline says the same
- * thing ("these are grouped") without spending any ink. */
+/* Upstream draws a folder as a dark rounded rectangle behind the whole tile,
+ * name included. It is the right idea in the wrong place: the thing that needs
+ * a plate is the 2x2 preview, not the label. So the stock ground comes off here
+ * and a plate goes on the preview's own bin, in _pnStyleFolderIcons. */
 .app-folder {
-    /* 框改由 JS 畫在 _iconBin 上 —— 'app-folder' 這個 class 在整個 tile 上，
-       在這裡畫框會連名字一起包進去。這裡只保留把原廠的底色拿掉。 */
     background-color: transparent;
 }
 

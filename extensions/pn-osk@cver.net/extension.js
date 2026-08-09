@@ -52,7 +52,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 
-const BUILD = 25;
+const BUILD = 26;
 
 // Logical pixels kept clear under the app grid so the page indicators are not
 // flush with the screen edge.
@@ -187,6 +187,9 @@ const IFACE = `
     </method>
     <method name="Rebuild"/>
     <method name="ShowAppGrid"/>
+    <method name="GoToPage">
+      <arg type="i" direction="in" name="index"/>
+    </method>
     <method name="OpenFolder"/>
     <method name="RenameFolder"/>
     <method name="GridInfo">
@@ -907,10 +910,11 @@ export default class PineNoteOskExtension extends Extension {
         });
     }
 
-    // 資料夾外框。'app-folder' 這個 style class 掛在整個 tile 上，所以在 CSS 裡
-    // 畫框會連名字一起包住。真正該框的是那 2x2 預覽 —— 它是 createFolderIcon 生的
-    // 裸 St.Widget，沒有 class，CSS 選不到；但它的容器 _iconBin 只有它那麼大
-    // （x_align CENTER ⇒ 拿自然寬度），所以框畫在 bin 上就剛好。
+    // 資料夾的底板。'app-folder' 這個 style class 掛在整個 tile 上，所以在 CSS 裡
+    // 上底色會連名字一起鋪。真正該鋪的是那 2x2 預覽 —— 它是 createFolderIcon 生的
+    // 裸 St.Widget，沒有 class；它的容器 _iconBin 只有它那麼大（x_align CENTER ⇒
+    // 拿自然寬度），所以鋪在 bin 上就剛好。試過 `.app-folder .overview-icon > StBin`
+    // 這條 CSS，量到的結果是完全沒生效（底板量出來仍是 255＝紙），所以留在 JS。
     _pnStyleFolderIcons() {
         const appDisplay = pnOverviewControls()?._appDisplay;
         for (const item of appDisplay?._orderedItems ?? []) {
@@ -922,10 +926,16 @@ export default class PineNoteOskExtension extends Extension {
             bin._pnStyled = true;
             // 🔴 不能用 border 或 padding：它們會長大，而 _getChildrenMaxSize 取
             // 所有 tile 的最大值 ⇒ 一顆資料夾的裝飾會把整個 grid 的格子撐大
-            // （實測 128 -> 142，圖示 64 -> 48，垂直間距變成負的）。
-            // inset box-shadow 不參與配置，GNOME 自己的 focus ring 就是這樣畫的。
+            // （實測 128 -> 142，圖示 64 -> 48，垂直間距變成負的）。底色不參與配置。
+            //
+            // 原本這裡畫的是 1px #ccc 的細框，那是兩色時代的遺留：當時底板只會被
+            // 量化成一整塊墨，所以改用「線」去說「這幾個是一組」。六色之後線反而更糟
+            // —— #ccc 反相後落在 0.2，量化吸到沉 #333，本來想要的「淡淡一條」變成
+            // 全站唯一一條全力的細線。暈就是為這件事存在的：只鋪面積，別畫細線。
+            // 這裡寫的是**反相前**的值，跟這份 stylesheet 其他地方同一個座標系：
+            // #333 上螢幕是暈 #ddd。
             bin.set_style(
-                "border: 1px solid #cccccc;" +
+                "background-color: #333;" +
                 "border-radius: 18px;");
         }
     }
@@ -2301,6 +2311,12 @@ export default class PineNoteOskExtension extends Extension {
                 mode: Clutter.AnimationMode.EASE_OUT_QUAD,
             });
         }
+    }
+
+    // 拍某一頁的照片時要用。沒有它就只能靠滑動，而滑動是拍不準的：想量的東西
+    // 在第幾頁是使用者排的，不是我排的。
+    GoToPage(index) {
+        pnOverviewControls()?._appDisplay?.goToPage?.(index);
     }
 
     HideOverview() {
