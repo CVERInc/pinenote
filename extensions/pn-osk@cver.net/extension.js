@@ -52,7 +52,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 
-const BUILD = 28;
+const BUILD = 29;
 
 // 這片面板的物理，是預設狀態不是一個開關。之前它靠我手打 D-Bus，那時候 CSS 還在
 // 撐場面所以只是懶；CSS 覆寫剝掉之後這兩個常數就是承重牆 —— 沒有它們，登入進來
@@ -1141,23 +1141,42 @@ export default class PineNoteOskExtension extends Extension {
         appDisplay._pnOrigAddFolderDialog = appDisplay.addFolderDialog;
         appDisplay.addFolderDialog = function (dialog) {
             appDisplay._pnOrigAddFolderDialog.call(this, dialog);
-            ext._pnSyncFolderIconSize(dialog._view);
-            ext._pnInstallTitleTap(dialog);
-            ext._pnDialogs.add(dialog);
-            dialog.connect("destroy", () => ext._pnDialogs.delete(dialog));
-            // dialog._view 是 FolderView，_grid 是 FolderGrid（它自己的 layout
-            // manager，跟外層 grid 無關，所以釘死的圖示尺寸不會套到這裡）
-            ext._pnApplyWrapToView(dialog._view);
-            // 原版的 handler 先接、先跑，所以我們讀到的 _displayingDialog 已經是新值
-            dialog.connect('open-state-changed', (o, isOpen) => {
-                ext._pnSyncArrowVisibility();
-                // 項目是延遲建立的 —— 包裝當下跑一次會漏掉還沒生出來的那些
-                if (isOpen) {
-                    ext._pnSyncFolderIconSize(dialog._view);
-                    ext._pnApplyWrapToView(dialog._view);
-                }
-            });
+            ext._pnAdoptDialog(dialog);
         };
+
+        // 🔴 掛 hook 只接得到**未來**出生的對話框，而 FolderIcon 會把它建過的那個
+        // 快取在 `_dialog` 上 —— disable/enable 一輪（每次重載 stylesheet 都是一輪，
+        // GNOME 自己也會做）之後，既有的那些永遠等不到 addFolderDialog 再被呼叫，
+        // 補丁就這樣安靜地不見了：鉛筆鈕回來、點標題改名的熱區消失。
+        // 症狀看起來像「功能被刪掉了」，其實是**認養名單漏掉了已經在場的人**。
+        for (const item of appDisplay._orderedItems ?? []) {
+            if (item._dialog)
+                this._pnAdoptDialog(item._dialog);
+        }
+    }
+
+    // 一個對話框該被做的所有事，建立時和事後認養共用同一份 —— 分成兩份寫，
+    // 遲早會有一邊漏掉一項。
+    _pnAdoptDialog(dialog) {
+        if (!dialog || this._pnDialogs?.has(dialog))
+            return;
+        const ext = this;
+        this._pnSyncFolderIconSize(dialog._view);
+        this._pnInstallTitleTap(dialog);
+        this._pnDialogs.add(dialog);
+        dialog.connect("destroy", () => ext._pnDialogs.delete(dialog));
+        // dialog._view 是 FolderView，_grid 是 FolderGrid（它自己的 layout
+        // manager，跟外層 grid 無關，所以釘死的圖示尺寸不會套到這裡）
+        this._pnApplyWrapToView(dialog._view);
+        // 原版的 handler 先接、先跑，所以我們讀到的 _displayingDialog 已經是新值
+        dialog.connect('open-state-changed', (o, isOpen) => {
+            ext._pnSyncArrowVisibility();
+            // 項目是延遲建立的 —— 包裝當下跑一次會漏掉還沒生出來的那些
+            if (isOpen) {
+                ext._pnSyncFolderIconSize(dialog._view);
+                ext._pnApplyWrapToView(dialog._view);
+            }
+        });
     }
 
     _pnRemoveDialogWatch() {
