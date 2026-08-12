@@ -46,8 +46,11 @@ It is idempotent, and it installs:
 
 - **Typing mode** — A2 waveform, dithered B/W (icons keep their shading), `auto_refresh` off,
   persisted via `/etc/modprobe.d/rockchip_ebc.conf` and a systemd user service.
-- **Idle refresh** — a small daemon that watches GNOME's idle monitor and calls
-  `org.pinenote.ebc.TriggerGlobalRefresh` once you have been still for 8 seconds.
+- **Idle refresh** — a small daemon that watches GNOME's idle monitor and clears the screen
+  once you have been still for 8 seconds. The clear itself is `pn-wave`'s complementary
+  dither rather than the stock flash; see *The clear you do not see*.
+- **The clear** — `extensions/pn-wave@cver.net` installed and enabled, and the kernel's own
+  `auto_refresh` turned off at the setting that actually owns it.
 - **The keyboard** — `extensions/pn-osk@cver.net` installed and enabled, with
   `pn-osk.example.json` dropped in as `~/.config/pn-osk.json` if you do not have
   one yet. An existing config is never overwritten.
@@ -177,6 +180,81 @@ Four things are worth knowing before you make your own:
 One quieter trap: dither against the 16 levels the buffer can actually hold (0, 17, ... 255).
 Dither to anything else and the encoder quantises a second time, undithered — which turns a
 carefully dithered gradient straight back into banding, after you already paid for it.
+
+## The clear you do not see
+
+A full clear on e-paper is a black-and-white flash: every pixel is driven to one rail and then
+the other, including the ones that did not change, because the point is to reset the particles
+rather than to redraw the image. It works, and on this panel it takes about a second.
+
+`extensions/pn-wave@cver.net` does the same work in a different order. Instead of sending the
+whole screen to black and then the whole screen to white, it lays down an ordered dither — half
+the pixels black, half white — holds it, and then swaps to the exact complement:
+
+```
+frame 1   Bayer 8x8 at 50%, held 700 ms
+frame 2   its complement,   held 700 ms
+```
+
+Every pixel still goes to both rails under GC16. Pixel for pixel it is the same treatment the
+stock flash gives. What changes is that the mean luminance of the screen never moves: it sits at
+mid grey for the whole 1.4 seconds. The discomfort of a flash comes from the entire visual field
+changing brightness at once, not from the clearing itself, and those two turn out to be
+separable. In use you stop noticing the clear happens at all — 32 of them fired in one evening
+here without the owner spotting one.
+
+`setup/idle-refresh.sh` calls it 8 seconds after you stop touching the screen. If the extension
+is not loaded the daemon says so in the journal and falls back to `TriggerGlobalRefresh`,
+because the one thing this daemon must never do is quietly clear nothing.
+
+### Hold each frame long enough or it stains
+
+GC16 is a DC-balanced pulse train. Interrupt it with a new target before it finishes and the
+residual charge stays on the pixel, which settles a few levels off. On this panel a black/white
+swing needs more than 500 ms; 700–900 ms is safe.
+
+That single fact explains every failed attempt that came before this one. Frames held for 220 ms
+or 500 ms left banding, and the banding always looked like a bug in whatever animation was being
+tried — wrong geometry, wrong dither, wrong stagger — because the parts of the screen that were
+truncated depended on how the work happened to land in frames. Four different theories, one
+cause. If an animated clear on this hardware leaves marks, suspect the hold time before
+suspecting the drawing.
+
+### The sweep that did not win
+
+`Sweep()` is still in the extension: it divides the screen into bands and runs a complete
+black/white/black/white clear in each one, staggered so the boundary travels across the display.
+It is closer to what a Kindle does, and it looks good.
+
+It is also slow, and slowness is not neutral. A band cannot start until the previous frame has
+finished, so a sweep costs `bands + stages − 1` frames — 6 frames for a coarse one, 20 for a fine
+one, which is 5 to 12 seconds. Filmed at 240 fps, a Paperwhite's page-turn wipe takes 0.167 s and
+resolves in roughly 40 slices; this panel manages one full swing in 450–700 ms. There is no
+parameter that closes that gap, and a clear slow enough to watch reads as weak hardware rather
+than as a considered animation.
+
+So the sweep stays available and is not the default:
+
+```sh
+gdbus call --session --dest net.cver.PnWave --object-path /net/cver/PnWave \
+  --method net.cver.PnWave.Sweep "{'bands': <int32 5>, 'cycles': <int32 1>, 'stepMs': <int32 900>}"
+```
+
+### auto_refresh has to be off, and pnhelper owns it
+
+The kernel can clear on its own: `auto_refresh` counts the area repainted and fires once it
+reaches `refresh_threshold` screenfuls. That path produces the stock flash, from inside the
+driver, where its appearance cannot be changed — so it has to be off for any of this to be
+visible.
+
+Turning it off in `/etc/modprobe.d` is not enough. `pnhelper` keeps its own copy of the setting
+and writes it back to the driver every time the shell starts, so a value set only in sysfs
+survives until the next `restart gdm3` and no longer. `setup.sh` sets the gsetting that actually
+owns it.
+
+The cost of that is real and worth stating: with the kernel's area counter off, nothing clears
+during continuous scrolling — the idle daemon needs you to stop for 8 seconds. Reading with
+natural pauses never notices. A long uninterrupted scroll will accumulate.
 
 ## The keyboard it types on
 

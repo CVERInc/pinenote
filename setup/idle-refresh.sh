@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Typing Mode 的行為核心：打字時不打斷你，停手才清殘影。
-# A2 負責打字順；停手 IDLE_MS 毫秒後用 GC16 徹底清一次。
+# A2 負責打字順；停手 IDLE_MS 毫秒後清一次。
+#
+# 2026-08-12：清除方式從「全螢幕黑白閃」換成**互補抖動**（pn-wave 擴充的 Clear）。
+#   一半像素翻黑、另一半翻白，下一格對調 ⇒ 每個像素都拿到完整的黑↔白擺盪
+#   （跟全閃逐像素等價），但畫面平均亮度全程停在中灰、從來沒有整片翻轉。
+#   不舒服來自整個視野一起改變亮度，不是來自清除本身。
+#   🔴 fallback 一定要留：擴充沒載入時得退回 TriggerGlobalRefresh，
+#      不然就變成「安靜地什麼都沒清」——這支歷史上已經那樣壞過一次。
 #
 # 🔴 這支曾經同時壞在兩個地方，而且都是安靜地壞（2026-07-23 才發現）：
 #
@@ -17,6 +24,24 @@ IDLE_MS=${1:-3000}
 dirty=0
 failing=0
 warned_parse=0
+used_fallback=0
+
+clear_screen() {
+  # 先試抖動清除；擴充不在就退回原廠全閃，並且**說出來**。
+  if out=$(gdbus call --session --dest net.cver.PnWave \
+             --object-path /net/cver/PnWave \
+             --method net.cver.PnWave.Clear "{}" 2>&1); then
+    [ "$used_fallback" -eq 1 ] && {
+      echo "idle-refresh: pn-wave 回來了，改用抖動清除" >&2; used_fallback=0; }
+    return 0
+  fi
+  if [ "$used_fallback" -eq 0 ]; then
+    echo "idle-refresh: pn-wave 叫不到（$out），退回全螢幕閃" >&2
+    used_fallback=1
+  fi
+  dbus-send --system --dest=org.pinenote.ebc /ebc \
+            org.pinenote.ebc.TriggerGlobalRefresh 2>&1
+}
 
 while true; do
   raw=$(gdbus call --session --dest org.gnome.Mutter.IdleMonitor \
@@ -38,12 +63,11 @@ while true; do
   [ "$idle" -lt 1000 ] && dirty=1
 
   if [ "$idle" -ge "$IDLE_MS" ] && [ "$dirty" -eq 1 ]; then
-    if err=$(dbus-send --system --dest=org.pinenote.ebc /ebc \
-               org.pinenote.ebc.TriggerGlobalRefresh 2>&1); then
-      [ "$failing" -eq 1 ] && { echo "idle-refresh: global refresh working again" >&2; failing=0; }
+    if err=$(clear_screen); then
+      [ "$failing" -eq 1 ] && { echo "idle-refresh: clearing works again" >&2; failing=0; }
       dirty=0
     elif [ "$failing" -eq 0 ]; then
-      echo "idle-refresh: TriggerGlobalRefresh failed — ghosting will NOT be cleared: $err" >&2
+      echo "idle-refresh: 清除失敗 — 殘影不會被清掉: $err" >&2
       echo "idle-refresh: check 'systemctl status pinenote-dbus-service'" >&2
       failing=1
     fi

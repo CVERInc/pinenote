@@ -18,6 +18,6 @@ set_p prepare_prev_before_a2 1 # A2 正確翻轉的必要開關
 # threshold 的單位是「整片螢幕的倍數」，對翻頁式閱讀約等於「幾頁洗一次」。
 # 原廠 20 是給 evince/xournalpp 那種一直重畫的 app 用的，翻頁閱讀要翻二十頁。
 # 4 是維護者實測選的（體感約三頁一次）。
-set_p auto_refresh 1
+set_p auto_refresh 0
 set_p refresh_threshold 4
 echo "typing-mode applied"

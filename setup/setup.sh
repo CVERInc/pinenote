@@ -64,7 +64,7 @@ D="$(cd "$(dirname "$0")" && pwd)"
 
 # runtime 的波形設定不持久，開機要靠 modprobe.d
 sudo tee /etc/modprobe.d/rockchip_ebc.conf >/dev/null <<'EOF'
-options rockchip_ebc bw_mode=1 default_waveform=1 refresh_waveform=4 auto_refresh=1 refresh_threshold=4 prepare_prev_before_a2=1
+options rockchip_ebc bw_mode=1 default_waveform=1 refresh_waveform=4 auto_refresh=0 refresh_threshold=4 prepare_prev_before_a2=1
 EOF
 
 mkdir -p "$HOME/.config/systemd/user"
@@ -313,3 +313,25 @@ install -m 0644 "$D/../extensions/pn-panel@cver.net/extension.js" \
 # 自製圖示。漏掉的話按鈕會是空白的，而空白按鈕看起來就是壞掉。
 install -m 0644 "$D/../extensions/pn-panel@cver.net/icons/"*.svg "$P/icons/"
 pn_enable_extension pn-panel@cver.net
+
+echo "== [16] pn-wave：把全螢幕閃換成互補抖動清除 =="
+# 清除量沒有變少，變的是分配：原廠讓所有像素同時翻黑再同時翻白；這個讓一半
+# 翻黑、一半翻白，下一格對調。逐像素的待遇一模一樣（同樣的 GC16 全擺盪），
+# 但畫面平均亮度全程停在中灰、一次都沒有整片翻轉——不舒服來自後者，不是前者。
+W="$HOME/.local/share/gnome-shell/extensions/pn-wave@cver.net"
+mkdir -p "$W"
+install -m 0644 "$D/../extensions/pn-wave@cver.net/extension.js" \
+                "$D/../extensions/pn-wave@cver.net/metadata.json" "$W/"
+pn_enable_extension pn-wave@cver.net
+
+# 🔴 核心的 auto_refresh 一定要關：它那條路徑產生的是原廠全閃，我們改不了它的樣子。
+#    而 auto_refresh 的**真正主人是 pnhelper** —— 值記在它自己的 gsetting，每次
+#    session 起來就拿記住的值覆寫驅動。只寫 sysfs 或只寫 modprobe.d 都活不過
+#    一次 shell 重載（實測：改完 D-Bus 值，restart gdm3 之後它就被打開回去）。
+PNH=/usr/share/gnome-shell/extensions/pnhelper@m-weigand.github.com/schemas
+if [ -d "$PNH" ]; then
+  gsettings --schemadir "$PNH" set org.gnome.shell.extensions.pnhelper auto-refresh false
+  echo "   -> pnhelper 的 auto-refresh 已設為 false（否則它會用全閃搶先開火）"
+else
+  echo "   -> 找不到 pnhelper schemas，跳過；auto_refresh 仍由 modprobe.d 關著" >&2
+fi

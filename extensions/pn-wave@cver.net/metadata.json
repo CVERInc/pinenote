@@ -1,0 +1,8 @@
+{
+  "uuid": "pn-wave@cver.net",
+  "name": "PineNote Wave",
+  "description": "Replaces the e-ink full-screen flash with a band that sweeps across the screen. Clearing ghosting only needs every pixel driven through one black-white swing; doing that as a moving front instead of all at once is the whole difference between a flash and a wave. Lives in the shell because a GTK window cannot be made transparent here - an undecorated GTK4 window carries .solid-csd, which paints an opaque background that no CSS override could remove, so the sweep was an invisible black band on a black sheet. A shell actor composites over the desktop with no window involved. Driven over D-Bus so the parameters can be tuned without restarting the session.",
+  "shell-version": ["48"],
+  "version": 1,
+  "session-modes": ["user"]
+}
