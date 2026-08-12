@@ -64,7 +64,7 @@ D="$(cd "$(dirname "$0")" && pwd)"
 
 # runtime 的波形設定不持久，開機要靠 modprobe.d
 sudo tee /etc/modprobe.d/rockchip_ebc.conf >/dev/null <<'EOF'
-options rockchip_ebc bw_mode=1 default_waveform=1 refresh_waveform=4 auto_refresh=0 prepare_prev_before_a2=1
+options rockchip_ebc bw_mode=1 default_waveform=1 refresh_waveform=4 auto_refresh=1 refresh_threshold=4 prepare_prev_before_a2=1
 EOF
 
 mkdir -p "$HOME/.config/systemd/user"
