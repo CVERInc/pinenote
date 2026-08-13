@@ -513,6 +513,52 @@ values and nothing else, bar 0.2% of pixels in the panel band that are still
 unexplained. Upstream's folder tile arrives as a `wash` plate with a `slate`
 hairline on `paper` — three values, none of them ours.
 
+## The agent it codes with
+
+`setup/claude-code-theme.py`. Terminal legibility above gets the terminal to
+pure black on pure white; a TUI running inside it then draws its own colours
+over the top, and Claude Code has around sixty tokens to draw them with.
+
+Sixty is the whole problem. Setting them by hand through its `/theme` picker is
+a job nobody finishes — the version this replaced had three set, one of which
+was `background`, not a token it defines, silently ignored since the day it was
+written. So the script keeps one table mapping Claude Code's token names to the
+six values, and derives the rest. Change a role, regenerate, never hand-edit
+the JSON it writes.
+
+Two of its rules are about this panel rather than about contrast:
+
+| | |
+|---|---|
+| Every `*Shimmer` token equals its own base | Shimmer is the lighter half of an animated gradient — the spinner, and the seven-colour ramp behind `ultrathink`. Setting the pair equal stops the repaint without disabling anything; the spinner still spins. This is the same flash the rest of the repo exists to remove, arriving one layer up. |
+| Context lines in a diff get no plate | `paper`, not a tint. An unpainted line is one less area for the driver to accumulate. |
+
+Where the six values run out is the diff. Added and removed have no hue to tell
+them apart and cannot both be faint, so they are staggered a step — `wash` and
+`shadow`, with word-level highlights one step darker again — and the `+`/`-`
+gutter carries the rest. That is a real limit of drawing in one dimension, not
+a setting to tune.
+
+`--check` audits the result: contrast against `paper` for anything that draws a
+mark, ink-on-plate for anything that fills one, and whether every value is one
+of the six. Borders and the repeating speaker labels are judged at 3:1 rather
+than 4.5:1, since none of them is prose.
+
+Claude Code reads `$CLAUDE_CONFIG_DIR`, falling back to `~/.claude`, and
+watches `themes/` — so a write lands in a running session, unless that
+directory did not exist when the session started, which needs one restart.
+Install it wherever Claude Code actually runs, which is not always this device:
+driving it over SSH from the PineNote puts the theme on the far machine, while
+the panel it has to be legible on is still this one.
+
+```sh
+python3 setup/claude-code-theme.py           # then pick "PineNote" in /theme
+python3 setup/claude-code-theme.py --check
+```
+
+It is deliberately outside `bootstrap.sh`. Everything that script installs is
+about the device; this is about one program you may not run.
+
 ## The panel it taps
 
 `extensions/pn-panel@cver.net`. It began inside the keyboard extension and was
