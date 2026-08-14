@@ -140,6 +140,15 @@ ROLES = {
     # put #aaa at the edge of legible. Nothing observed suggests it is painted
     # on a dark ground anyway — prose reads fine there while every other #000
     # token vanished — so the trade is being declined rather than lost.
+    # 🔴 text paints the message you just sent, and it stays at ink because of
+    # the plate under it, not in spite of the ground. A plate is a local
+    # background: light on paper and light on a dark terminal alike, so ink on
+    # it is 15:1 either way and none of the both-grounds arithmetic applies.
+    #
+    # This was briefly moved to slate on the theory that a #000 prompt vanished
+    # on a dark ground. It never did — the invisible text reported that evening
+    # was the spinner, which is `claude` and was also #000 at the time. Check
+    # what a token actually sits on before pricing it against the terminal.
     "text": INK,
     # The mascot is a plate, not prose: tens of pixels across, so shadow holds
     # up on the panel where the legibility card said #aaa was marginal — that
@@ -196,8 +205,17 @@ DIFF = {
 # black-and-white mode, which is why it is used for areas here and never for a
 # hairline.
 SURFACES = {
-    "userMessageBackground": WASH,
-    "userMessageBackgroundHover": SHADOW,
+    # 🔴 Not paper. "No plate" is not expressible as a colour: paper means the
+    # ground only on a device whose ground is white, and on a dark terminal the
+    # same value is a glaring white band. Wash is a plate on both.
+    # Shadow rather than wash: a plate reads as glare on a dark terminal long
+    # before it reads as faint on paper, and ink on it is still 9:1. The cost
+    # is a more visible band on the panel and one more area to accumulate.
+    "userMessageBackground": SHADOW,
+    # One step below the plate it lifts off, since the plate itself moved down.
+    # Same value for both means hover does nothing, which is a state that
+    # exists but cannot be seen — the failure this repo keeps meeting.
+    "userMessageBackgroundHover": SLATE,
     "bashMessageBackgroundColor": WASH,
     "memoryBackgroundColor": WASH,
     "selectionBg": SHADOW,
