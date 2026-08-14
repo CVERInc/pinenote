@@ -42,6 +42,23 @@ gsettings set "$T" background-color "rgb(255,255,255)"
 gsettings set "$T" audible-bell false
 gsettings set "$T" scrollback-lines 100000
 
+# 16 色 ANSI 調色盤：全部純黑，只留 bright-white 當白。
+# 🔴 為什麼不是「調成好看的灰階」：這台跑 bw_mode=1，面板只有兩階，任何中間灰
+#    都會被抖成網點，小字的筆畫因此散掉。GNOME 預設的第 7 格是 #d0cfcc，而很多
+#    TUI（含 Claude Code 的 light 主題）拿第 7 格當「次要文字」——在白底上那等於
+#    看不見。實測：只換這一格以外的顏色沒有用，換了它整個畫面才讀得出來。
+# 🔴 第 7 格必須是黑的：它在白底終端機裡被當前景用。設成白色會讓半個畫面消失
+#    （試過，畫面上只剩標題列）。留白的只有 15（深色底上的白字，例如反白標頭）。
+# 代價：編輯器的語法上色在這台上會全部變黑。1-bit 螢幕本來就承載不了那個資訊。
+# 捲軸關掉：它在右邊佔掉約 50px，而左邊沒有對應的留白——畫面因此看起來偏左。
+# 量出來的：文字左緣在第 2px，右緣停在 x≈1819，右邊空著 52px。
+# 電子紙上捲軸既用不到（用鍵盤或觸控捲）又會跟著內容一起留殘影。
+gsettings set "$T" scrollbar-policy never
+gsettings set "$T" bold-is-bright false
+gsettings set "$T" palette "['#000000', '#000000', '#000000', '#000000', \
+'#000000', '#000000', '#000000', '#000000', '#000000', '#000000', '#000000', \
+'#000000', '#000000', '#000000', '#000000', '#FFFFFF']"
+
 echo "== [4] apt 地基：hold 住 GNOME shell/mutter（真正的理由是不跑 full-upgrade）=="
 # 🔴 歸因更正（2026-08-01）：這裡以前寫「GNOME 48 有開機災難」，那是錯的。
 #    手上唯一的證據是上游 PNDeb/pinenote-debian-image#89 "Cannot boot after update"，
