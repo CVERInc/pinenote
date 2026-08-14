@@ -51,6 +51,14 @@ const IFACE = `
       <arg type="a{sv}" name="params" direction="in"/>
       <arg type="s"     name="result" direction="out"/>
     </method>
+    <method name="Probe">
+      <arg type="a{sv}" name="params" direction="in"/>
+      <arg type="s"     name="result" direction="out"/>
+    </method>
+    <method name="Mark">
+      <arg type="a{sv}" name="params" direction="in"/>
+      <arg type="s"     name="result" direction="out"/>
+    </method>
     <method name="Geometry">
       <arg type="s" name="json" direction="out"/>
     </method>
@@ -118,6 +126,8 @@ export default class PnWaveExtension extends Extension {
 
     disable() {
         this._teardown();
+        this._mark?.destroy();   // 留在畫面上的標籤會活過 disable，變成撿不回來的殘留
+        this._mark = null;
         if (this._nameId) {
             Gio.bus_unown_name(this._nameId);
             this._nameId = null;
@@ -230,6 +240,126 @@ export default class PnWaveExtension extends Extension {
         cr.fill();
         cr.$dispose();
         this._painted++;
+    }
+
+    /* 察覺門檻用的探針：把 density% 的黑點**疊在現有畫面上**（其餘透明，
+     * 不是換成白底），停 holdMs 後收掉。density=0 是假試驗——一樣建立/銷毀
+     * actor、一樣等同樣久，只是不畫東西，好讓盲測沒有時序線索。
+     *
+     * 為什麼要量這個：讓清除看不見的條件是「每格的亮度變化低於察覺門檻」，
+     * 而亮度變化 ≈ 覆蓋率 × (頁面亮度 − 黑)。覆蓋率的上限是**他的**門檻決定的，
+     * 不是我算得出來的，所以只能量。
+     */
+    _probeTile(grain, level) {
+        const key = `p${grain}:${level}`;
+        this._tiles ??= new Map();
+        if (this._tiles.has(key))
+            return this._tiles.get(key);
+        const m = bayer(grain);
+        const surf = new Cairo.ImageSurface(Cairo.Format.ARGB32, grain, grain);
+        const cr = new Cairo.Context(surf);
+        cr.setOperator(Cairo.Operator.SOURCE);
+        cr.setSourceRGBA(0, 0, 0, 0);          // 透明底＝底下的內容留著
+        cr.paint();
+        cr.setSourceRGBA(0, 0, 0, 1);
+        for (let y = 0; y < grain; y++) {
+            for (let x = 0; x < grain; x++) {
+                if (m[y][x] < level)
+                    cr.rectangle(x, y, 1, 1);
+            }
+        }
+        cr.fill();
+        cr.$dispose();
+        const pat = new Cairo.SurfacePattern(surf);
+        pat.setExtend(Cairo.Extend.REPEAT);
+        pat.setFilter(Cairo.Filter.NEAREST);
+        this._tiles.set(key, pat);
+        return pat;
+    }
+
+    /* Mark(n) ＝ 螢幕角落的小小試驗編號。
+     *
+     * 🩸 第一版盲測的編號印在 Mac 終端機上，而受試者得盯著 PineNote——
+     *    他因此答得出「12 次裡看到 7 次」，卻答不出是哪 7 次。
+     *    儀器要求受試者同時看兩個螢幕，那是我的設計缺陷，不是他的問題。
+     * 標籤刻意做小且固定在角落：更新面積小、位置遠離判斷區，
+     * 不會跟「整片有沒有變暗」這個判斷互相汙染。
+     */
+    Mark(params) {
+        const p = {n: 0, ...Object.fromEntries(Object.entries(params ?? {})
+            .map(([k, v]) => [k, v.deep_unpack ? v.deep_unpack() : v]))};
+        this._mark?.destroy();
+        this._mark = null;
+        if (!p.n)
+            return JSON.stringify({mark: 0});
+        const m = Main.layoutManager.primaryMonitor;
+        this._mark = new St.Label({
+            text: `${p.n}`,
+            reactive: false,
+            style: 'font-size: 34px; font-weight: bold; color: #000; '
+                 + 'background-color: #fff; padding: 2px 12px;',
+        });
+        Main.layoutManager.uiGroup.add_child(this._mark);
+        this._mark.set_position(m.x + 8, m.y + 8);
+        Main.layoutManager.uiGroup.set_child_above_sibling(this._mark, null);
+        return JSON.stringify({mark: p.n});
+    }
+
+    Probe(params) {
+        if (this._busy)
+            return JSON.stringify({error: 'busy'});
+
+        const p = {density: 50, holdMs: 700, grain: 8, waveform: 4,
+                   ...Object.fromEntries(Object.entries(params ?? {})
+                       .map(([k, v]) => [k, v.deep_unpack ? v.deep_unpack() : v]))};
+        if (p.grain & (p.grain - 1))
+            return JSON.stringify({error: `grain must be a power of two, got ${p.grain}`});
+
+        const levels = p.grain * p.grain;
+        const level = Math.round(p.density / 100 * levels);
+        this._busy = true;
+        this._prevWaveform = p.waveform ? this._getByte('GetDefaultWaveform') : null;
+        this._prevAuto = this._getByte('GetAutoRefresh');
+        this._restoreAuto = !!this._prevAuto;
+        if (p.waveform)
+            this._ebc('SetDefaultWaveform', new GLib.Variant('(y)', [p.waveform]));
+        if (this._prevAuto)
+            this._ebc('SetAutoRefresh', new GLib.Variant('(b)', [false]));
+
+        // 假試驗也要建 actor、也要等一樣久：時序不能洩漏答案
+        if (level > 0) {
+            const m = Main.layoutManager.primaryMonitor;
+            this._area = new St.DrawingArea({reactive: false, width: m.width, height: m.height});
+            this._area.connect('repaint', a => {
+                const cr = a.get_context();
+                const [w, h] = a.get_surface_size();
+                cr.setOperator(Cairo.Operator.SOURCE);
+                cr.setSourceRGBA(0, 0, 0, 0);
+                cr.paint();
+                cr.setOperator(Cairo.Operator.OVER);
+                cr.setSource(this._probeTile(p.grain, level));
+                cr.rectangle(0, 0, w, h);
+                cr.fill();
+                cr.$dispose();
+                this._painted++;
+            });
+            Main.layoutManager.uiGroup.add_child(this._area);
+            this._area.set_position(m.x, m.y);
+            Main.layoutManager.uiGroup.set_child_above_sibling(this._area, null);
+        }
+        this._painted = 0;
+        this._t0 = GLib.get_monotonic_time();
+        this._timer = GLib.timeout_add(GLib.PRIORITY_DEFAULT, p.holdMs, () => {
+            this._elapsed = (GLib.get_monotonic_time() - this._t0) / 1000;
+            this._timer = null;
+            this._teardown();
+            return GLib.SOURCE_REMOVE;
+        });
+        // 覆蓋率換算成亮度變化：白約 40% 反射率、黑約 5%
+        const drop = (level / levels) * (0.40 - 0.05) / 0.40 * 100;
+        return JSON.stringify({mode: 'probe', density: p.density, level, levels,
+                               holdMs: p.holdMs, sham: level === 0,
+                               estLumaDropPct: +drop.toFixed(1)});
     }
 
     Clear(params) {

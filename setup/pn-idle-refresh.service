@@ -3,7 +3,7 @@ Description=PineNote idle refresh (停手才清殘影)
 After=graphical-session.target
 [Service]
 Type=simple
-ExecStart=%h/pinenote/setup/idle-refresh.sh 8000
+ExecStart=%h/pinenote/setup/idle-refresh.sh 99999 90000 1500
 Restart=on-failure
 [Install]
 WantedBy=graphical-session.target
