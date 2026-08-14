@@ -141,7 +141,10 @@ ROLES = {
     # on a dark ground anyway — prose reads fine there while every other #000
     # token vanished — so the trade is being declined rather than lost.
     "text": INK,
-    "claude": tint("amber", SLATE),
+    # The mascot is a plate, not prose: tens of pixels across, so shadow holds
+    # up on the panel where the legibility card said #aaa was marginal — that
+    # finding was about strokes one or two pixels wide, not about blocks.
+    "claude": tint("amber", SHADOW),
     "inverseText": PAPER,
     "inactive": tint("olive", SLATE),
     "subtle": tint("teal", SLATE),
