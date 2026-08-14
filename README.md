@@ -515,7 +515,7 @@ hairline on `paper` — three values, none of them ours.
 
 ## The agent it codes with
 
-`setup/claude-code-theme.py`. Terminal legibility above gets the terminal to
+`setup/claude-code-theme.py`, which writes a theme called **Lumalock** — its luma is locked to this panel's grid while its hue is left free for the screens that have one. Terminal legibility above gets the terminal to
 pure black on pure white; a TUI running inside it then draws its own colours
 over the top, and Claude Code has around sixty tokens to draw them with.
 
@@ -551,8 +551,54 @@ Install it wherever Claude Code actually runs, which is not always this device:
 driving it over SSH from the PineNote puts the theme on the far machine, while
 the panel it has to be legible on is still this one.
 
+
+### Hue, locked to those values
+
+The six values are what this panel can draw. They were never what a colour
+screen had to be told, and the session driving Claude Code usually runs on one:
+over ssh the theme lives on the far machine while the panel it has to be legible
+on is this one. So the table no longer stores greys. It stores a hue and a
+level, and `tint()` solves for the colour that sits at exactly that level.
+
+A colour and a grey of the same luma flatten to the same grey here. Hue is
+therefore free on the machines that have it and costs nothing on the one that
+does not — which buys back the sacrifice the previous table had to make:
+
+> Grey cannot carry red-versus-green, so success and error both go to ink and
+> let their own wording say which it is.
+
+Success, error and warning now sit at green, red and amber, all three at sunk's
+level. The panel still gets one grey for all three. Nothing about this device
+changed; the other screens stopped being punished for it.
+
+**Two quantities, and picking the wrong one puts a value on the wrong step.**
+`luminance()` is WCAG relative luminance, gamma-decoded, and answers whether a
+value is readable — that is the contrast audit and it is unchanged. Flattening a
+frame is a weighted sum of the gamma-encoded bytes, which is `luma()`. Rec.601
+and Rec.709 disagree about the weights, so `tint()` solves against 601 and
+`--check` prints both: a value is only accepted when the two agree on which step
+it lands on, which means the driver's actual choice does not have to be known.
+
+Where a level admits no hue, none is invented. Ink is luma zero and a colour at
+luma zero is black, so body text, borders and the first of every three subagent
+labels stay grey rather than pretending otherwise. The shimmer pairs and the
+`ultrathink` rainbow also stay flattened: those are animations, and giving them
+hue at a constant luma would only be safe if the driver diffed on luma rather
+than on pixels, which is not known to be true. The subagent labels are static,
+so all eight get one.
+
+Two of the six carry no text at all, which a legibility card on the panel
+confirmed: `#ddd` is unreadable as text in black-and-white mode and `#aaa` is
+marginal. Both are only ever plates — beds, diff backgrounds, the empty half of
+the rate meter — so the finding costs nothing. It does bound the text levels to
+four, and every hued role above is inside that bound.
+
+⚠️ Arithmetic, not photography. No value here has been measured off the glass.
+If a hue reads as the wrong step in use, suspect the driver's weights before the
+role table.
+
 ```sh
-python3 setup/claude-code-theme.py           # then pick "PineNote" in /theme
+python3 setup/claude-code-theme.py           # then pick "Lumalock" in /theme
 python3 setup/claude-code-theme.py --check
 ```
 
