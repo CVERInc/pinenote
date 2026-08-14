@@ -2,8 +2,13 @@
 # PineNote 打字模式：A2 打字不閃 + 兩個正交的清除觸發器
 P=/sys/module/rockchip_ebc/parameters
 set_p(){ echo "$2" | sudo tee "$P/$1" >/dev/null; }
-set_p bw_mode 1                # BW+Dither：icon 保留層次
-set_p default_waveform 1       # A2：打字不閃 ← GUI 選單給不了的關鍵
+# 🔴 bw_mode 和 default_waveform 刻意**不**在這裡設。
+#
+# 它們的主人是面板上那顆色調按鈕（值記在 pnhelper 的 gsetting，登入時套用）。
+# 這裡再寫一次會變成兩個東西在同一刻搶同兩個參數，誰後跑誰贏——實測過一次
+# 「灰階活過重開機」，但那是競態贏的不是設計贏的，下一次不保證。
+# 開機初值由 /etc/modprobe.d/rockchip_ebc.conf 給；A2 與 GC16 的配對上游的
+# _change_bw_mode 本來就會做。
 set_p refresh_waveform 4       # GC16：清除時用，醜但清得乾淨
 set_p prepare_prev_before_a2 1 # A2 正確翻轉的必要開關
 

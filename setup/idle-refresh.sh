@@ -33,8 +33,20 @@ failing=0
 warned_parse=0
 used_fallback=0
 soft_hits=0
+in_grey=0
 
 now_ms() { date +%s%3N; }
+
+# 灰階模式（bw_mode=0）底下不需要我們清。
+#
+# 那顆色調按鈕切的不只是色調：它會連帶把預設波形換成 GC16，而 GC16 是完整的重置
+# 波形——於是**每一次畫面更新本身就是一次清除**，殘影根本疊不起來。在那個模式下
+# 再插一個看得見的 1.4 秒抖動清除，是在清一個已經乾淨的螢幕。
+# 黑白模式用 A2：快又安靜，但會累積，那才是這支存在的理由。
+#
+# 讀 sysfs 而不是 D-Bus：每秒一次，要便宜。
+GREY_ONLY_PARAM=/sys/module/rockchip_ebc/parameters/bw_mode
+greyscale() { [ "$(cat "$GREY_ONLY_PARAM" 2>/dev/null)" = "0" ]; }
 
 # 決策抽成純函式，才驗得到——這支的兩個歷史缺陷都是「分支從來沒被走過」。
 # 回傳：0=不清 1=一般停頓 2=久沒清了，接受短停頓
@@ -98,6 +110,19 @@ while true; do
   [ "$warned_parse" -eq 1 ] && { echo "idle-refresh: idle time readable again" >&2; warned_parse=0; }
 
   [ "$idle" -lt 1000 ] && dirty=1
+
+  # 色調按鈕按下去的那一刻，維護策略跟著換。出聲一次，不洗版——不然這條守衛
+  # 一旦哪天讀錯了參數，症狀會是「清除安靜地停掉」，而那正是這支歷史上壞過的樣子。
+  if greyscale; then
+    [ "$in_grey" -eq 0 ] && {
+      echo "idle-refresh: 灰階模式（GC16 每次更新都在自清）→ 暫停清除" >&2; in_grey=1; }
+    dirty=0
+    last_clear=$(now_ms)
+    sleep 1
+    continue
+  fi
+  [ "$in_grey" -eq 1 ] && {
+    echo "idle-refresh: 回到黑白模式（A2 會累積）→ 恢復清除" >&2; in_grey=0; }
 
   stale=$(( $(now_ms) - last_clear ))
   why=$(decide "$dirty" "$idle" "$stale")

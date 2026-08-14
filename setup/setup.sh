@@ -54,6 +54,31 @@ gsettings set "$T" scrollback-lines 100000
 # 量出來的：文字左緣在第 2px，右緣停在 x≈1819，右邊空著 52px。
 # 電子紙上捲軸既用不到（用鍵盤或觸控捲）又會跟著內容一起留殘影。
 gsettings set "$T" scrollbar-policy never
+
+# 左右留白。終端機只顯示整數欄，除不盡的餘數全部空在右邊：這台是 936 邏輯 px
+# ÷ 84 欄、每格 11.14px，84 欄用掉 924，剩 12px（24 實體 px）堆在右緣，於是整個
+# 畫面看起來偏左。量到的是左 2px、右 20px。把餘數分一半到左邊就對稱了，而且不
+# 損失任何一欄——那些像素本來就沒人用。
+#
+# 🔴 GTK 只在啟動時讀 gtk.css，而 gnome-terminal 的所有視窗共用一個 server，
+#    所以這一步要等終端機整個重啟才看得到（重開機也算）。
+# 🔴 既有的 gtk.css 絕不覆寫：那是使用者自己的檔案，我們只追加自己那一段，
+#    而且用標記判斷有沒有加過。
+GTKCSS="$HOME/.config/gtk-3.0/gtk.css"
+mkdir -p "$(dirname "$GTKCSS")"
+if [ -f "$GTKCSS" ] && grep -q "pinenote:terminal-padding" "$GTKCSS"; then
+  echo "   -> gtk.css 已有終端機留白，保留"
+else
+  cat >> "$GTKCSS" <<'PNCSS'
+
+/* pinenote:terminal-padding — see setup/setup.sh [3] */
+vte-terminal {
+  padding-left: 6px;
+  padding-right: 6px;
+}
+PNCSS
+  echo "   -> 已加終端機留白（要重啟終端機才生效）"
+fi
 gsettings set "$T" bold-is-bright false
 gsettings set "$T" palette "['#000000', '#000000', '#000000', '#000000', \
 '#000000', '#000000', '#000000', '#000000', '#000000', '#000000', '#000000', \
