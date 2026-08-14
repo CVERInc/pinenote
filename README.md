@@ -593,6 +593,52 @@ marginal. Both are only ever plates — beds, diff backgrounds, the empty half o
 the rate meter — so the finding costs nothing. It does bound the text levels to
 four, and every hued role above is inside that bound.
 
+**Two grounds, deliberately not reconciled.** A theme has a base; the terminal
+it is viewed from has a background, and here they do not agree. This session is
+driven from a white-ground terminal on the panel and a dark-ground one on a
+colour machine, and the same escape codes are painted onto both — a theme
+setting lives on the session, but the background lives with whoever is looking.
+
+There is no single answer for both. Anything readable against black and white
+at once has to sit in the middle of the range, and the middle is exactly what a
+one-bit panel cannot hold as text. So each ground keeps its own settings and the
+theme is judged against both: the mid-level roles clear 4:1 either way, the
+extremes lean toward the ground they were chosen for, and `--check` prints both
+columns so a role that fails everywhere is visible.
+
+Reading the theme on a dark terminal settled where the usable band actually is,
+and it is narrower than the six values suggest. Ink is gone there — 1:1 — and so
+is sunk at 1.7:1 even carrying a hue, which reads on the swatch as "visible but
+strained". Only slate and above survive both grounds, and only for the cooler
+hues: blue 4.02:1 on paper, violet 4.25, pink 4.10, olive 3.87, amber 3.99,
+while red, green and teal fall under 4 there. Every role that draws a mark now
+sits inside that finding.
+
+`text` is the one exception and it does not move. At slate it would be 4.48:1 on
+paper against ink's 21, and the panel's own legibility card already put #aaa at
+the edge — moving prose costs the device this repo exists for. Nothing observed
+suggests it is painted on a dark ground anyway: prose reads fine there while
+every other #000 token vanished from the swatch. The trade is being declined,
+not overlooked.
+
+The `ultrathink` rainbow is still flattened, but no longer to ink. What stops
+the repaint is that all fourteen tokens are equal — the gradient has no
+frame-to-frame difference left to draw — and which value they share was never
+load-bearing. It is one value from the band that survives both grounds, so the
+element is back on screen with the repaint still stopped.
+
+`--swatch` exists because the audit cannot answer this. Contrast is computed
+against an assumed background; the swatch paints every token in its own value
+and asks the terminal actually in front of you. A row missing its coloured half
+is a token that cannot be seen there, which is how each of the above was found.
+
+That is also why no mid-level role is a neutral grey any more. Slate at #777
+measures 4.48:1 on paper and 4.69:1 on ink and still vanishes on a dark
+terminal: a neutral has only lightness to offer, and lightness alone is not
+enough at that level. A hue at the same luma reads on both and the panel still
+flattens it to the same grey, which costs this device nothing. Ink and paper
+stay neutral because at those levels there is no hue to have.
+
 ⚠️ Arithmetic, not photography. No value here has been measured off the glass.
 If a hue reads as the wrong step in use, suspect the driver's weights before the
 role table.

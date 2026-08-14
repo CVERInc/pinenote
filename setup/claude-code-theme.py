@@ -124,35 +124,55 @@ def tint(hue, step):
 ROLES = {
     # Text and accent. On paper there is nothing brighter than ink to make an
     # accent out of, so hierarchy is built by receding, never by standing out.
+    #
+    # 🔴 Which way "receding" points depends on the ground, and this session is
+    # read from both: sunk recedes on paper and disappears on a dark terminal,
+    # at 1.7:1. Nothing sits below both grounds, so anything that has to survive
+    # both lives at slate with a hue — measured, that band is the only one that
+    # clears roughly 4:1 either way, and only for the cooler hues (blue 4.02,
+    # violet 4.25, pink 4.10, olive 3.87, amber 3.99; red, green and teal fall
+    # under 4 on paper). Everything below is placed inside that finding.
+    # 🔴 text stays at ink and is the one role that does not move.
+    # Everything else that draws a mark went to slate once the dark ground
+    # proved that #000 and #333 are both gone there. Body prose is the
+    # exception because moving it costs the device this repo is for: at slate
+    # it is 4.48:1 on paper against ink's 21, and the panel's own measurement
+    # put #aaa at the edge of legible. Nothing observed suggests it is painted
+    # on a dark ground anyway — prose reads fine there while every other #000
+    # token vanished — so the trade is being declined rather than lost.
     "text": INK,
-    "claude": INK,
+    "claude": tint("amber", SLATE),
     "inverseText": PAPER,
-    "inactive": SUNK,
-    "subtle": SLATE,
-    "suggestion": INK,
-    "permission": INK,
-    "remember": SUNK,
+    "inactive": tint("olive", SLATE),
+    "subtle": tint("teal", SLATE),
+    "suggestion": tint("blue", SLATE),
+    "permission": tint("red", SLATE),
+    "remember": tint("violet", SLATE),
     # Status. This is where the hue lock pays for itself. These three used to be
     # ink and sunk with their wording left to say which was which, because grey
     # cannot carry red-versus-green. Held at sunk's luma they still cannot — the
     # panel gets one grey for all three, exactly as before — while a colour
     # screen gets the distinction back for nothing.
-    "success": tint("green", SUNK),
-    "error": tint("red", SUNK),
-    "warning": tint("amber", SUNK),
+    "success": tint("green", SLATE),
+    "error": tint("red", SLATE),
+    "warning": tint("amber", SLATE),
     "merged": tint("violet", SLATE),
     # Input box and mode indicators. These are separators and borders, which is
-    # what slate is for.
-    "promptBorder": SLATE,
-    "planMode": INK,
-    "autoAccept": tint("teal", SUNK),
-    "bashBorder": INK,
+    # what slate is for — but slate as a neutral grey has only lightness to
+    # offer, and on a dark terminal that is not enough even at 4.69:1. Every
+    # mid-level role therefore carries a hue: same luma, same grey on the panel,
+    # one more channel everywhere else. Ink and paper stay neutral because at
+    # those levels there is no hue to have.
+    "promptBorder": tint("olive", SLATE),
+    "planMode": tint("violet", SLATE),
+    "autoAccept": tint("pink", SLATE),
+    "bashBorder": tint("teal", SLATE),
     "ide": tint("blue", SLATE),
-    "fastMode": tint("amber", SUNK),
+    "fastMode": tint("amber", SLATE),
     # Speaker labels and the usage meter
-    "briefLabelYou": SLATE,
-    "briefLabelClaude": INK,
-    "rate_limit_fill": SUNK,
+    "briefLabelYou": tint("pink", SLATE),
+    "briefLabelClaude": tint("amber", SLATE),
+    "rate_limit_fill": tint("blue", SLATE),
     "rate_limit_empty": WASH,
 }
 
@@ -192,7 +212,7 @@ SHIMMER_PAIRS = ["claude", "warning", "permission", "promptBorder", "inactive",
 # apart on a screen that has hues, and the rotation still decides what the
 # panel sees. These are static labels, not an animation, so unlike the shimmer
 # pairs and the rainbow below there is no repaint to buy back.
-SUBAGENT_CYCLE = [INK, SUNK, SLATE]
+SUBAGENT_CYCLE = [SLATE, SHADOW, SLATE]
 SUBAGENT_HUES = ["red", "blue", "green", "amber",
                  "violet", "olive", "pink", "teal"]
 SUBAGENT_COLORS = ["red", "blue", "green", "yellow",
@@ -222,12 +242,21 @@ def build():
     for i, name in enumerate(SUBAGENT_COLORS):
         step = SUBAGENT_CYCLE[i % len(SUBAGENT_CYCLE)]
         hue = SUBAGENT_HUES[i % len(SUBAGENT_HUES)]
-        # Ink has no hue to give — a colour at luma 0 is black — so the first of
-        # every three stays grey rather than pretending otherwise.
-        ov[f"{name}_FOR_SUBAGENTS_ONLY"] = step if step == INK else tint(hue, step)
+        # The cycle used to start at ink, which the dark ground showed is not a
+        # colour at all there. Slate and shadow both survive either ground, so
+        # the panel still gets two levels to tell neighbours apart and the
+        # colour screens get all eight hues.
+        ov[f"{name}_FOR_SUBAGENTS_ONLY"] = tint(hue, step)
+    # Flattened, but not to ink. What stops the repaint is that all seven and
+    # their shimmers are equal — the gradient has no frame-to-frame difference
+    # left to draw — and which value they share was never load-bearing. Ink was
+    # the most legible choice on paper and the least on a dark terminal, where
+    # the whole element disappeared. One value from the band that survives both
+    # keeps the repaint stopped and puts it back on screen.
+    flat = tint("violet", SLATE)
     for name in RAINBOW:
-        ov[f"rainbow_{name}"] = INK
-        ov[f"rainbow_{name}_shimmer"] = INK
+        ov[f"rainbow_{name}"] = flat
+        ov[f"rainbow_{name}_shimmer"] = flat
     return {"name": "Lumalock", "base": "light", "overrides": ov}
 
 
@@ -298,6 +327,28 @@ def check(theme):
                 if ratio >= floor else f"  ✗ under {floor}:1"
         print(f"{token:32} {value:7} {ratio:8.2f}:1{note}")
 
+    # A theme has a base; the terminal it is viewed from has a background, and
+    # the two need not agree. This session is driven from both a white-ground
+    # terminal on the panel and a dark-ground one on a colour machine, so every
+    # role is judged against both. They are deliberately not reconciled — see
+    # the README — but a role that fails both grounds is broken everywhere.
+    print(f"\n{'token':32} {'value':9} {'paper':>7} {'ink gnd':>8}  neutral")
+    for token in sorted(ROLES):
+        if token == "inverseText" or token in DECORATIVE:
+            continue
+        v = theme["overrides"][token]
+        h = v.lstrip("#")
+        h = "".join(c * 2 for c in h) if len(h) == 3 else h
+        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+        neutral = max(r, g, b) - min(r, g, b) < 12
+        on_w, on_k = contrast(v, PAPER), contrast(v, INK)
+        # A neutral has only lightness to offer. At the mid levels that reads as
+        # 4.5:1 on both grounds and still disappears on the dark one, which is
+        # the whole reason the mid roles carry hue.
+        mark = "  ← neutral mid, give it a hue" if neutral and 2 < min(on_w, on_k) < 6 else ""
+        if min(on_w, on_k) < 3 or mark:
+            print(f"{token:32} {v:9} {on_w:6.2f}:1 {on_k:6.2f}:1{mark}")
+
     print(f"\n{'plate':32} {'value':7} {'ink on it':>9}")
     for token, value in {**DIFF, **SURFACES}.items():
         ratio = contrast(INK, value)
@@ -329,9 +380,31 @@ def check(theme):
           "yes" if not bad else f"no — {bad} value(s) off")
 
 
+def swatch(theme):
+    """Every token painted in its own value, on whatever ground you are reading.
+
+    Contrast numbers are computed against an assumed background; this is the
+    same question asked of the terminal actually in front of you. A row whose
+    right half is missing is a token that cannot be seen here — which is not
+    something the audit can tell you, because the audit does not know which
+    ground you are on.
+    """
+    ov = theme["overrides"]
+    print("\n  token                          value      ← painted in it →\n")
+    for token in sorted(ov):
+        v = ov[token]
+        h = v.lstrip("#")
+        h = "".join(c * 2 for c in h) if len(h) == 3 else h
+        r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+        print(f"  {token:30} {v:9}  \033[38;2;{r};{g};{b}m{token}\033[0m")
+    print("\n  Any row missing its coloured half is invisible on this ground.\n")
+
+
 if __name__ == "__main__":
     theme = build()
-    if "--check" in sys.argv:
+    if "--swatch" in sys.argv:
+        swatch(theme)
+    elif "--check" in sys.argv:
         check(theme)
     elif "--stdout" in sys.argv:
         print(json.dumps(theme, indent=2))
