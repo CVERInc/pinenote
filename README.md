@@ -608,10 +608,44 @@ the first version scored `inverseText` as broken, which is the one token in the
 file that is never painted on the ground at all. A token is only broken against
 the surface it is actually painted on.
 
-⚠️ That is arithmetic against a palette file, not photography. `--swatch`
-is the other half: it paints every token in its own slot and asks the terminal
-actually in front of you, which with an ANSI theme is the only thing that
-decides. A row you cannot read is a row that device cannot show.
+That is arithmetic against a palette file, not photography. `--swatch` is the
+other half: it paints every token in its own slot and asks the terminal actually
+in front of you, which with an ANSI theme is the only thing that decides. A row
+you cannot read is a row that device cannot show.
+
+### What the glass said
+
+Photographed on 2026-08-15, through the panel's own D-Bus capture, on a session
+that was already running rather than one launched to be photographed. Body text,
+prompt border, mode line and the message that had just been sent all came out
+black on paper with no plate under any of them — which is what the table above
+predicts and is worth exactly as much as any prediction that is finally checked.
+
+The thing the audit could not have told us was at the bottom of the screen.
+Before the palette changed, the last row was a solid black band with nothing on
+it. It is not Claude Code's: it is **tmux's status line**, whose foreground is
+slot 0 on a background the palette also painted black. Whitening slot 0 for
+Claude Code's plates gave that bar its text back on the same stroke — the window
+title, the session list and the clock had been invisible on this device for as
+long as tmux has been on it, and nobody was looking for them.
+
+A palette is the whole device's, which is the argument for leaving slots 1 and 2
+alone and, here, an argument that cuts the other way too. Both directions are
+the same fact: this file stopped choosing colours and started choosing which
+slot a role belongs to, and the slots are shared with every other program.
+
+The predicted casualty did not turn up. A diff was put on the screen on purpose
+and it came out as line numbers, a `+` gutter and black text on paper — no plate
+under any of it. The audit says `diffAdded` is slot 2 and slot 2 is black here,
+and it is right about both; this rendering simply does not paint that token. So
+the price named above for leaving slots 1 and 2 alone was never charged, at
+least not by the numbered diff an auto-mode session draws. The ⚠️ stays, because
+the tokens exist and something draws with them, and because the difference
+between "predicted broken" and "observed broken" is the whole reason to look.
+
+Still unphotographed: selection, which needs a finger on the glass rather than a
+capture, and the usage meter, which needs a session close enough to its limit to
+draw one. The captures are on the device in `~/Pictures/palette/`.
 
 Claude Code reads `$CLAUDE_CONFIG_DIR`, falling back to `~/.claude`, and
 watches `themes/` — so a write lands in a running session, unless that

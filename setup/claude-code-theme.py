@@ -133,10 +133,18 @@ ON_PLATE = {"inverseText"}
 # Known, priced, and left alone — printed so they stay visible, not silenced.
 # `rate_limit_fill` is deliberately absent: it is the filled part of the bar,
 # a mark rather than a plate, and black on the white track is what it is for.
+#
+# 🔴 Photographed 2026-08-15: the diff rows below were predicted to come out as
+# black bands and did not, because the numbered diff an auto-mode session draws
+# paints no plate at all. The slot is still black and the token is still on it —
+# what was wrong was the assumption that anything paints with it. They stay
+# listed rather than deleted; a prediction that survives contact is worth less
+# than one that gets corrected, and something else may yet draw them.
 WATCH = {
     "selectionBg": "reverse video needs a dark plate here; the text on it is "
-                   "black too, so selection may be unreadable",
-    "diffAdded": "slots 1/2 stay black on purpose — see setup.sh [3]",
+                   "black too, so selection may be unreadable — unphotographed",
+    "diffAdded": "slots 1/2 stay black on purpose — see setup.sh [3]. "
+                 "No plate observed on the numbered diff (2026-08-15)",
     "diffAddedDimmed": "same",
     "diffAddedWord": "same, word-level; the +/- gutter carries it",
     "diffRemoved": "same",
@@ -218,8 +226,10 @@ def check(theme):
     print(f"{broken} unexplained, {watched} priced and waiting on the glass."
           if broken else
           f"nothing unexplained; {watched} priced and waiting on the glass.")
-    print("\n⚠️  Arithmetic against setup.sh's palette, not photography. "
-          "Nothing here\n    has been read off the glass.")
+    print("\n⚠️  Arithmetic against setup.sh's palette. The marks and plates "
+          "above were\n    photographed on 2026-08-15 and agreed; selection and "
+          "the usage meter\n    were not, and --swatch is still the only thing "
+          "that asks a real terminal.")
 
 
 def swatch(theme):
