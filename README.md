@@ -654,16 +654,37 @@ least not by the numbered diff an auto-mode session draws. The ⚠️ stays, bec
 the tokens exist and something draws with them, and because the difference
 between "predicted broken" and "observed broken" is the whole reason to look.
 
-Selection needed a finger rather than a capture, and the finger found it: drag
-across text and the whole run went solid black. It is not this theme's
-`selectionBg` and it never was — it is not even the terminal's. With `mouse on`,
-tmux takes the drag and paints it with `mode-style bg=yellow,fg=black`; yellow
-and black were both black slots, so the selection was a black block of black
-text. Whitening slot 0 gave `fg=black` somewhere to go, and the selection came
-back as white on black without anything being aimed at it. `setup.sh` [3] also
-sets VTE's own three highlight keys, which were a real defect found on the way —
-`highlight-colors-set` was `false`, so the two correct colours underneath it did
-nothing — but that path is only reachable with shift held.
+Selection needed a finger rather than a capture, and it took three wrong answers
+to reach. Drag across text and the whole run went solid black. Written down in
+the order they were believed:
+
+1. **VTE's highlight.** `highlight-colors-set` was `false`, and with it off VTE
+   paints the selection background with the *foreground* colour and leaves the
+   text its own — black on black on a white-ground terminal. A real defect,
+   fixed in `setup.sh` [3], and not the one being looked for.
+2. **tmux's copy-mode.** `mouse on`, and `mode-style bg=yellow,fg=black` with
+   both of those on black slots. It fits perfectly and it is not what happens:
+   polling `#{selection_present}` twice a second for a hundred seconds while the
+   selection was on the glass never once returned 1. tmux never saw the drag.
+3. **Claude Code itself**, which turns on mouse tracking and therefore receives
+   the drag before either of them. Its `selectionBg` is slot 4 — black — and the
+   text on it is black too.
+
+The instrument that settled it was not a photograph. It was a second tab: the
+same terminal, the same palette, a plain shell instead of Claude Code. Selection
+there is white on black and always was. One variable, changed once.
+
+`selectionBg` is now the only token in this file that is knowingly left broken.
+Moving it to slot 0 works and was reverted: it buys legibility by deleting the
+highlight, and you select text in order to copy it, not to read it — a block
+whose ends you can see is worth more than a run you cannot find. Two levels
+cannot both mark a span and keep it readable, and Claude Code exposes no
+selection foreground to pair with the background. The device wins that one.
+
+🩸 It is also the token this file's own audit had flagged twice as *unobserved*,
+and it was talked off the suspect list twice before anyone looked at it — once
+by fixing VTE, once by fixing tmux, both real fixes to things that were not the
+fault. An audit that says "not checked" is not an invitation to reason about it.
 
 Then the last complaint, and the one that mattered most: **grey text that had
 vanished.** The answer was a test card rather than an argument — nine rows, one
@@ -690,11 +711,16 @@ this device, not one was a token in this file: a status bar, a multiplexer's
 selection, and a slot shared with every other program.
 
 Still unphotographed: the usage meter, which needs a session close enough to its
-limit to draw one, and Claude Code's own `selectionBg`, which is a different
-thing from both the terminal's and tmux's and has not been seen. The captures
-and the test card are on the device in `~/Pictures/palette/`; the card is
-`setup/palette-probe.sh`, and it is the fastest way to find out what a change to
-that palette actually did.
+limit to draw one. The captures are on the device in `~/Pictures/palette/`; the
+test card is `setup/palette-probe.sh`, and it is the fastest way to find out what
+a change to that palette actually did.
+
+One last limit, and it is the camera's rather than the panel's. `Capture()` reads
+the framebuffer, and the dithering happens in the driver *below* it — so a
+capture can prove that a token is white on black and still not tell you whether
+those white strokes survive A2 on the glass. Everything above was confirmed by
+someone looking at the device. Nothing here should be settled from a screenshot
+alone.
 
 Claude Code reads `$CLAUDE_CONFIG_DIR`, falling back to `~/.claude`, and
 watches `themes/` — so a write lands in a running session, unless that

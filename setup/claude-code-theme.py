@@ -17,7 +17,7 @@ as crisp black on white with no dithering, for free, and none of it is our
 arithmetic any more.
 
 What is left is the handful of tokens where a slot's *role* and this panel's
-ground disagree. That is what this file is: `dark-ansi` plus six overrides.
+ground disagree. That is what this file is: `dark-ansi` plus eight overrides.
 
     python3 setup/claude-code-theme.py                # the config dir in use
     python3 setup/claude-code-theme.py --check        # what the panel paints
@@ -95,6 +95,8 @@ OVERRIDES = {
     # Only the colour screen ever draws this, and there slot 8 lifts one step
     # off slot 0 exactly as a hover should.
     "userMessageBackgroundHover": "ansi:blackBright",
+    # 🔴 `selectionBg` is deliberately NOT here; see WATCH below. It is the one
+    # token measured to be broken on this panel and left broken on purpose.
     # Shimmer is the lighter half of an animated gradient. Setting each equal to
     # its own base value stops the repaint without disabling anything — the
     # spinner still spins. These two are also the remaining slot-15 tokens, so
@@ -116,7 +118,7 @@ INHERITED = {  # token -> ansi slot name, from dark-ansi (2.1.233, 2026-08-15)
     "promptBorder": "white", "inactive": "white", "subtle": "white",
     "inverseText": "black", "clawd_background": "black",
     "bashMessageBackgroundColor": "black",
-    "selectionBg": "blue", "rate_limit_fill": "yellow",
+    "rate_limit_fill": "yellow", "selectionBg": "blue",
     "diffAdded": "green", "diffAddedDimmed": "green", "diffAddedWord":
     "greenBright", "diffRemoved": "red", "diffRemovedDimmed": "red",
     "diffRemovedWord": "redBright",
@@ -163,11 +165,17 @@ ON_PLATE = {"inverseText"}
 # listed rather than deleted; a prediction that survives contact is worth less
 # than one that gets corrected, and something else may yet draw them.
 WATCH = {
+    # 🔴 The one that is broken, observed, and staying that way. Claude Code
+    # turns on mouse tracking, so a drag inside it reaches neither tmux nor the
+    # terminal and this token paints the selection. Slot 4 is black here and the
+    # text on it is black too. Moving it to slot 0 was tried and reverted: it
+    # buys legibility by removing the highlight entirely, and you select text in
+    # order to copy it, not in order to read it — a block you can see the ends
+    # of is worth more than a run you cannot find. Two levels cannot mark a span
+    # and keep it readable, and Claude Code exposes no foreground to pair here.
+    "selectionBg": "black on black, and left there. See the note above",
     "userMessageBackgroundHover": "black here and meant to be: hover needs a "
                                   "pointer, so this device never draws it",
-    "selectionBg": "still unobserved. The all-black drag-selection found on "
-                   "the panel was tmux's copy-mode, not this token — and it "
-                   "reads as white on black now that slot 0 is white",
     "diffAdded": "slots 1/2 stay black on purpose — see setup.sh [3]. "
                  "No plate observed on the numbered diff (2026-08-15)",
     "diffAddedDimmed": "same",
@@ -257,11 +265,14 @@ def check(theme):
           f"{BASE} and listed only where the panel can get it wrong.")
     print(f"{broken} unexplained, {watched} priced above."
           if broken else f"nothing unexplained; {watched} priced above.")
-    print("\n⚠️  Arithmetic against setup.sh's palette. Marks and plates were "
-          "photographed on\n    2026-08-15 and agreed; the terminal's own "
-          "selection was checked by hand and\n    fixed there, not here. The "
-          "usage meter and selectionBg remain unseen, and\n    --swatch is "
-          "still the only thing that asks a real terminal.")
+    # 🔴 This line has been wrong three times, always by claiming something had
+    # been checked when the checking had moved on. It now says only what the
+    # rows above cannot: which tokens no one has ever seen drawn.
+    print("\n⚠️  Arithmetic against setup.sh's palette; every row above was "
+          "photographed\n    on 2026-08-15 except the usage meter, which needs "
+          "a session near its\n    limit to draw one. --swatch is the only "
+          "thing here that asks a real\n    terminal, and the glass is the "
+          "only thing that answers for the dither.")
 
 
 def swatch(theme):
