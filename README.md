@@ -56,7 +56,8 @@ It is idempotent, and it installs:
   one yet. An existing config is never overwritten.
 - **The panel** — `extensions/pn-panel@cver.net` installed and enabled. Separate
   from the keyboard on purpose; see *The panel it taps*.
-- **Terminal legibility** — pure black on pure white, no cursor blink, a large monospace face.
+- **Terminal legibility** — pure black on pure white, no cursor blink, a large monospace face,
+  and a sixteen-slot ANSI palette split into marks and plates; see *The agent it codes with*.
 - **A guard on `pinenote-dbus-service`** — without it the whole clearing half can die silently;
   see *When the ghosting stops clearing* below.
 - **A sleep screen** — optional, and only if you have put a `~/offscreen/screen.bin` there.
@@ -515,137 +516,116 @@ hairline on `paper` — three values, none of them ours.
 
 ## The agent it codes with
 
-`setup/claude-code-theme.py`, which writes a theme called **Lumalock** — its luma is locked to this panel's grid while its hue is left free for the screens that have one. Terminal legibility above gets the terminal to
-pure black on pure white; a TUI running inside it then draws its own colours
-over the top, and Claude Code has around sixty tokens to draw them with.
+`setup/claude-code-theme.py`, which writes a theme called **Lumalock** — six
+overrides on `dark-ansi`, Claude Code's own ANSI-only preset. It used to be
+sixty-six computed colours, and why it is not any more is the useful half of
+this section.
 
-Sixty is the whole problem. Setting them by hand through its `/theme` picker is
-a job nobody finishes — the version this replaced had three set, one of which
-was `background`, not a token it defines, silently ignored since the day it was
-written. So the script keeps one table mapping Claude Code's token names to the
-six values, and derives the rest. Change a role, regenerate, never hand-edit
-the JSON it writes.
+Claude Code has around seventy colour tokens. Setting them by hand through its
+`/theme` picker is a job nobody finishes — the version this all replaced had
+three set, one of which was `background`, not a token it defines, silently
+ignored since the day it was written. That is the general rule and not an
+anecdote: **an override lands only if the key exists in the base preset and the
+value parses, and anything else is dropped without a word.** A theme file is
+one of the few places where a typo produces no error, no fallback and no
+symptom, so it is generated from one table rather than hand-edited.
 
-Two of its rules are about this panel rather than about contrast:
+### The palette is the theme
 
-| | |
-|---|---|
-| Every `*Shimmer` token equals its own base | Shimmer is the lighter half of an animated gradient — the spinner, and the seven-colour ramp behind `ultrathink`. Setting the pair equal stops the repaint without disabling anything; the spinner still spins. This is the same flash the rest of the repo exists to remove, arriving one layer up. |
-| Context lines in a diff get no plate | `paper`, not a tint. An unpainted line is one less area for the driver to accumulate. |
+The version before this one computed a value for every token: a hue solved onto
+this panel's six-value luma grid, so that a single file could be read from a
+white-ground panel and a dark-ground colour screen at once. The arithmetic held.
+The shape was wrong. Only the middle of the range survives both grounds, so
+every role that draws a mark ended up on one luma step — and a screen with
+colour got a palette that was picked to survive a screen without one. It read
+as mud there, which is a fair description of what it was.
 
-Where the six values run out is the diff. Added and removed have no hue to tell
-them apart and cannot both be faint, so they are staggered a step — `wash` and
-`shadow`, with word-level highlights one step darker again — and the `+`/`-`
-gutter carries the rest. That is a real limit of drawing in one dimension, not
-a setting to tune.
+`dark-ansi` names no colours at all. Each token gets one of the sixteen ANSI
+slots and the *terminal's* palette says what that slot is. The two grounds
+therefore stop needing to be reconciled inside one file — the colour machine's
+palette is already tuned by whoever reads it, and this panel's is set by
+`setup.sh` [3]. Nothing here is our arithmetic any more; every hue arrives as
+crisp black on white, undithered, for free.
 
-`--check` audits the result: contrast against `paper` for anything that draws a
-mark, ink-on-plate for anything that fills one, and whether every value is one
-of the six. Borders and the repeating speaker labels are judged at 3:1 rather
-than 4.5:1, since none of them is prose.
+That turns the palette into the interesting file. Sixteen slots, and this panel
+gets three answers rather than one:
+
+| slots | | why |
+|---|---|---|
+| 1–7, 9–14 | `#000000` | everything that draws a mark. Colour is information a 1-bit panel cannot hold, so it is spent rather than dithered — syntax highlighting included. |
+| 0, 8 | `#FFFFFF` | in a TUI these two are almost only ever plates. Left black they are a solid black band with black text on it, and a large black area is the accumulation the rest of this repo exists to remove. White means *no plate*, which is the same judgement as leaving diff context lines unpainted. |
+| 15 | `#FFFFFF` | reverse video, which belongs to every other program on the device and is not ours to spend. |
+
+### The six overrides
+
+What is left is the handful of tokens whose slot and this panel's ground
+disagree. Each is about this device; on a colour screen the inherited value was
+already right.
+
+| token | to | why |
+|---|---|---|
+| `text` | slot 7 | It is slot 15 in `dark-ansi`, which assumes a dark ground. Here that is white on white. Slot 7 rather than repainting slot 15, because 15 belongs to everyone else; the cost is the palette's off-white instead of its pure white on a colour screen, and that is the only visible change this file makes there. |
+| `userMessageBackground` | slot 0 | 🔴 The same decision as the line above, not a second one. |
+| `userMessageBackgroundHover` | slot 8 | One step apart so hover still lifts where a pointer exists. Both are white here, which costs nothing: this device cannot hover. |
+| `rate_limit_empty` | slot 8 | Track and fill were both black slots, so the meter read as full at any value. |
+| `promptBorderShimmer` | slot 7 | Equal to its own base value. |
+| `inactiveShimmer` | slot 7 | Equal to its own base value. |
+
+`text` and the plate under it are one decision. Inherited, they pair as white on
+dark — which does survive this panel, as a solid black band per message. Fixing
+either one alone breaks the other, so the pair is flipped rather than
+half-fixed: black text, no plate here; off-white text on a dark plate there.
+
+The last two are the one rule that outlived the rewrite. Every `*Shimmer` token
+is the lighter half of an animated gradient — the spinner, and the seven-colour
+ramp behind `ultrathink`. Setting the pair equal stops the repaint without
+disabling anything; the spinner still spins. This is the same flash the rest of
+the repo exists to remove, arriving one layer up. It costs nothing on a colour
+screen, and those two happened to be the remaining slot-15 tokens, so one line
+does both jobs.
+
+### What is still wrong here, on purpose
+
+**Diff plates are black bands.** Added and removed are slots 2 and 1, and
+whitening those two would fix Claude Code's diff at the price of red and green
+turning from black into *nothing* in `git`, `ls` and `grep` — a slot is the
+whole device's, not one program's. The trade is not close, so the slots stay
+black and the diff plates stay wrong. If they turn out to be unreadable on the
+glass, the next move is to override the plates onto slots 0 and 8, which costs
+the colour screen its red-and-green diff and is a real loss rather than a free
+one.
+
+**Selection may be unreadable.** `selectionBg` is slot 4 and the text on it is
+black too. Reverse video wants a dark plate on a white ground, which is exactly
+what slot 15 exists for and exactly what a theme cannot reach.
+
+`--check` prints both of those as ⚠️ rather than 🔴, next to every other token
+this panel can get wrong: what slot it is on, what the palette paints it as,
+whether it is a mark or a plate, and therefore whether it survives. It reads the
+palette out of `setup.sh` rather than keeping a copy — two files that must agree
+are two files that will not. Its own ruler was wrong once and worth recording:
+the first version scored `inverseText` as broken, which is the one token in the
+file that is never painted on the ground at all. A token is only broken against
+the surface it is actually painted on.
+
+⚠️ That is arithmetic against a palette file, not photography. `--swatch`
+is the other half: it paints every token in its own slot and asks the terminal
+actually in front of you, which with an ANSI theme is the only thing that
+decides. A row you cannot read is a row that device cannot show.
 
 Claude Code reads `$CLAUDE_CONFIG_DIR`, falling back to `~/.claude`, and
 watches `themes/` — so a write lands in a running session, unless that
 directory did not exist when the session started, which needs one restart.
 Install it wherever Claude Code actually runs, which is not always this device:
 driving it over SSH from the PineNote puts the theme on the far machine, while
-the panel it has to be legible on is still this one.
-
-
-### Hue, locked to those values
-
-The six values are what this panel can draw. They were never what a colour
-screen had to be told, and the session driving Claude Code usually runs on one:
-over ssh the theme lives on the far machine while the panel it has to be legible
-on is this one. So the table no longer stores greys. It stores a hue and a
-level, and `tint()` solves for the colour that sits at exactly that level.
-
-A colour and a grey of the same luma flatten to the same grey here. Hue is
-therefore free on the machines that have it and costs nothing on the one that
-does not — which buys back the sacrifice the previous table had to make:
-
-> Grey cannot carry red-versus-green, so success and error both go to ink and
-> let their own wording say which it is.
-
-Success, error and warning now sit at green, red and amber, all three at sunk's
-level. The panel still gets one grey for all three. Nothing about this device
-changed; the other screens stopped being punished for it.
-
-**Two quantities, and picking the wrong one puts a value on the wrong step.**
-`luminance()` is WCAG relative luminance, gamma-decoded, and answers whether a
-value is readable — that is the contrast audit and it is unchanged. Flattening a
-frame is a weighted sum of the gamma-encoded bytes, which is `luma()`. Rec.601
-and Rec.709 disagree about the weights, so `tint()` solves against 601 and
-`--check` prints both: a value is only accepted when the two agree on which step
-it lands on, which means the driver's actual choice does not have to be known.
-
-Where a level admits no hue, none is invented. Ink is luma zero and a colour at
-luma zero is black, so body text, borders and the first of every three subagent
-labels stay grey rather than pretending otherwise. The shimmer pairs and the
-`ultrathink` rainbow also stay flattened: those are animations, and giving them
-hue at a constant luma would only be safe if the driver diffed on luma rather
-than on pixels, which is not known to be true. The subagent labels are static,
-so all eight get one.
-
-Two of the six carry no text at all, which a legibility card on the panel
-confirmed: `#ddd` is unreadable as text in black-and-white mode and `#aaa` is
-marginal. Both are only ever plates — beds, diff backgrounds, the empty half of
-the rate meter — so the finding costs nothing. It does bound the text levels to
-four, and every hued role above is inside that bound.
-
-**Two grounds, deliberately not reconciled.** A theme has a base; the terminal
-it is viewed from has a background, and here they do not agree. This session is
-driven from a white-ground terminal on the panel and a dark-ground one on a
-colour machine, and the same escape codes are painted onto both — a theme
-setting lives on the session, but the background lives with whoever is looking.
-
-There is no single answer for both. Anything readable against black and white
-at once has to sit in the middle of the range, and the middle is exactly what a
-one-bit panel cannot hold as text. So each ground keeps its own settings and the
-theme is judged against both: the mid-level roles clear 4:1 either way, the
-extremes lean toward the ground they were chosen for, and `--check` prints both
-columns so a role that fails everywhere is visible.
-
-Reading the theme on a dark terminal settled where the usable band actually is,
-and it is narrower than the six values suggest. Ink is gone there — 1:1 — and so
-is sunk at 1.7:1 even carrying a hue, which reads on the swatch as "visible but
-strained". Only slate and above survive both grounds, and only for the cooler
-hues: blue 4.02:1 on paper, violet 4.25, pink 4.10, olive 3.87, amber 3.99,
-while red, green and teal fall under 4 there. Every role that draws a mark now
-sits inside that finding.
-
-`text` is the one exception and it does not move. At slate it would be 4.48:1 on
-paper against ink's 21, and the panel's own legibility card already put #aaa at
-the edge — moving prose costs the device this repo exists for. Nothing observed
-suggests it is painted on a dark ground anyway: prose reads fine there while
-every other #000 token vanished from the swatch. The trade is being declined,
-not overlooked.
-
-The `ultrathink` rainbow is still flattened, but no longer to ink. What stops
-the repaint is that all fourteen tokens are equal — the gradient has no
-frame-to-frame difference left to draw — and which value they share was never
-load-bearing. It is one value from the band that survives both grounds, so the
-element is back on screen with the repaint still stopped.
-
-`--swatch` exists because the audit cannot answer this. Contrast is computed
-against an assumed background; the swatch paints every token in its own value
-and asks the terminal actually in front of you. A row missing its coloured half
-is a token that cannot be seen there, which is how each of the above was found.
-
-That is also why no mid-level role is a neutral grey any more. Slate at #777
-measures 4.48:1 on paper and 4.69:1 on ink and still vanishes on a dark
-terminal: a neutral has only lightness to offer, and lightness alone is not
-enough at that level. A hue at the same luma reads on both and the panel still
-flattens it to the same grey, which costs this device nothing. Ink and paper
-stay neutral because at those levels there is no hue to have.
-
-⚠️ Arithmetic, not photography. No value here has been measured off the glass.
-If a hue reads as the wrong step in use, suspect the driver's weights before the
-role table.
+the panel it has to be legible on is still this one. That split is why the theme
+went ANSI-only and why the palette carries the device-specific half — the file
+travels, the palette does not.
 
 ```sh
 python3 setup/claude-code-theme.py           # then pick "Lumalock" in /theme
-python3 setup/claude-code-theme.py --check
+python3 setup/claude-code-theme.py --check   # what this panel paints
+python3 setup/claude-code-theme.py --swatch  # what your terminal paints
 ```
 
 It is deliberately outside `bootstrap.sh`. Everything that script installs is
