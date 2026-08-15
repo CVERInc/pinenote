@@ -552,11 +552,20 @@ gets three answers rather than one:
 
 | slots | | why |
 |---|---|---|
-| 1–7, 9–14 | `#000000` | everything that draws a mark. Colour is information a 1-bit panel cannot hold, so it is spent rather than dithered — syntax highlighting included. |
-| 0, 8 | `#FFFFFF` | in a TUI these two are almost only ever plates. Left black they are a solid black band with black text on it, and a large black area is the accumulation the rest of this repo exists to remove. White means *no plate*, which is the same judgement as leaving diff context lines unpainted. |
+| 1–14 | `#000000` | everything that draws a mark. Colour is information a 1-bit panel cannot hold, so it is spent rather than dithered — syntax highlighting included. |
+| 0 | `#FFFFFF` | the plate slot, and the only one. Every background this theme sets is pointed at it. Left black a plate is a solid band with black text on it, and a large black area is the accumulation the rest of this repo exists to remove. White means *no plate*, which is the same judgement as leaving diff context lines unpainted. |
 | 15 | `#FFFFFF` | reverse video, which belongs to every other program on the device and is not ours to spend. |
 
-### The six overrides
+🔴 **Slot 8 is not a plate slot, however dark it looks on a dark screen.** An
+earlier version of this file whitened 0 and 8 together, on the reasoning that
+both are "almost only ever backgrounds". Measured on the glass, slot 8 is where
+this entire ecosystem keeps dim text — Claude Code's own code comments, git's
+secondary output, every `--dim` in every tool — and whitening it deleted all of
+them at once, silently, on a device whose whole point is reading text. Slot 0 can
+be spent because the only thing that draws marks with it is `inverseText`, and
+that is always inside a badge the panel paints black.
+
+### The eight overrides
 
 What is left is the handful of tokens whose slot and this panel's ground
 disagree. Each is about this device; on a colour screen the inherited value was
@@ -566,8 +575,10 @@ already right.
 |---|---|---|
 | `text` | slot 7 | It is slot 15 in `dark-ansi`, which assumes a dark ground. Here that is white on white. Slot 7 rather than repainting slot 15, because 15 belongs to everyone else; the cost is the palette's off-white instead of its pure white on a colour screen, and that is the only visible change this file makes there. |
 | `userMessageBackground` | slot 0 | 🔴 The same decision as the line above, not a second one. |
-| `userMessageBackgroundHover` | slot 8 | One step apart so hover still lifts where a pointer exists. Both are white here, which costs nothing: this device cannot hover. |
-| `rate_limit_empty` | slot 8 | Track and fill were both black slots, so the meter read as full at any value. |
+| `memoryBackgroundColor` | slot 0 | Inherited on slot 8, which is a text slot here. |
+| `composerSidebarBackground` | slot 0 | Same. |
+| `rate_limit_empty` | slot 0 | Track and fill were both black slots, so the meter read as full at any value. |
+| `userMessageBackgroundHover` | slot 8 | The one plate left on a text slot, and the exception proves the rule: hover needs a pointer, so this device never draws it. Only the colour screen sees this, and there slot 8 lifts one step off slot 0 exactly as a hover should. |
 | `promptBorderShimmer` | slot 7 | Equal to its own base value. |
 | `inactiveShimmer` | slot 7 | Equal to its own base value. |
 
@@ -644,23 +655,46 @@ the tokens exist and something draws with them, and because the difference
 between "predicted broken" and "observed broken" is the whole reason to look.
 
 Selection needed a finger rather than a capture, and the finger found it: drag
-across text on the panel and the whole run went solid black. It is not this
-theme's `selectionBg` and it never was. `highlight-colors-set` was `false`, and
-with it off VTE paints the selection background with the *foreground* colour and
-leaves the text its own — black on black on a white-ground terminal. The two
-colours underneath it were already right; only the switch was off, which is the
-shape a setting takes when someone set the values and never checked the result.
-`setup.sh` [3] now sets all three, and selection is reverse video again.
+across text and the whole run went solid black. It is not this theme's
+`selectionBg` and it never was — it is not even the terminal's. With `mouse on`,
+tmux takes the drag and paints it with `mode-style bg=yellow,fg=black`; yellow
+and black were both black slots, so the selection was a black block of black
+text. Whitening slot 0 gave `fg=black` somewhere to go, and the selection came
+back as white on black without anything being aimed at it. `setup.sh` [3] also
+sets VTE's own three highlight keys, which were a real defect found on the way —
+`highlight-colors-set` was `false`, so the two correct colours underneath it did
+nothing — but that path is only reachable with shift held.
 
-Worth keeping as a rule: a token being wrong in the theme and a role being wrong
-on the screen are different claims, and the audit can only ever make the first
-one. Everything the audit flagged here has now been checked, and neither of the
-two it worried about turned out to be its own.
+Then the last complaint, and the one that mattered most: **grey text that had
+vanished.** The answer was a test card rather than an argument — nine rows, one
+colour mechanism each, printed into the real terminal through the real tmux and
+photographed:
+
+| | | |
+|---|---|---|
+| slot 7, slot 0-as-plate, plain, reverse, tmux's `mode-style` | ✅ | |
+| **slot 8** | ❌ | invisible. This is the regression, and it is one line of this repo's own doing |
+| `ansi256` grey, truecolor grey | ⚠️ | legible but faint; they are a blend, and a blend is a dot pattern here |
+| SGR 2 `dim` | ✅ | VTE resolves it dark enough to read |
+
+Slot 8 went back to black and every plate moved to slot 0, which is what the
+table above now says. The rule that came out of it is worth more than the fix:
+**a plate slot and a text slot are not interchangeable just because both look
+dark on a dark screen.** Nothing in the audit could have said that, because the
+audit only knows the tokens of one program and slot 8 belongs to all of them.
+
+That is the same lesson twice over now. A token being wrong in the theme and a
+role being wrong on the screen are different claims, and an audit over a palette
+file can only ever make the first one. Of the three things eventually found on
+this device, not one was a token in this file: a status bar, a multiplexer's
+selection, and a slot shared with every other program.
 
 Still unphotographed: the usage meter, which needs a session close enough to its
 limit to draw one, and Claude Code's own `selectionBg`, which is a different
-thing from the terminal's and has not been seen. The captures are on the device
-in `~/Pictures/palette/`.
+thing from both the terminal's and tmux's and has not been seen. The captures
+and the test card are on the device in `~/Pictures/palette/`; the card is
+`setup/palette-probe.sh`, and it is the fastest way to find out what a change to
+that palette actually did.
 
 Claude Code reads `$CLAUDE_CONFIG_DIR`, falling back to `~/.claude`, and
 watches `themes/` — so a write lands in a running session, unless that

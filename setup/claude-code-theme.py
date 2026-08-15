@@ -74,17 +74,27 @@ OVERRIDES = {
     # they pair as white-on-dark, which does survive this panel — as a solid
     # black band per message, which is the area accumulation the rest of this
     # repo exists to remove. So the pair is flipped rather than half-fixed:
-    # text to slot 7 above, the plate onto a slot the panel paints white (see
-    # setup.sh [3]), leaving the message unplated here and plated there.
+    # text to slot 7 above, the plate onto slot 0, leaving the message unplated
+    # here and plated there.
+    #
+    # 🔴 Every plate goes to slot 0 and nothing else, because slot 0 is the one
+    # slot this panel can afford to paint white (setup.sh [3]). The version that
+    # also whitened slot 8 was measured on the glass and was wrong: slot 8 is
+    # where this whole ecosystem keeps dim text — Claude Code's own code
+    # comments, git's secondary output — and whitening it deleted all of them.
+    # A plate slot and a text slot are not interchangeable just because both
+    # look dark on a dark screen.
     "userMessageBackground": "ansi:black",
-    # One step apart so hover still lifts on a colour screen. Both are white
-    # here, which costs nothing: hover is a state this device cannot enter.
+    "memoryBackgroundColor": "ansi:black",
+    "composerSidebarBackground": "ansi:black",
+    # The empty half of the usage meter is slot 7 and the fill is slot 3, both
+    # black here, so the meter read as full whatever it said.
+    "rate_limit_empty": "ansi:black",
+    # The one plate that stays on slot 8, and the exception proves the rule:
+    # hover is a state that needs a pointer, so this panel can never enter it.
+    # Only the colour screen ever draws this, and there slot 8 lifts one step
+    # off slot 0 exactly as a hover should.
     "userMessageBackgroundHover": "ansi:blackBright",
-    # The empty half of the usage meter is slot 7, and the fill is slot 3 —
-    # both black here, so the meter reads as a solid bar at 100% whatever it
-    # actually says. Moving the track onto a white slot gives the fill its
-    # contrast back.
-    "rate_limit_empty": "ansi:blackBright",
     # Shimmer is the lighter half of an animated gradient. Setting each equal to
     # its own base value stops the repaint without disabling anything — the
     # spinner still spins. These two are also the remaining slot-15 tokens, so
@@ -106,12 +116,24 @@ INHERITED = {  # token -> ansi slot name, from dark-ansi (2.1.233, 2026-08-15)
     "promptBorder": "white", "inactive": "white", "subtle": "white",
     "inverseText": "black", "clawd_background": "black",
     "bashMessageBackgroundColor": "black",
-    "composerSidebarBackground": "blackBright", "memoryBackgroundColor":
-    "blackBright", "selectionBg": "blue", "rate_limit_fill": "yellow",
+    "selectionBg": "blue", "rate_limit_fill": "yellow",
     "diffAdded": "green", "diffAddedDimmed": "green", "diffAddedWord":
     "greenBright", "diffRemoved": "red", "diffRemovedDimmed": "red",
     "diffRemovedWord": "redBright",
 }
+
+# What the palette has to be for any of the above to hold, measured on the glass
+# on 2026-08-15 rather than reasoned about. This is the part of the audit that is
+# about the device rather than about Claude Code: every other program on it draws
+# with these slots too, and two of the three rules below were learnt by breaking
+# them.
+PALETTE_SHAPE = [
+    (0, "#FFFFFF", "the plate slot: every background this theme sets lands "
+                   "here, and a black plate is a solid band"),
+    (8, "#000000", "dim text lives here — code comments, git's secondary "
+                   "output. Whitening it deletes all of them at once"),
+    (15, "#FFFFFF", "reverse video, which belongs to every other program"),
+]
 
 # Tokens that fill an area rather than draw a mark. The distinction is the whole
 # audit: on a white ground a mark is broken when its slot is white, and a plate
@@ -141,8 +163,11 @@ ON_PLATE = {"inverseText"}
 # listed rather than deleted; a prediction that survives contact is worth less
 # than one that gets corrected, and something else may yet draw them.
 WATCH = {
+    "userMessageBackgroundHover": "black here and meant to be: hover needs a "
+                                  "pointer, so this device never draws it",
     "selectionBg": "still unobserved. The all-black drag-selection found on "
-                   "the panel was VTE's own, not this token — setup.sh [3]",
+                   "the panel was tmux's copy-mode, not this token — and it "
+                   "reads as white on black now that slot 0 is white",
     "diffAdded": "slots 1/2 stay black on purpose — see setup.sh [3]. "
                  "No plate observed on the numbered diff (2026-08-15)",
     "diffAddedDimmed": "same",
@@ -188,6 +213,13 @@ def check(theme):
     and both are obvious on the glass — which is what --swatch is for.
     """
     pal = panel_palette()
+
+    shape = [(i, want, why) for i, want, why in PALETTE_SHAPE if pal[i] != want]
+    for i, want, why in shape:
+        print(f"🔴 slot {i} is {pal[i]}, has to be {want} — {why}")
+    if shape:
+        print()
+
     rows = [(t, v[5:], True) for t, v in theme["overrides"].items()]
     rows += [(t, s, False) for t, s in INHERITED.items()]
 
@@ -223,9 +255,8 @@ def check(theme):
 
     print("\n* = set by this file; the rest is inherited from "
           f"{BASE} and listed only where the panel can get it wrong.")
-    print(f"{broken} unexplained, {watched} priced and waiting on the glass."
-          if broken else
-          f"nothing unexplained; {watched} priced and waiting on the glass.")
+    print(f"{broken} unexplained, {watched} priced above."
+          if broken else f"nothing unexplained; {watched} priced above.")
     print("\n⚠️  Arithmetic against setup.sh's palette. Marks and plates were "
           "photographed on\n    2026-08-15 and agreed; the terminal's own "
           "selection was checked by hand and\n    fixed there, not here. The "
