@@ -643,9 +643,24 @@ least not by the numbered diff an auto-mode session draws. The ⚠️ stays, bec
 the tokens exist and something draws with them, and because the difference
 between "predicted broken" and "observed broken" is the whole reason to look.
 
-Still unphotographed: selection, which needs a finger on the glass rather than a
-capture, and the usage meter, which needs a session close enough to its limit to
-draw one. The captures are on the device in `~/Pictures/palette/`.
+Selection needed a finger rather than a capture, and the finger found it: drag
+across text on the panel and the whole run went solid black. It is not this
+theme's `selectionBg` and it never was. `highlight-colors-set` was `false`, and
+with it off VTE paints the selection background with the *foreground* colour and
+leaves the text its own — black on black on a white-ground terminal. The two
+colours underneath it were already right; only the switch was off, which is the
+shape a setting takes when someone set the values and never checked the result.
+`setup.sh` [3] now sets all three, and selection is reverse video again.
+
+Worth keeping as a rule: a token being wrong in the theme and a role being wrong
+on the screen are different claims, and the audit can only ever make the first
+one. Everything the audit flagged here has now been checked, and neither of the
+two it worried about turned out to be its own.
+
+Still unphotographed: the usage meter, which needs a session close enough to its
+limit to draw one, and Claude Code's own `selectionBg`, which is a different
+thing from the terminal's and has not been seen. The captures are on the device
+in `~/Pictures/palette/`.
 
 Claude Code reads `$CLAUDE_CONFIG_DIR`, falling back to `~/.claude`, and
 watches `themes/` — so a write lands in a running session, unless that

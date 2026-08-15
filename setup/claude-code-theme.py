@@ -141,8 +141,8 @@ ON_PLATE = {"inverseText"}
 # listed rather than deleted; a prediction that survives contact is worth less
 # than one that gets corrected, and something else may yet draw them.
 WATCH = {
-    "selectionBg": "reverse video needs a dark plate here; the text on it is "
-                   "black too, so selection may be unreadable — unphotographed",
+    "selectionBg": "still unobserved. The all-black drag-selection found on "
+                   "the panel was VTE's own, not this token — setup.sh [3]",
     "diffAdded": "slots 1/2 stay black on purpose — see setup.sh [3]. "
                  "No plate observed on the numbered diff (2026-08-15)",
     "diffAddedDimmed": "same",
@@ -226,10 +226,11 @@ def check(theme):
     print(f"{broken} unexplained, {watched} priced and waiting on the glass."
           if broken else
           f"nothing unexplained; {watched} priced and waiting on the glass.")
-    print("\n⚠️  Arithmetic against setup.sh's palette. The marks and plates "
-          "above were\n    photographed on 2026-08-15 and agreed; selection and "
-          "the usage meter\n    were not, and --swatch is still the only thing "
-          "that asks a real terminal.")
+    print("\n⚠️  Arithmetic against setup.sh's palette. Marks and plates were "
+          "photographed on\n    2026-08-15 and agreed; the terminal's own "
+          "selection was checked by hand and\n    fixed there, not here. The "
+          "usage meter and selectionBg remain unseen, and\n    --swatch is "
+          "still the only thing that asks a real terminal.")
 
 
 def swatch(theme):

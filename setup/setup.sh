@@ -92,6 +92,13 @@ gsettings set "$T" palette "['#FFFFFF', '#000000', '#000000', '#000000', \
 '#000000', '#000000', '#000000', '#000000', '#FFFFFF', '#000000', '#000000', \
 '#000000', '#000000', '#000000', '#000000', '#FFFFFF']"
 
+# 反白（拖選）。🔴 這三個要一起設，只設顏色不設開關等於沒設：highlight-colors-set
+# 是 false 時，VTE 只把底換成「前景色」而保留字本身的顏色——白底黑字的終端機上
+# 那就是黑底黑字，選起來整段變全黑。面板上實測過，值本來就對，差的是那個開關。
+gsettings set "$T" highlight-background-color "#000000"
+gsettings set "$T" highlight-foreground-color "#FFFFFF"
+gsettings set "$T" highlight-colors-set true
+
 echo "== [4] apt 地基：hold 住 GNOME shell/mutter（真正的理由是不跑 full-upgrade）=="
 # 🔴 歸因更正（2026-08-01）：這裡以前寫「GNOME 48 有開機災難」，那是錯的。
 #    手上唯一的證據是上游 PNDeb/pinenote-debian-image#89 "Cannot boot after update"，
