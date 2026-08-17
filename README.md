@@ -56,6 +56,9 @@ It is idempotent, and it installs:
   one yet. An existing config is never overwritten.
 - **The panel** — `extensions/pn-panel@cver.net` installed and enabled. Separate
   from the keyboard on purpose; see *The panel it taps*.
+- **Input methods** — not part of `setup.sh`; run `setup/ime.sh` if you want them.
+  Pinyin that outputs traditional, Japanese by romaji, and Korean and bopomofo
+  installed but left out of the switching list; see *The languages it types in*.
 - **Terminal legibility** — pure black on pure white, no cursor blink, a large monospace face,
   and a sixteen-slot ANSI palette split into marks and plates; see *The agent it codes with*.
 - **A guard on `pinenote-dbus-service`** — without it the whole clearing half can die silently;
@@ -107,7 +110,7 @@ time. Nobody had a reason to look, because nothing ever said anything was wrong.
 
 ### setup/lifeline.sh
 
-The four settings that decide whether you can service this device from another machine at
+The five settings that decide whether you can service this device from another machine at
 all. They are separate because three of them need something only you can supply, and one of
 them is a security trade-off nobody should inherit silently.
 
@@ -117,8 +120,9 @@ them is a security trade-off nobody should inherit silently.
 | SSH authorised key | `PINENOTE_SSH_PUBKEY` | skipped |
 | Wi-Fi connection | `PINENOTE_WIFI_SSID`, `PINENOTE_WIFI_PSK` | skipped |
 | Passwordless sudo | `PINENOTE_NOPASSWD_SUDO=1` | skipped — read the block first |
+| Wi-Fi powersave off | nothing | **applied** — see below |
 
-Two findings worth keeping even if you write your own:
+Three findings worth keeping even if you write your own:
 
 - On a **WPA2/WPA3 transition** network, nmcli's shorthand and an explicit `sae` both fail to
   associate. It has to be `wifi-sec.key-mgmt wpa-psk`.
@@ -126,6 +130,18 @@ Two findings worth keeping even if you write your own:
   NetworkManager writes to an active local session, and an SSH login is not one. Use `sudo`,
   which is the better answer regardless: a root-owned system connection comes up at boot
   without waiting for a login.
+- **The tablet says it is connected and answers nothing.** It shows the same IP, but another
+  machine cannot even get an ARP reply — and ARP is layer two, so that rules out routing,
+  firewalls and a changed address in one go. The Wi-Fi chip is asleep: the association is
+  still there, it just does not respond to unsolicited frames, and any packet it sends
+  itself wakes it. Loading a web page on the glass is enough to bring it back. On a device
+  whose main use is being maintained over SSH the default is simply wrong, so
+  `wifi.powersave = 2` goes into `NetworkManager/conf.d`. The block reports
+  `iw dev wlan0 get power_save` rather than declaring success, because writing the file
+  does not re-apply it to an association that already exists.
+
+  Do not reconnect the interface over SSH to apply it. `nmcli device disconnect` cuts the
+  connection you are giving the command through, and nothing runs the second half.
 
 ### The picture it sleeps under
 
@@ -365,6 +381,124 @@ It did not find any of this:
 Every one of those came from looking at the glass, and three of them reversed
 what the arithmetic was busy doing at the time. The layout in the screenshot is
 not a design that was computed. It is what two ways of being wrong converged on.
+
+## The languages it types in
+
+`setup/ime.sh`. Pinyin that outputs traditional characters, and Japanese by
+romaji, on the same on-screen keyboard — plus Korean and bopomofo installed for
+anyone who needs them.
+
+**IBus, not fcitx5.** This is not a preference. There is no physical keyboard
+here, so the primary input device is `pn-osk`, which patches GNOME Shell's own
+`Keyboard` class; the OSK commits through Clutter's input method, which is wired
+to IBus. fcitx5 draws its own candidate window and never sees those keys.
+
+**RIME, not libpinyin.** libpinyin's traditional output is a simplified lexicon
+with an OpenCC pass on the end, so one-simplified-to-many-traditional has to
+guess: 發/髮, 乾/幹/干, 麵/面. RIME's 朙月拼音 dictionary is *already*
+traditional and simplified is the converted direction, so there is nothing to
+guess. The schema is `luna_pinyin_tw`, which adds `t2tw` on top for Taiwan glyph
+forms (裡/裏, 著/着, 為/爲). The vocabulary needed no help: grepping the shipped
+dictionary, `軟體` is present and `軟件` is not, `網路` seven times and `網絡`
+zero.
+
+**`mozc-on`, not `mozc-jp`.** ibus-mozc declares three engines — `mozc-jp`
+(generic), `mozc-on` (Mozc:あ), `mozc-off` (Mozc:A_). Wire up `mozc-jp` and it
+sits in direct-input mode, so romaji comes out as latin letters and looks exactly
+like an input method that failed to install; the k6 layout has no
+hankaku/zenkaku key to get out of it. `mozc-on` activates in kana. This is the
+same split macOS makes between かな and 英数.
+
+**One layout for all of them.** Pinyin, romaji, bopomofo, Korean 2-set and
+English consume the same 26 letters. Both CJK engines declare `layout` values the
+OSK has no page for — `default` for rime and mozc, `kr` for hangul — and
+`_composeLayout`'s fall-through to `us-extended` catches every one of them. That
+fall-back was written for a missing terminal layout; it is the only reason the
+k6 keyboard survives switching engines at all.
+
+### The candidate window took four fixes, and they were four different bugs
+
+Each one looked like the previous fix not having worked.
+
+**It never appeared with the OSK up.** Upstream treats the floating popup and
+the keyboard as mutually exclusive — `isVisible = !Main.keyboard.visible && …` —
+and hands candidates to the OSK's suggestion strip instead. That strip is real
+and visible, but `fillWidth` pins the AspectContainer's ratio to the whole
+band (`setRatio(keyboard.width, keyboard.height)`), so the keys claim the full
+234px and the strip is allocated nothing. Both paths dead at once, which is why
+a physical keyboard worked and the OSK did not.
+
+**It was vertical.** `style/horizontal` was patched into `default.custom.yaml`,
+then into the schema. Neither is read. ibus-rime has its own frontend config,
+`/usr/share/rime-data/ibus_rime.yaml`, which ships `horizontal: false`; the
+binary carries `"ibus_rime.yaml"` and `"style/horizontal"` as neighbours.
+
+**Patching the right file still did nothing.** `rime_deployer --build` does not
+produce `build/ibus_rime.yaml` — but it does write `user.yaml`'s
+`last_build_time`, so the frontend then sees nothing to do and skips the
+maintenance pass that would have built it. Delete `build/` and `user.yaml` and
+let ibus-rime deploy on its own; do not run the deployer by hand.
+
+**It landed inside the keyboard.** `St.Side.TOP` means the arrow is on top and
+the *box hangs below*, so anchoring at the keyboard's top edge drew the
+candidates over the number row. Flipping it is not `updateArrowSide()` — that
+sets `_arrowSide` and repaints, and every allocation runs `_updateFlip()`, which
+recomputes from `_userArrowSide` and overwrites it. Write `_userArrowSide`.
+
+The fix chosen for the first one was not to give the strip its height back. The
+popup now serves both cases, docked to the keyboard's top edge when the OSK is up
+and to the bottom of the screen when it is not, so candidates are always in the
+same place. It also keeps the numbers: `addSuggestion(text, callback)` carries no
+index, so the strip can only be tapped, while the popup has 1-9 — and this
+keyboard has a real digit row to press them with.
+
+The popup reaches `pn-osk`'s posteriser the same way the launcher arrows did:
+it goes through `addTopChrome()` into `uiGroup`, outside the quantiser, and
+arrives in stock Adwaita dark with a blue selection that has no grey to dither
+into. It is in `_pnPosteriseActors()` now.
+
+**One correction worth keeping.** The first diagnosis of the invisible strip was
+"`kb._suggestions` is null". It is not, and it never was. `Geometry()` had no
+field for it yet, and the reader collapsed *key absent* and *value null* into the
+same `None`. Adding the field and measuring again gave visible=true,
+children=0, naturalHeight=0 — present, and squeezed to nothing. `Geometry()`
+reports `suggestions` and `candidates` now, and `PanelInfo()` reports
+`inputSources`, because the thing that caught the mistake was having a number to
+look at.
+
+### Switching
+
+One tap on `pn-input` cycles US → TW → JP → US in list order. Not MRU, which is
+what GNOME's own `switch-input-source` does: with three sources and one button,
+MRU bounces between the two most recent and the third becomes unreachable.
+
+`Ctrl+Space` runs the same cycle — the binding is hijacked with
+`setCustomKeybindingHandler` rather than adding one, which would have required
+this extension to carry a GSettings schema for two keys. `switch-input-source-backward`
+is borrowed for Caps Lock, which returns to US and, if already there, goes back
+to where it came from. That is macOS's behaviour, and the alternative — one
+direction only — makes Caps a key with no way back.
+
+Caps Lock has no bindable keysym of its own; `caps:menu` turns it into a Menu key
+and drops the lock behaviour, and `ime.sh` checks that the option exists in this
+device's `xkeyboard-config` rather than setting it blind.
+
+Korean (`ibus-hangul`) and bopomofo (`ibus-chewing`) are installed and labelled
+but not in the list. Five sources on one button is four taps to the far end. The
+labels ship anyway, because an engine that works while its button shows the wrong
+name is the worst of the three states.
+
+Bopomofo through RIME would have been free — `rime-data-bopomofo` is already
+there — but it would share the single `rime` engine slot and need `Ctrl+`` ` `` to
+switch schemas, and the k6 portrait layout has no backtick. A separate engine is
+the right shape here.
+
+**JIS is deliberately absent.** For a physical JIS keyboard this repository needs
+to do nothing: add `('xkb','jp')`. For the on-screen keyboard it would mean a
+second composed layout, against the rule that earned itself in *The keyboard it
+types on* — and that rule is stronger across languages than across orientations,
+because all five input methods above eat the same 26 letters. What a JIS layout
+buys is muscle memory for key positions, on a surface that has no keys to feel.
 
 ## The launcher it opens
 
@@ -756,6 +890,20 @@ about ten items down a status indicator's menu, the tone behind a panel label
 reading `BW+D:1`. They are one tap each now, and they call the interfaces
 themselves rather than borrowing the neighbour's buttons, which a package upgrade
 puts back where it found them.
+
+A fourth arrived with the input methods: `pn-input`, which shows `US` / `TW` /
+`JP` and cycles on a tap. It is the only one of the four that draws a word rather
+than an icon, for the same reason the caps key spells `caps locked` — on a
+two-colour panel with no animation, words are the signal that survives, and three
+states cannot be drawn as "what pressing it will do". Its total width is 26px,
+matching the three measured from the screenshot: two capitals need less padding
+than a 16px icon, so the padding comes in and the group stays even.
+
+GNOME's own input-source indicator is hidden with it. That one is a separate
+`statusArea` item on 48 rather than something folded into Quick Settings — dumped
+with `PanelInfo()` rather than assumed — and unlike the `BW+D:1` label above, this
+is a case where hiding is honest: showing the current source and letting you pick
+another is all it does, and `pn-input` does both.
 
 `BW+D:1` is the driver's vocabulary: bw_mode 1 is black-and-white with dithering,
 and the 1 after the colon is the A2 waveform paired with it. Behind the label sat
