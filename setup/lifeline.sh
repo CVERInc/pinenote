@@ -94,6 +94,40 @@ else
   skipped=$((skipped + 1))
 fi
 
+echo "== [5] Wi-Fi powersave off (the tablet says 'connected' and answers nothing) =="
+# 症狀長這樣：平板上 Wi-Fi 顯示連線中、IP 也還是原本那個，但另一台機器 ping
+# 不到，連 ARP 都拿不到回應。ARP 是二層的 —— 拿不到回應就代表這不是路由、
+# 不是防火牆、也不是 IP 跑掉，而是無線晶片睡著了：關聯還在，但它不回應未經
+# 請求的訊框。它自己送出任何一個封包就會醒（在平板上載一頁網頁就夠）。
+#
+# 對一台「主要用途是被 SSH 進來維護」的裝置，這個預設是錯的：省下來的電，
+# 換到的是一台隨機失聯的機器。
+#
+# NetworkManager 的 wifi.powersave：0=用預設 1=不要動 2=關閉 3=開啟。
+# 這顆模組的驅動預設是開著，所以要明確寫 2。
+NM_PS=/etc/NetworkManager/conf.d/10-no-wifi-powersave.conf
+if [ -f "$NM_PS" ] && grep -q 'wifi.powersave *= *2' "$NM_PS"; then
+  echo "   already configured"
+else
+  printf '[connection]\nwifi.powersave = 2\n' | sudo tee "$NM_PS" >/dev/null
+  echo "   wrote $NM_PS"
+fi
+sudo systemctl reload NetworkManager || true
+# 現況要用問的，不要用猜的 —— 設定檔寫下去不等於現在這條連線已經套用，
+# 已經建立的關聯要重連才會換。
+if command -v iw >/dev/null 2>&1; then
+  echo "   current: $(iw dev wlan0 get power_save 2>/dev/null || echo 'unknown')"
+  echo "   還是 on 的話，重連一次才會套用。🔴 不要直接在 SSH 裡下 nmcli device"
+  echo "   disconnect —— 那會把你自己的連線一起砍掉、然後沒有人再跑後半段。"
+  echo "   要嘛在平板上做，要嘛丟給 systemd 讓它活過 SSH 斷線："
+  echo "     sudo systemd-run --on-active=2 nmcli device reapply wlan0"
+else
+  echo "   iw 未安裝，無法回報現況（sudo apt-get install -y iw）"
+fi
+# ⚠️ 位址本身沒有在這裡固定。這台是 DHCP，而它到目前為止一直拿到同一個
+#    位址，所以問題是「睡著」不是「換號碼」。真的要釘死，在路由器上做 DHCP
+#    reservation，不要在裝置上設靜態 —— 設錯的話你就得抱著平板打字了。
+
 echo
 if [ "$skipped" -gt 0 ]; then
   echo "== done — $skipped block(s) skipped for want of input (see above) =="
