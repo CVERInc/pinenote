@@ -21,6 +21,30 @@
     margin: 0;
 }
 
+/* pn-input。四顆要看起來是一組，所以這顆的目標寬度就是另外三顆量到的那個 26：
+   內容 20 ＋左右各 3。圖示那三顆是內容 16 ＋左右各 5，同樣是 26 —— 兩個大寫
+   拉丁字母比一個圖示寬，所以內距往內收，總寬對齊。
+
+   ⚠️ 20/3/11px 這三個數字是算出來對齊 26 的，不是量出來的。另外三顆的 26 是
+   從截圖量的（見上面那段）。這一顆要用 PanelInfo 的 w 對過才算數。
+
+   🔴 寬度仍然鎖死。US／JP／TW 三個都是兩個大寫字母，寬度差得很小，但頂列是
+   比例字型，J 比 U 窄 —— 不鎖的話按鈕會跟著切換抽動，把左邊三顆一起推。在這
+   片面板上那不是「動一下」，那是每次切換都留一條拖影。 */
+#panel .pn-panel-button.pn-panel-input {
+    -natural-hpadding: 3px;
+    -minimum-hpadding: 3px;
+}
+
+#panel .pn-panel-button .pn-panel-input-label {
+    font-size: 11px;
+    font-weight: bold;
+    min-width: 20px;
+    text-align: center;
+    padding: 0;
+    margin: 0;
+}
+
 /* 鄰居（quickSettings）。六顆要一致間距，而剩下那 10 個像素在它的左內距裡：
    它左緣到 Wi-Fi 中心是 24.5 邏輯像素，一致所需的是 14.5。
 

@@ -24,20 +24,23 @@
 
 import Clutter from 'gi://Clutter';
 import Gio from 'gi://Gio';
+import Shell from 'gi://Shell';
 import GLib from 'gi://GLib';
 import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as Keyboard from 'resource:///org/gnome/shell/ui/status/keyboard.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const BUILD = 1;
+const BUILD = 2;
 
 const IFACE = `<node>
   <interface name="org.cver.PnPanel">
     <method name="Rotate"/>
     <method name="Tone"/>
     <method name="Refresh"/>
+    <method name="Input"/>
     <method name="PanelInfo">
       <arg type="s" direction="out" name="info"/>
     </method>
@@ -90,7 +93,59 @@ const PN_HIDDEN_PANEL_ROLES = [
     // 自己放行的（2026-08-08：「那個 BW+D1 我覺得可以拿掉了」）。全部仍可從
     // gsettings 與系統匯流排到達，README 有清單。
     "Pinenote Helper Indicator",
+    // GNOME 自己的輸入源指示器。它在 48 上是**獨立的 statusArea 項目**（不是收在
+    // quickSettings 裡，這點是用 PanelInfo dump 出來確認的，不是猜的），所以留著
+    // 就會跟 pn-input 並排顯示同一件事。
+    //
+    // 這一顆藏得起來是因為我們真的取代了它：它的全部功能就是顯示現用輸入源、
+    // 點開選一個，pn-input 兩件都做，而且是戳一下就換。上面那條「沒取代就別藏」
+    // 的自省，在這裡不適用。
+    "keyboard",
 ];
+
+// ── 輸入源 ──────────────────────────────────────────────────────────────
+// 一個版面三個引擎：拼音、羅馬字、英文吃的是同一組 26 個字母，所以 k6 不用改
+// （pn-osk 的 us-extended fallback 會接住 layout=default 的 ibus 引擎）。代價是
+// 「現在是哪個引擎」變成唯一會出錯的地方，而它原本只寫在一顆藏起來的指示器上。
+//
+// 🔑 這顆畫的是**現況**，跟 pn-tone 同一個規矩，不是 pn-rotate 那個「按了會
+//    怎樣」。三個狀態沒有「另一個」可言，所以「按了會怎樣」根本沒辦法畫。
+//
+// 🔑 而且是字不是圖示。理由跟 pn-osk 那顆 caps lock 一樣：兩色、沒有動畫的
+//    面板上，字是活得下來的訊號。三態畫成圖示等於逼自己記三張圖。
+//
+// 標籤三個都寫死，鍵是 source.id（xkb 源是版面代號，ibus 源是引擎名）。
+//
+// ⚠️ 這是用一個東西換來的：shortName 本來是**動態**的，mozc 會隨自己的內部模式
+//    把它在あ／A 之間換，所以那顆按鈕原本順便會說「現在收的是假名還是英數」。
+//    寫死成 JP 之後那個訊息沒了 —— 這是維護者要的（2026-08-17：「替我用
+//    US/JP/TW 即可」），記在這裡是為了將來想找回它的人知道它曾經在。
+//
+// 三個都是兩個大寫拉丁字母，寬度幾乎一樣，所以下面 stylesheet 那個固定寬度
+// 從「必要」降級成「保險」——但還是要留，JP 的 J 比 U 窄。
+//
+// 🔴 日文那一源是 mozc-on，不是 mozc-jp。ibus-mozc 宣告三個引擎：
+//    mozc-jp（通用）、mozc-on（Mozc:あ，啟用即ひらがな）、mozc-off（Mozc:A_）。
+//    掛 mozc-jp 的話它會停在直接入力，打羅馬字直接吐英文字母——看起來就像
+//    「輸入法無效」，而 k6 版面沒有半角/全角鍵，切不出來。mozc-on 一啟用就是
+//    假名。這也正好是 macOS 把「かな」和「英数」做成兩個輸入源的那個做法。
+//    兩個名字都留在表裡：換回去的人不該連標籤一起掉。
+//
+// 下面兩個這台預設沒有掛進 sources，但標籤先備著 —— 這副鍵盤和這顆按鈕要能服務
+// 其他 CJK 使用者，而「裝了引擎卻掉標籤」是最難查的那種半殘。兩個都吃 US 鍵位：
+//   chewing  宣告 layout=us，自己把 US 鍵位映射成注音，所以 k6 不用動
+//   hangul   宣告 layout=kr，但 _composeLayout 沒有 kr-extended 會退回
+//            us-extended，而二式韓文本來就是用拉丁鍵位打出字母
+// 注音用「ㄅ」而不是兩個拉丁字母：TW 已經給了拼音，而對看得懂的人來說 ㄅ 是
+// 一眼的事。它比兩個大寫字母窄，撐不開 stylesheet 那個 20px。
+const PN_INPUT_LABELS = {
+    us: "US",
+    "mozc-on": "JP",
+    "mozc-jp": "JP",
+    rime: "TW",
+    chewing: "ㄅ",
+    hangul: "KR",
+};
 
 function box(actor) {
     if (!actor)
@@ -141,6 +196,10 @@ export default class PineNotePanelExtension extends Extension {
         this._pnTriggerRefresh();
     }
 
+    Input() {
+        this._pnInputCycle();
+    }
+
     // ── 頂列 ──────────────────────────────────────────────────────────
     // 這台上按得最兇的兩件事是「全域刷新」和「旋轉」，而旋轉原本埋在一個狀態
     // 顯示器的選單裡第十幾項。兩個都升成單獨一顆，而且是我們自己呼叫底層介面，
@@ -160,9 +219,30 @@ export default class PineNotePanelExtension extends Extension {
             style_class: "system-status-icon",
         });
         button.add_child(button._pnIcon);
-        // 觸控要自己接：button-press-event 在純觸控上不一定會來。
-        // （長按曾經做在這裡，三種寫法都沒開火，而那個功能在快速設定裡本來就有
-        // 一個看得見的開關 —— 見 _pnInstallPanel 的註解。）
+        this._pnBindTaps(button, onActivate);
+        return button;
+    }
+
+    // 同一顆按鈕，內容是字不是圖示。給 pn-input 用 —— 三個輸入源沒辦法用三張
+    // 圖示說清楚，理由寫在 PN_INPUT_LABELS 上面。
+    _pnMakeTextButton(name, text, onActivate) {
+        const button = new PanelMenu.Button(0.0, name, true);
+        button.add_style_class_name("pn-panel-button");
+        button.add_style_class_name("pn-panel-input");
+        button._pnLabel = new St.Label({
+            text,
+            style_class: "pn-panel-input-label",
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        button.add_child(button._pnLabel);
+        this._pnBindTaps(button, onActivate);
+        return button;
+    }
+
+    // 觸控要自己接：button-press-event 在純觸控上不一定會來。
+    // （長按曾經做在這裡，三種寫法都沒開火，而那個功能在快速設定裡本來就有
+    // 一個看得見的開關 —— 見 _pnInstallPanel 的註解。）
+    _pnBindTaps(button, onActivate) {
         button.connect("button-press-event", () => {
             onActivate();
             return Clutter.EVENT_STOP;
@@ -172,7 +252,120 @@ export default class PineNotePanelExtension extends Extension {
                 onActivate();
             return Clutter.EVENT_STOP;
         });
-        return button;
+    }
+
+    // ── 輸入源循環 ────────────────────────────────────────────────────
+    // 🔴 照 sources 清單的順序走，**不要**借 GNOME 的 switch-input-source
+    //    keybinding。那個是 MRU 循環：三個源、一顆按鈕的話，你會在最近用過的
+    //    兩個之間彈來彈去，第三個永遠戳不到。清單順序讓 US → 拼 → あ → US 是
+    //    一個可以背起來的圈。
+    //
+    // inputSources 是稀疏的 {index: source}，索引不保證連續（GNOME 會跳過
+    // 建不起來的源），所以先取鍵再排，不要假設 0..n-1。
+    _pnInputCycle() {
+        const ism = Keyboard.getInputSourceManager();
+        const indices = Object.keys(ism.inputSources)
+            .map(Number)
+            .sort((a, b) => a - b);
+        if (indices.length < 2) {
+            // 只有一個源的時候這顆按鈕沒有意義，但它仍然在頂列上占著位子 ——
+            // 說出來，不要讓一次沒反應的戳看起來像壞掉。
+            console.log("[pn-panel] input: only one source, nothing to cycle");
+            return;
+        }
+        const at = indices.indexOf(ism.currentSource?.index ?? -1);
+        const next = indices[(at + 1) % indices.length];
+        ism.inputSources[next]?.activate(true);
+    }
+
+    // Caps 的目的地：拉丁那一源。找 type === 'xkb' 而不是寫死 'us'，因為版面
+    // 代號是設定裡的值，換一天改成 dvorak 這裡不該跟著壞。
+    //
+    // 已經在 US 的時候往回跳到剛才那個源 —— 這是 macOS 的行為，而維護者的日文
+    // 是羅馬字、keymap 也選了 Kotoeri，整台的手感本來就往那邊靠。只寫單向
+    // （JP/TW → US）的話，Caps 會變成一個有去無回的鍵。
+    _pnInputGoLatin() {
+        const ism = Keyboard.getInputSourceManager();
+        const sources = Object.keys(ism.inputSources)
+            .map(Number)
+            .sort((a, b) => a - b)
+            .map(i => ism.inputSources[i]);
+        const latin = sources.find(s => s.type === "xkb");
+        if (!latin) {
+            console.log("[pn-panel] input: no xkb source to fall back to");
+            return;
+        }
+        const cur = ism.currentSource;
+        if (cur?.index !== latin.index) {
+            this._pnInputLast = cur?.index ?? null;
+            latin.activate(true);
+        } else if (this._pnInputLast != null) {
+            ism.inputSources[this._pnInputLast]?.activate(true);
+        }
+    }
+
+    // 實體鍵盤的兩個鍵。
+    //
+    // 🔴 用 setCustomKeybindingHandler 挾持 GNOME 既有的兩個 keybinding，而不是
+    //    addKeybinding 自己開一個 —— 後者要求擴充自帶 GSettings schema，等於為了
+    //    兩個鍵多一個 schemas/ 目錄和一次 glib-compile-schemas。挾持不用。
+    //
+    // 🔴 switch-input-source 的預設行為是 MRU 循環，這正是我們要換掉的：三個源
+    //    一個鍵，MRU 會讓第三個永遠輪不到。挾持之後它走的是跟面板按鈕同一個
+    //    _pnInputCycle，清單順序，US → TW → JP → US。
+    //
+    // ⚠️ switch-input-source-backward 被拿去做「回到 US」，名字對不上實際行為。
+    //    這是刻意的取捨：它是一個現成的、已經有 accel 欄位的綁定槽，借它比自帶
+    //    schema 便宜。accel 本身由 setup/ime.sh 寫（Ctrl+Space 和 Menu），這裡
+    //    只負責行為 —— 跟 pn-tone 把狀態留在 pnhelper 的 gsetting 是同一種分工。
+    _pnInstallKeybindings() {
+        Main.wm.setCustomKeybindingHandler("switch-input-source",
+            Shell.ActionMode.ALL, () => this._pnInputCycle());
+        Main.wm.setCustomKeybindingHandler("switch-input-source-backward",
+            Shell.ActionMode.ALL, () => this._pnInputGoLatin());
+    }
+
+    _pnRemoveKeybindings() {
+        // 還原就是把處理器指回 InputSourceManager 自己那一個。它是私有方法，
+        // 但這是唯一誠實的還原 —— shell 沒有把原處理器暴露出來，而留著我們的
+        // 處理器不還原，停用擴充之後 Ctrl+Space 會靜靜地什麼都不做。
+        const ism = Keyboard.getInputSourceManager();
+        const orig = ism._switchInputSource?.bind(ism);
+        if (!orig) {
+            console.warn("[pn-panel] cannot restore input-source keybindings: " +
+                "InputSourceManager._switchInputSource is gone");
+            return;
+        }
+        Main.wm.setCustomKeybindingHandler("switch-input-source",
+            Shell.ActionMode.ALL, orig);
+        Main.wm.setCustomKeybindingHandler("switch-input-source-backward",
+            Shell.ActionMode.ALL, orig);
+    }
+
+    // Ctrl+Space 會叫出 GNOME 的輸入源切換 OSD（InputSourceSwitcher），而它畫的
+    // 是 source.shortName —— 也就是 en／朙／あ，跟頂列那顆講的是同一件事卻用不同
+    // 的詞。把 shortName 也換成同一組標籤，兩邊才是同一個東西。
+    //
+    // 安全的原因：shortName 只在 InputSource 建構時設一次（由引擎的 symbol 來），
+    // 之後 IBus 的 property 更新走的是 source.properties，不會回頭蓋它。所以設
+    // 一次就穩，不需要盯著每個 source 的 changed。
+    // setter 會 emit 'changed'，所以要用相等就跳過來擋掉回授。
+    _pnApplyShortNames() {
+        const ism = Keyboard.getInputSourceManager();
+        for (const source of Object.values(ism.inputSources)) {
+            const label = PN_INPUT_LABELS[source.id];
+            if (label && source.shortName !== label)
+                source.shortName = label;
+        }
+    }
+
+    _pnSyncInputLabel() {
+        const label = Main.panel.statusArea?.["pn-input"]?._pnLabel;
+        if (!label)
+            return;
+        const source = Keyboard.getInputSourceManager().currentSource;
+        // id 先於 shortName：覆寫表存在的理由就是 shortName 有時沒有用。
+        label.text = PN_INPUT_LABELS[source?.id] ?? source?.shortName ?? "—";
     }
 
     _pnTriggerRefresh() {
@@ -428,6 +621,37 @@ export default class PineNotePanelExtension extends Extension {
         add("pn-tone", "PN Tone", `${this.path}/icons/pn-tone.svg`,
             () => this._pnToneToggle());
 
+        // 第四顆。文字版，見 PN_INPUT_LABELS 上面那段。
+        const input = this._pnMakeTextButton("PN Input", "—",
+            () => this._pnInputCycle());
+        Main.panel.addToStatusArea("pn-input", input, 0, "right");
+        this._pnPanelButtons.push("pn-input");
+        // 輸入源也可能從別處被換掉（快速設定、應用程式自己切、Super+Space），
+        // 不接這個訊號的話標籤會說謊 —— 跟 _pnSyncRotateIcon 接 monitors-changed
+        // 是同一個理由。sources-changed 也要接：清單本身變了（例如剛裝好引擎、
+        // 或改了 gsettings）之後，currentSource 會換成別的物件。
+        const ism = Keyboard.getInputSourceManager();
+        this._pnInputSignals = [
+            ism.connect("current-source-changed", () => this._pnSyncInputLabel()),
+            // 🔴 sources-changed 要順手再藏一次 GNOME 那顆。它自己會依源的數量
+            //    決定要不要現身（一個源的時候收起來，兩個以上跳出來），而
+            //    PanelMenu.Button 把自己的 visible 綁到 container 上 —— 也就是
+            //    我們 hide 的那個。上面那條 child-added 守衛擋不住這種情形：
+            //    面板沒有長出新東西，是舊東西自己把自己打開。
+            ism.connect("sources-changed", () => {
+                this._pnApplyShortNames();
+                this._pnSyncInputLabel();
+                this._pnHidePanelItems();
+            }),
+        ];
+        // 🔴 這裡一定要跑一次，不能只靠 sources-changed。擴充是在 shell 起來之後
+        //    才 enable 的，那時候輸入源早就建好了，那個訊號不會再為我們發一次。
+        //    少了這一行的症狀很安靜：頂列那顆是對的（它查 PN_INPUT_LABELS），
+        //    只有 Ctrl+Space 的 OSD 還講 en／㞢／あ。
+        this._pnApplyShortNames();
+        this._pnSyncInputLabel();
+        this._pnInstallKeybindings();
+
         // 六顆一致，不是 3+3。我們三顆已經收到底（見 stylesheet），剩下那道縫
         // 整個在鄰居身上：quickSettings 左緣到 Wi-Fi 中心是 24.5 邏輯像素，而
         // 一致所需的是 14.5。它沒有自己的 class 可以選，所以掛一個。
@@ -448,6 +672,10 @@ export default class PineNotePanelExtension extends Extension {
     }
 
     _pnRemovePanel() {
+        this._pnRemoveKeybindings();
+        for (const id of this._pnInputSignals ?? [])
+            Keyboard.getInputSourceManager().disconnect(id);
+        this._pnInputSignals = null;
         if (this._pnPanelMonitorSignal) {
             Main.layoutManager.disconnect(this._pnPanelMonitorSignal);
             this._pnPanelMonitorSignal = 0;
@@ -527,6 +755,17 @@ export default class PineNotePanelExtension extends Extension {
             right: box(panel._rightBox),
             // 誰在 statusArea 裡但沒出現在三個 box 中（隱藏或被別人收走）
             statusAreaRoles: Object.keys(panel.statusArea ?? {}),
+            // 輸入源的實際值。pn-input 的標籤查的是 PN_INPUT_LABELS，而 Ctrl+Space
+            // 那個切換 OSD 畫的是 source.shortName —— 兩個不同的來源說同一件事，
+            // 所以「面板對了但 OSD 沒對」是查得出來的，前提是這裡看得到 shortName。
+            inputSources: Object.values(
+                Keyboard.getInputSourceManager()?.inputSources ?? {})
+                .map(s => ({
+                    index: s.index,
+                    type: s.type,
+                    id: s.id,
+                    shortName: s.shortName,
+                })),
         }, null, 2);
     }
 
