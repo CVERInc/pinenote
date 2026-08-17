@@ -51,6 +51,8 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
+import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
+import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 
 const BUILD = 29;
 
@@ -418,6 +420,7 @@ export default class PineNoteOskExtension extends Extension {
 
         const ext = this;
         this._config = readConfig();
+        this._pnDockCandidatePopup();
 
         proto._relayout = function (...args) {
             ext._origRelayout.apply(this, args);
@@ -1399,10 +1402,12 @@ export default class PineNoteOskExtension extends Extension {
             proto._updateLayout = this._origUpdateLayout;
         if (this._origAddRowKeys)
             proto._addRowKeys = this._origAddRowKeys;
+        this._pnUndockCandidatePopup();
 
         this._origRelayout = null;
         this._origUpdateLayout = null;
         this._origAddRowKeys = null;
+
 
         this._dbus?.unexport();
         this._dbus = null;
@@ -1664,6 +1669,169 @@ export default class PineNoteOskExtension extends Extension {
         ac.setRatio(keyboard.width, keyboard.height);
     }
 
+    // ── 候選字窗貼底 ──────────────────────────────────────────────────
+    // 候選字有兩條路，而它們的容器是不同的東西：
+    //
+    //   OSK 開著   ibusCandidatePopup 的 _updateVisibility() 裡有
+    //              `!Main.keyboard.visible`，浮動窗自己關掉，候選改由
+    //              Main.keyboard.addSuggestion() 推進 OSK 上緣那條 strip。
+    //              那條 strip 本來就貼在按鍵正上方 —— 要的位置它天生就有，
+    //              缺的只是高度（見 _forceFullWidth）。
+    //
+    //   OSK 沒開   走這個 BoxPointer，預設釘在游標上跟著字跑。
+    //
+    // 貼底要改的只有後者。把假游標挪到螢幕底緣、寬度給滿、高度給 0：
+    // BoxPointer 是 St.Side.TOP（箭頭在上、盒子在下），底下沒有空間時它自己
+    // 會翻到上方，於是盒子落在底緣、水平置中 —— 兩條路的候選字就都在同一個
+    // 地方出現，眼睛不必在螢幕上找它。
+    //
+    // 🔴 覆寫的是**實例**的方法不是原型。這顆 popup 由 ibusManager 建立且只有
+    //    一個，而原型上還有別人；跟 _forceFullWidth 覆寫 ac.setRatio 同一個理由。
+    _pnDockCandidatePopup() {
+        const popup = IBusManager.getIBusManager()?._candidatePopup;
+        if (!popup || popup._pnOrigSetDummy)
+            return;
+
+        // 停靠線：OSK 開著就是鍵盤上緣，沒開就是螢幕底緣。
+        //
+        // 🔴 鍵盤上緣要用「螢幕底緣減鍵盤高度」算，**不要**去讀 keyboardBox 的
+        //    座標。_animateShowComplete() 做的是 `this.translation_y = -this.height`
+        //    —— 平移掛在 Keyboard 自己身上，keyboardBox 其實坐在螢幕底緣之下，
+        //    鍵盤是往上平移進來的。讀 keyboardBox.get_transformed_position() 會
+        //    拿到底緣，於是候選窗整條蓋在鍵盤上（2026-08-18 實測就是這樣）。
+        //    反推還有一個好處：動畫途中它算的是最終停靠位置，候選窗不會跟著滑。
+        //
+        // 假游標給滿寬、零高，
+        // BoxPointer 是 St.Side.TOP（箭頭在上、盒子在下），下方沒有空間時它自己
+        // 翻上去 —— 於是盒子貼著那條線的上方、水平置中。
+        const dockLine = () => {
+            const mon = Main.layoutManager.primaryMonitor;
+            if (!mon)
+                return null;
+            let y = mon.y + mon.height;
+            const kb = Main.keyboard?._keyboard;
+            if (Main.keyboard?.visible && kb?.height)
+                y -= kb.height;
+            return [mon.x, y, mon.width, 0];
+        };
+
+        const applyDock = () => {
+            const dock = dockLine();
+            if (!dock)
+                return false;
+            // 🔴 箭頭要在**下**。BoxPointer 建構時是 St.Side.TOP，意思是箭頭在
+            //    上、盒子在下 —— 錨在鍵盤上緣的結果是候選字整條畫進數字列裡
+            //    （2026-08-18 量到 box y=468 h=54，鍵盤正好從 468 開始）。
+            //    我原本以為「下面沒空間就會自己翻」，但下面有空間：那是鍵盤佔的
+            //    螢幕，不是螢幕外。翻不翻是它自己決定的，不是我們要的保證。
+            //    _reposition 的 St.Side.BOTTOM 分支算的是
+            //        resY = sourceTopLeft.y - natHeight - gap
+            //    正是我們要的「盒子貼在錨點上方」。
+            //
+            // 🔴 要寫 _userArrowSide，不能只呼叫 updateArrowSide()。後者只改
+            //    _arrowSide 並重畫邊框，而每次配置都會跑 _updateFlip()：
+            //        let arrowSide = this._calculateArrowSide(this._userArrowSide);
+            //    它是從 _userArrowSide 重算再覆寫 _arrowSide 的 —— 所以只呼叫
+            //    updateArrowSide 的話，下一次配置就被建構時那個 TOP 打回去。
+            //    實測就是這樣：改了 arrow side，量到的位置一格都沒動。
+            popup._userArrowSide = St.Side.BOTTOM;
+            popup.updateArrowSide(St.Side.BOTTOM);
+            popup._pnOrigSetDummy(...dock);
+            return true;
+        };
+
+        popup._pnOrigArrowSide = popup._userArrowSide;
+        popup._pnOrigSetDummy = popup._setDummyCursorGeometry.bind(popup);
+        popup._setDummyCursorGeometry = (x, y, w, h) => {
+            if (!applyDock())
+                popup._pnOrigSetDummy(x, y, w, h);
+        };
+
+        // 🔴 上游把浮動窗和 OSK 當成互斥的兩條路：
+        //        isVisible = !Main.keyboard.visible && (preedit || aux || candidates)
+        //    OSK 開著時它關掉自己，候選改由 Main.keyboard.addSuggestion() 推進
+        //    OSK 上緣那條 suggestions strip。
+        //
+        //    而那條 strip 在這台上拿不到高度：fillWidth 把 AspectContainer 的比例
+        //    釘成整條帶子（setRatio(keyboard.width, keyboard.height)），按鍵區的
+        //    偏好高度就是整條帶子，配置時先被餵飽，strip 剩 0。兩邊同時失效，
+        //    所以 OSK 一開就什麼候選都看不到 —— 而實體鍵盤（OSK 沒開）正常。
+        //
+        //    🔴 歸因更正（2026-08-18）：這裡一度寫成「kb._suggestions 是 null」。
+        //       那是誤讀 —— 當時 Geometry 還沒有 suggestions 欄位，而讀取端把
+        //       「鍵不存在」和「值是 null」收斂成同一個 None。補上欄位再量，它
+        //       是 visible=true / children=0 / naturalHeight=0，也就是存在但被
+        //       擠成沒有高度。strip 從來沒有消失過，只是沒有位置。
+        //
+        //    修法有兩個，選了後者：
+        //      (a) 讓 strip 拿回高度 —— 有候選時把它的自然高度從比例裡扣掉。
+        //          能動，但候選字會出現在兩個地方（浮動窗貼底、strip 貼鍵盤），
+        //          而且 strip 這條路沒有編號：addSuggestion(text, callback) 不帶
+        //          index，只能用點的。
+        //      (b) 把 !Main.keyboard.visible 拿掉，讓浮動窗同時服務兩種情況，
+        //          strip 就維持 0 —— 那也讓 fillWidth 賺到的滿版不必還回去。
+        //          一個元件、一個位置、有 1-9 可以按。
+        //
+        //    圖層不必自己處理：
+        //    上游在 isVisible 分支裡本來就有
+        //        this.get_parent().set_child_above_sibling(this, keyboardBox)
+        //    註解寫著「just above the keyboard gets us to the right layer」——
+        //    它早就準備好被畫在 OSK 之上，只是從來沒有機會。
+        //
+        // ⚠️ 這一段是照抄上游的 _updateVisibility 再拿掉一個條件，所以它會跟著
+        //    上游漂移。升級 gnome-shell 之後候選窗行為變怪的話，先來對這一段。
+        popup._pnOrigUpdateVisibility = popup._updateVisibility.bind(popup);
+        popup._updateVisibility = () => {
+            const isVisible = popup._preeditText.visible ||
+                popup._auxText.visible ||
+                popup._candidateArea.visible;
+
+            if (isVisible) {
+                // 🔴 每次要顯示之前重算停靠線。位置本來只在 cursor-location-changed
+                //    的時候算一次，而那一刻 OSK 常常還沒升起 —— 算出來的是螢幕底
+                //    緣，然後就這樣定住，候選窗整條蓋在鍵盤上。顯示時機才是唯一
+                //    保證「OSK 現在到底在不在」已成定局的時機。
+                applyDock();
+                // 錨點是滿寬的一條線，alignment 0.5 才會置中；0 會把盒子推向一邊
+                // （量到 x=234 w=696，右緣貼著 930）。
+                popup.setPosition(popup._dummyCursor, 0.5);
+                popup.open(BoxPointer.PopupAnimation.NONE);
+                const {keyboardBox} = Main.layoutManager;
+                popup.get_parent().set_child_above_sibling(popup, keyboardBox);
+            } else {
+                popup.close(BoxPointer.PopupAnimation.NONE);
+            }
+        };
+    }
+
+    _pnUndockCandidatePopup() {
+        const popup = IBusManager.getIBusManager()?._candidatePopup;
+        if (popup?._pnOrigSetDummy) {
+            popup._setDummyCursorGeometry = popup._pnOrigSetDummy;
+            delete popup._pnOrigSetDummy;
+        }
+        if (popup?._pnOrigUpdateVisibility) {
+            popup._updateVisibility = popup._pnOrigUpdateVisibility;
+            delete popup._pnOrigUpdateVisibility;
+        }
+        // 箭頭方向也要還原，不然停用擴充之後候選窗會繼續畫在游標上方。
+        //
+        // 🔴 要包 try。disable 有一半的情況是整個 shell 在拆，那時候這顆 popup
+        //    可能已經被 C 端 dispose 掉了，而 updateArrowSide() 會去碰
+        //    this._border / this.bin —— 丟出 "this.bin is undefined"，然後把
+        //    後面還沒還原的東西一起跳過。實測看得到：restart gdm3 的日誌裡，
+        //    舊 session 熄燈前正好噴兩個這種 JS ERROR。
+        if (popup && popup._pnOrigArrowSide !== undefined) {
+            try {
+                popup._userArrowSide = popup._pnOrigArrowSide;
+                popup.updateArrowSide(popup._pnOrigArrowSide);
+            } catch (e) {
+                // 已經拆掉了，本來就不需要還原
+            }
+            delete popup._pnOrigArrowSide;
+        }
+    }
+
     _restoreRatio() {
         const ac = Main.keyboard?._keyboard?._aspectContainer;
         if (ac?._pnOrigSetRatio) {
@@ -1741,6 +1909,31 @@ export default class PineNoteOskExtension extends Extension {
             keyboard: box(kb),
             keyboardVisible: kb?.visible ?? null,
             aspectContainer: box(kb?._aspectContainer),
+            // 候選字列。它跟 aspectContainer 是同一個垂直配置裡的兄弟，兩個搶
+            // 同一份高度，所以少了它這份 dump 讀不出「按鍵區為什麼是這個高度」。
+            // children 是關鍵欄位：strip 永遠 visible（見 _forceFullWidth 的註解），
+            // 有沒有候選字要看它有沒有孩子。
+            // 候選字窗。它不是鍵盤的一部分，但它的位置**由**鍵盤決定
+            // （見 _pnDockCandidatePopup 的停靠線），所以量鍵盤的時候要一起看
+            // 得到它 —— 不然「有沒有貼在鍵盤上緣」只能靠拍照。
+            candidates: (() => {
+                const p = IBusManager.getIBusManager()?._candidatePopup;
+                if (!p)
+                    return null;
+                return {
+                    box: box(p),
+                    visible: p.visible,
+                    dummyCursor: box(p._dummyCursor),
+                };
+            })(),
+            suggestions: kb?._suggestions
+                ? {
+                    box: box(kb._suggestions),
+                    visible: kb._suggestions.visible,
+                    children: kb._suggestions.get_n_children(),
+                    naturalHeight: kb._suggestions.get_preferred_height(-1)[1],
+                }
+                : null,
             layers,
             sampleKey: firstKey ? box(firstKey) : null,
             composed: this._lastComposed ?? null,
@@ -1927,6 +2120,16 @@ export default class PineNoteOskExtension extends Extension {
             if (arrow)
                 list.push([`arrow:${which}`, arrow]);
         }
+        // 候選字窗。同樣的故事第二次：它走 Main.layoutManager.addTopChrome()，
+        // 落在 uiGroup 底下 —— 跟上面那組箭頭一樣在量化器射程之外。
+        //
+        // 差別是這一顆不是我們搬出去的，是上游本來就放在那裡，所以在輸入法進來
+        // 之前沒有人會發現。它是原廠 Adwaita 深色：黑底、白字、選取那格是藍的，
+        // 而藍色在這片面板上沒有對應的灰階 —— 抖動之後就是一格雜訊，剛好蓋在
+        // 你要讀的那個候選字上。
+        const candidates = IBusManager.getIBusManager()?._candidatePopup;
+        if (candidates)
+            list.push(["candidates", candidates]);
         return list;
     }
 
