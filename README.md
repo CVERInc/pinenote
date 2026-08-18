@@ -441,21 +441,50 @@ let ibus-rime deploy on its own; do not run the deployer by hand.
 
 **It landed inside the keyboard.** `St.Side.TOP` means the arrow is on top and
 the *box hangs below*, so anchoring at the keyboard's top edge drew the
-candidates over the number row. Flipping it is not `updateArrowSide()` — that
-sets `_arrowSide` and repaints, and every allocation runs `_updateFlip()`, which
-recomputes from `_userArrowSide` and overwrites it. Write `_userArrowSide`.
+candidates over the number row. That was the last time BoxPointer's own
+positioning was argued with.
 
-The fix chosen for the first one was not to give the strip its height back. The
-popup now serves both cases, docked to the keyboard's top edge when the OSK is up
-and to the bottom of the screen when it is not, so candidates are always in the
-same place. It also keeps the numbers: `addSuggestion(text, callback)` carries no
-index, so the strip can only be tapped, while the popup has 1-9 — and this
-keyboard has a real digit row to press them with.
+### And then it stopped being a bubble
 
-The popup reaches `pn-osk`'s posteriser the same way the launcher arrows did:
-it goes through `addTopChrome()` into `uiGroup`, outside the quantiser, and
-arrives in stock Adwaita dark with a blue selection that has no grey to dither
-into. It is in `_pnPosteriseActors()` now.
+BoxPointer is right for something that points at a thing and wrong for a bar
+that lives on an edge, and every remaining fault was that mismatch wearing a
+different face. Position is computed by `pn-osk` now, not by `_reposition`:
+`resX` came from `natWidth`, so the bar wandered whenever the candidates changed
+length (624 / 652 / 696 measured) — that was the drift. `y` is computed inside
+`_reposition` from the allocation box, because that is the only moment the
+height is *this* batch's height; computed after `open()` and before the content
+laid out, it read the previous batch and put the bar 34px low, over the Esc row.
+
+The `...` was never width. `St.Label` ellipsizes at END by default and
+`BoxLayout` shrinks every child toward its minimum in proportion, so one
+sentence-length candidate turned all five into `1 ...`. Ellipsize is off on the
+sixteen labels the area builds up front; what does not fit is clipped, and the
+page buttons — `x_expand` + `END` — stay pinned on the right, which is the point
+when something has been clipped. `page_size` went back to 5 for the same reason:
+when the first candidate is 你好暗暗幾歲住哪要不要喝咖啡, nine cells do not fit in
+936 logical pixels no matter how they are aligned. macOS gives the first
+candidate what it needs and pages the rest; five is that shape.
+
+The popup went *into* the posteriser and then came out again. In, because
+`addTopChrome()` puts it outside the quantiser and it arrived Adwaita-dark with a
+blue selection that has no grey to dither into. Out, because the keyboard is not
+in that list, so no CSS value could make the selected cell match the keyboard's
+`#aaa` — it would draw as `#555`. Physics to the quantiser, design to CSS: the bar
+is part of the typing surface now, and its colours are written next to the
+keyboard's.
+
+**The one that hid.** Upstream `_reposition` must run before the origin is
+overwritten. It fills `_sourceExtents` and `_workArea`, and `vfunc_allocate`
+calls `_updateFlip` right after it, which reads them. Replacing `_reposition`
+wholesale left them unset; `_updateFlip` threw inside the vfunc, GJS swallowed
+it, and the journal said nothing — while `Geometry()` reported visible, mapped,
+sourceMapped all true, five candidates present, opacity 255, and `box: None`.
+Everything there, no allocation. Three rounds of "0 JS ERROR" were evidence of
+nothing. The diagnostic fields on `Geometry()` are what caught it, and they stay.
+
+The result keeps the numbers: `addSuggestion(text, callback)` carries no index,
+so the OSK's own strip could only ever be tapped, while the bar has 1-5 — and
+this keyboard has a real digit row to press them with.
 
 **One correction worth keeping.** The first diagnosis of the invisible strip was
 "`kb._suggestions` is null". It is not, and it never was. `Geometry()` had no
@@ -468,7 +497,7 @@ look at.
 
 ### Switching
 
-One tap on `pn-input` cycles US → TW → JP → US in list order. Not MRU, which is
+One tap on `pn-input` cycles US → JP → TW → US in list order — alphabetical, which is what you can hold in your head. Not MRU, which is
 what GNOME's own `switch-input-source` does: with three sources and one button,
 MRU bounces between the two most recent and the third becomes unreachable.
 
