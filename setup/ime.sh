@@ -74,6 +74,9 @@ patch:
     - schema: luna_pinyin_tw
     - schema: bopomofo_tw
   menu/page_size: 5
+  # 選單照 schema_list 順序排、不 MRU。沒有這個的話第 1 項是現用方案、另一個被
+  # 選項推到第二頁，pn-input 在第一頁找不到目標。有了它位置固定，直接選。
+  switcher/fix_schema_list_order: true
 EOF
 
 # 注音方案的選字標籤清空。方案預設 alternative_select_keys 是 ABCDEFGHIJ（大寫），

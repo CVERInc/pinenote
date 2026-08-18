@@ -471,33 +471,40 @@ export default class PineNotePanelExtension extends Extension {
             console.log("[pn-panel] rime: no IM context to send F4 to");
             return;
         }
-        // 2. 等選單進候選列，讀文字，送數字
+        // 2. 等選單進候選列，找目標在第幾格，選它。
+        //
+        // 🔴 switcher/fix_schema_list_order: true —— 選單照 schema_list 順序排，
+        //    不 MRU。沒有這個的話第 1 項是現用方案、另一個被選項推到第二頁，
+        //    「找目標在第幾格」在第一頁找不到（2026-08-18 真機截圖）。有了它，
+        //    1 拼音 / 2 注音 永遠固定，而且**不能**再用「第 1 項＝現用」推論
+        //    現在在哪 —— 那條路已經拆了，每次都直接選目標，選到現用方案無害。
+        //
+        // 🔴 選字鍵只高亮，space 才確認 —— 真機兩次：Return 關了選單但方案沒換。
+        //    選字鍵是**現用方案**的：拼音 1-9、注音 Shift+A-J。現用是哪個讀
+        //    不到，兩種都送：另一種在該方案下不是選字鍵，會被當一般鍵吞掉或
+        //    無效，不影響結果。
         GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
             const popup = IBusManager.getIBusManager()?._candidatePopup;
             const boxes = popup?._candidateArea?._candidateBoxes ?? [];
-            let picked = -1;
-            boxes.forEach((b, i) => {
-                if (b.visible && picked < 0 &&
-                    (b._candidateLabel?.text ?? "").includes(target.menuMatch))
-                    picked = i;
-            });
-            if (picked < 0) {
-                // 選單沒來（多半是沒焦點，pending 留著等 focus_in）。萬一其實
-                // 開了但文字對不上，Escape 收掉，別把它留在畫面上。
-                console.log(`[pn-panel] rime: menu for "${target.menuMatch}" not visible, keeping pending`);
-                if ((popup?._candidateArea?._candidateBoxes ?? []).some(b => b.visible))
-                    send(IBus.KEY_Escape);
+            const visible = boxes.filter(b => b.visible);
+            if (!visible.length) {
+                console.log(`[pn-panel] rime: menu not visible, keeping pending`);
                 return GLib.SOURCE_REMOVE;
             }
-            // 🔴 用方向鍵＋Enter，不用數字鍵。方案選單吃的是**現用方案的選字鍵**：
-            //    拼音是 1-9，注音是 ABCDEFGHIJ（大寫）—— 在注音上送 KEY_1 什麼都
-            //    不會發生，選單就留在畫面上（2026-08-18 真機看到，log 說 switched
-            //    但 RIME 還在〔方案選單〕）。Down×i + Return 在每個方案都成立。
-            //    游標從第 0 項開始，所以是 picked 次 Down。
-            for (let k = 0; k < picked; k++)
-                send(IBus.KEY_Down);
-            send(IBus.KEY_Return);
-            console.log(`[pn-panel] rime: switched to "${target.menuMatch}" (menu item ${picked + 1}, via Down×${picked}+Return)`);
+            const texts = visible.map(b => b._candidateLabel?.text ?? "");
+            const picked = texts.findIndex(t => t.includes(target.menuMatch));
+            if (picked < 0) {
+                console.log(`[pn-panel] rime: "${target.menuMatch}" not in menu [${texts.join(" | ")}], escaping`);
+                send(IBus.KEY_Escape);
+                return GLib.SOURCE_REMOVE;
+            }
+            send(IBus.KEY_1 + picked);
+            send(IBus.KEY_A + picked, IBus.ModifierType.SHIFT_MASK);
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 80, () => {
+                send(IBus.KEY_space);
+                return GLib.SOURCE_REMOVE;
+            });
+            console.log(`[pn-panel] rime: → "${texts[picked]}" (item ${picked + 1}, ${1 + picked}/Shift+${String.fromCharCode(65 + picked)} then space)`);
             this._pnRimePending = null;
             this._pnRimeFace = face;
             this._pnSyncInputLabel();
