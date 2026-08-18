@@ -575,28 +575,45 @@ keyboard, OSK down, no caps to look at: type one key and you know, as on macOS.
 **One engine, two faces.** IBus will not list one engine twice and ibus-rime
 declares exactly one, so pinyin and bopomofo cannot be two sources. `pn-input`
 cycles *faces* — `US → JP → TW(pinyin) → TW(bopomofo)` — and switching between
-the two TW faces means switching RIME's schema, which has no external entry
-point; there is only the F4 menu. It is driven deterministically: F4, read the
-rows in the candidate bar (ours), find the target, read the cursor row, walk
-with Down/Up, space. Digits and Shift+letters are not select keys in that menu
-and the cursor's starting row is not stable across opens; Down/Up and space are
-the only combination the probe found that works every time.
+the two TW faces means switching RIME's schema. That is one synthesised
+keypress: `ime.sh` binds `F7 → select luna_pinyin_tw` and `F8 → select
+bopomofo_tw` through librime's `key_binder`, whose `select` action switches
+schema directly — no menu, no intermediate state. F7/F8 because the k6 layout
+has no F keys: a human cannot press them, only `pn-panel` can.
 
-It is also lazy and invisible. RIME only handles keys while something has
-input focus, so a tap on the top bar in the overview records the face as
-pending and it is flushed on IBusManager's `focus-in`. And for the few hundred
-milliseconds the menu is open, `pn-osk` holds the candidate bar at opacity 0 —
-a menu flashing where the candidates go read as "broken", and the maintainer
-said so. On enable, if the current source is rime, the label's face is set
-pending too: RIME remembers its last schema across a restart and we do not,
-and this is what makes them converge on the first focus.
+It was not one keypress for most of a day. The first design drove RIME's F4
+switcher menu — open it, hide the candidate bar while it is up, read its rows,
+read the cursor, walk with Down/Up, commit with space, read back 600ms later to
+see whether it took, retry if not. Every step was a race, and each fix exposed
+the next: the menu opened under the user's in-progress candidates and an Escape
+meant to close it cleared their input instead; space landed before the cursor
+had finished moving; the verification ran before the menu had closed; a
+commit-first guard that re-checked the preedit either hung the switch forever
+(the round trip is slower than the check on this SoC) or, in its recursive
+form, pumped 169 Enters a minute into the terminal. The lesson is the design:
+when driving another program's UI takes seven steps, the fix is not better
+steps, it is finding the one-step door — and `key_binder`'s `select` was there
+all along.
+
+What survives from that day: switching is *lazy* (RIME only handles keys while
+an input box has focus — gated on `Main.inputMethod.currentFocus`, because the
+IM context exists from session start and gating on it blocks nothing — so a
+tap in the overview records the face as pending and `focus-in` flushes it), it
+*commits first* (F8 mid-composition silently discards what the user typed — no
+commit-text event, probed — so a tap while composing sends Return, waits one
+beat, then switches, with no verification and no retry: both keys go to the
+same context, and if one arrives both do), and on enable the label's face is
+set pending because RIME remembers its last schema across restarts and we do
+not.
 
 RIME does not report its schema over IBus properties, and an external IBus
 context cannot see the shell's — sessions are per-context, so a probe reading
 "pinyin" says nothing about what the terminal is on. Every reading taken that
-way during this work was noise. The face is pn-panel's truth, and the only
-verification is typing on the glass: `su3cl3` → ㄋㄧˇ ㄏㄠˇ in the preedit,
-你好安安超讚的 in the bar, `TW` on the top bar, no menu ever seen.
+way during this work was noise. The probe *can* exercise engine machinery —
+key acceptance, orientation, what F8 does to a composition — and that is what
+it is for. The face is pn-panel's truth, and the only verification is typing
+on the glass: `su3cl3` → ㄋㄧˇ ㄏㄠˇ in the preedit, 你好安安超讚的 in the bar,
+`TW` on the top bar, nothing else ever seen.
 
 Bopomofo through RIME would have been free — `rime-data-bopomofo` is already
 there — but it would share the single `rime` engine slot and need `Ctrl+`` ` `` to
