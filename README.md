@@ -537,34 +537,66 @@ Caps Lock has no bindable keysym of its own; `caps:menu` turns it into a Menu ke
 and drops the lock behaviour, and `ime.sh` checks that the option exists in this
 device's `xkeyboard-config` rather than setting it blind.
 
-Korean (`ibus-hangul`) and bopomofo (`ibus-chewing`) are installed and labelled
-but not in the list by default; `pn ime add chewing` puts one in. Five sources
+Korean (`ibus-hangul`) is installed and labelled but not in the list; `pn ime add
+hangul` puts it in. Five sources
 on one button is four taps to the far end. The labels ship anyway, because an
 engine that works while its button shows the wrong name is the worst of the
 three states.
 
-Bopomofo behaves differently from pinyin, and half of that is on purpose.
-Chewing is the Microsoft-Bopomofo lineage: it converts as you type and puts the
-characters straight into the preedit — 你好安安幾歲住哪裡 appeared with no candidate
-window at all — and only asks when you arrow down onto a character. That is not
-the bar failing; it is a different philosophy of when to ask, and it is the
-philosophy every Windows bopomofo typist already has in their hands. The
-maintainer's hands are iPad's, which shows candidates as you go, so
-`space-as-selection` is on: type, press space, the bar appears with 1-5, or
-press Enter and take chewing's guess. `plain-zhuyin` would make it iPad-exact
-and throw away the phrase model; it stays off.
+### Bopomofo, and the three layers it made us name
 
-The OSK prints bopomofo when chewing is active. The standard 大千式 keyboard is
-the US keyboard with a second symbol on each key, and chewing maps US keysyms
-itself, so nothing about the k6 layout changed — level 0 is relabelled through
-`PN_BOPOMOFO` and `strings` are untouched. Only bopomofo on the cap: St.Label
-does not do two-tier layout, and two glyphs in a 109px key are both too small.
-The first pass relabelled the digit row and punctuation and left all 26 letters
-alone, because stock-layout keys have no `label` and display through
-`strings[0]`; `relabelByString` looks up what the key sends.
+Bopomofo goes through RIME, not chewing. Chewing is the Microsoft-Bopomofo
+lineage — it converts silently as you type and asks only on arrow-down — and no
+option changes that without also discarding its phrase model. The maintainer's
+hands are iPad's, which shows candidates as you go. RIME's `bopomofo_tw` does
+exactly that, on the same engine, the same bar and the same dictionary as the
+pinyin: `PREEDIT 'ㄏㄠˇ' → LOOKUP first='好'`, measured. Chewing stays installed
+for anyone whose hands are Windows'; `pn ime add chewing`.
 
-Its top-bar label is `BP`, not `ㄅ`: at 11px bold a two-stroke ㄅ is a flick next
-to three two-letter neighbours.
+That decision forced a naming question, and the answer is worth keeping.
+*Pinyin* and *bopomofo* are two transcriptions of one language; *romaji* and
+*kana* are two of another; *latin* is the alphabet pinyin and romaji both
+happen to print. Three layers:
+
+| layer | values | who owns it |
+|---|---|---|
+| language | `US` `JP` `TW` | the top-bar label stops here |
+| input method — the *face* | `TW: pinyin, bopomofo` · `JP: romaji` (kana goes in the same slot) | `pn-panel` |
+| alphabet — what the caps print | pinyin, romaji → latin · bopomofo → 注音 · kana → 假名 | `pn-osk`, derived from the face |
+
+So the label is `TW` for both faces — an earlier `ㄅ` (a flick at 11px) and then
+`BP` were both the input-method layer leaking into the language layer — and the
+thing that tells them apart is the keyboard: the standard 大千式 keyboard is the
+US keyboard with a second symbol per key, chewing and RIME both take US keysyms,
+and `pn-osk` relabels level 0 through `PN_BOPOMOFO` when the face is bopomofo.
+Only bopomofo on the cap; two glyphs in a 109px key are both too small. Physical
+keyboard, OSK down, no caps to look at: type one key and you know, as on macOS.
+
+**One engine, two faces.** IBus will not list one engine twice and ibus-rime
+declares exactly one, so pinyin and bopomofo cannot be two sources. `pn-input`
+cycles *faces* — `US → JP → TW(pinyin) → TW(bopomofo)` — and switching between
+the two TW faces means switching RIME's schema, which has no external entry
+point; there is only the F4 menu. It is driven deterministically: F4, read the
+rows in the candidate bar (ours), find the target, read the cursor row, walk
+with Down/Up, space. Digits and Shift+letters are not select keys in that menu
+and the cursor's starting row is not stable across opens; Down/Up and space are
+the only combination the probe found that works every time.
+
+It is also lazy and invisible. RIME only handles keys while something has
+input focus, so a tap on the top bar in the overview records the face as
+pending and it is flushed on IBusManager's `focus-in`. And for the few hundred
+milliseconds the menu is open, `pn-osk` holds the candidate bar at opacity 0 —
+a menu flashing where the candidates go read as "broken", and the maintainer
+said so. On enable, if the current source is rime, the label's face is set
+pending too: RIME remembers its last schema across a restart and we do not,
+and this is what makes them converge on the first focus.
+
+RIME does not report its schema over IBus properties, and an external IBus
+context cannot see the shell's — sessions are per-context, so a probe reading
+"pinyin" says nothing about what the terminal is on. Every reading taken that
+way during this work was noise. The face is pn-panel's truth, and the only
+verification is typing on the glass: `su3cl3` → ㄋㄧˇ ㄏㄠˇ in the preedit,
+你好安安超讚的 in the bar, `TW` on the top bar, no menu ever seen.
 
 Bopomofo through RIME would have been free — `rime-data-bopomofo` is already
 there — but it would share the single `rime` engine slot and need `Ctrl+`` ` `` to
