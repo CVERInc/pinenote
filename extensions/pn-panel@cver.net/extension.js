@@ -476,8 +476,28 @@ export default class PineNotePanelExtension extends Extension {
         const popup = IBusManager.getIBusManager()?._candidatePopup;
         if (popup) {
             this._pnRimePopupId = popup.connect("notify::visible", () => {
-                if (!popup.visible)
-                    tryLater();
+                if (popup.visible) {
+                    // 又開始打了：取消排程中的那次
+                    if (this._pnRimeQuietId) {
+                        GLib.Source.remove(this._pnRimeQuietId);
+                        this._pnRimeQuietId = 0;
+                    }
+                    return;
+                }
+                if (!this._pnRimePending)
+                    return;
+                // 🔴 候選列收起**不是**乾淨時刻 —— 那是 Enter 到下一個字之間的一道
+                //    窄縫，搶它必撞到使用者（真機：F4 送出、他已經在打 n、讀到
+                //    「你那呢能年」、選單跟他的輸入疊在一起）。等一秒都安靜才算
+                //    他停手了。這一秒裡他又打字，上面那條會取消。
+                if (this._pnRimeQuietId)
+                    GLib.Source.remove(this._pnRimeQuietId);
+                this._pnRimeQuietId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+                    this._pnRimeQuietId = 0;
+                    if (!popup.visible)
+                        this._pnRimeFlushPending();
+                    return GLib.SOURCE_REMOVE;
+                });
             });
         }
     }
@@ -486,6 +506,10 @@ export default class PineNotePanelExtension extends Extension {
         if (this._pnRimeFocusId) {
             IBusManager.getIBusManager()?.disconnect(this._pnRimeFocusId);
             this._pnRimeFocusId = 0;
+        }
+        if (this._pnRimeQuietId) {
+            GLib.Source.remove(this._pnRimeQuietId);
+            this._pnRimeQuietId = 0;
         }
         if (this._pnRimePopupId) {
             try {
@@ -519,12 +543,12 @@ export default class PineNotePanelExtension extends Extension {
         // 🔴 使用者正在打字（preedit 有東西）就不切。F4 在那個狀態不開選單，而
         //    我們後面的任何鍵都會打進他的輸入。pending 留著，等他打完（下一次
         //    focus-in 或候選列清空）再來。
-        const popupNow = IBusManager.getIBusManager()?._candidatePopup;
-        const nowTexts = (popupNow?._candidateArea?._candidateBoxes ?? [])
-            .filter(b => b.visible).map(b => b._candidateLabel?.text ?? "");
-        const nowIsMenu = nowTexts.some(t => /拼音|注音/.test(t));
-        if (popupNow?.visible && nowTexts.length && !nowIsMenu) {
-            console.log(`[pn-panel] rime: user is mid-composition ([${nowTexts.slice(0, 3).join(" | ")}]), deferring schema switch`);
+        // 🔴 看 Main.inputMethod._preeditStr —— 那是 shell 收到的 client preedit，
+        //    就是終端裡那串底線字。它比候選列準：候選列可能還沒出、preedit 已經
+        //    有東西了。有東西（且不是我們自己開的〔方案選單〕）＝使用者在打字。
+        const clientPre = Main.inputMethod?._preeditStr ?? "";
+        if (clientPre && !clientPre.includes("方案選單")) {
+            console.log(`[pn-panel] rime: user is mid-composition (${JSON.stringify(clientPre)}), deferring schema switch`);
             return;
         }
         // 0. 切方案期間不畫候選列。選單閃一下對使用者是「壞掉了」而不是「在切」，
@@ -571,7 +595,18 @@ export default class PineNotePanelExtension extends Extension {
             const texts = visible.map(b => b._candidateLabel?.text ?? "");
             const isMenu = texts.some(t => t.includes("拼音") || t.includes("注音"));
             if (!isMenu) {
-                console.log(`[pn-panel] rime: F4 did not open the menu (bar has [${texts.join(" | ")}]), leaving input alone, keeping pending`);
+                // 候選列裡是使用者的東西。但 F4 可能還是把選單開在**下面**了
+                // （真機：候選列是「你那呢能年」、preedit 卻是〔方案選單〕，選單和
+                //  輸入疊著）。看 preedit —— 這時 RIME 送給 client 的 preedit 會是
+                //  〔方案選單〕；Main.inputMethod 拿得到。是的話 Escape 收掉選單
+                //  （只收選單，使用者那段還在 RIME 裡）。
+                const clientPreedit = Main.inputMethod?._preeditStr ?? "";
+                if (clientPreedit.includes("方案選單")) {
+                    console.log(`[pn-panel] rime: menu opened under the user's candidates, escaping it; keeping pending`);
+                    send(IBus.KEY_Escape);
+                } else {
+                    console.log(`[pn-panel] rime: F4 did not open the menu (bar has [${texts.join(" | ")}]), leaving input alone, keeping pending`);
+                }
                 this._pnOskCandidates(true);
                 return GLib.SOURCE_REMOVE;
             }
