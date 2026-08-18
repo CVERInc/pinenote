@@ -143,6 +143,31 @@ Three findings worth keeping even if you write your own:
   Do not reconnect the interface over SSH to apply it. `nmcli device disconnect` cuts the
   connection you are giving the command through, and nothing runs the second half.
 
+### setup/pn
+
+One command that shows the state of everything this repository added, and
+switches the parts that have a switch. It owns no state: each feature's truth
+stays where it lives — gsettings, a systemd unit, `~/.config/*.json`, sysfs —
+and `pn` is a single door onto all of them. That is also why it reports what
+*is* rather than what is configured: Wi-Fi powersave is asked of `iw`, the input
+method of `ibus`, the waveform of sysfs. This device has been bitten by the
+difference before.
+
+```
+pn                          everything, current state
+pn wifi off                 typing / idle / osk / panel / wave / k6 / wifi
+pn ime add chewing          into the cycle, in tap order — or rm
+pn buttons rotate off       any of input / tone / refresh / rotate
+pn reload                   restart gdm3, and again if the greeter wins the race
+```
+
+`pn buttons` writes `~/.config/pn-panel.json` and bounces the extension; a
+button that is off is not built at all rather than built and hidden, because a
+hidden button still holds its name in `statusArea` and the child-added guard
+keeps re-hiding it. `pn ime add` proved the `sources-changed` path on the
+device for the first time: the fourth source got its label and GNOME's own
+indicator stayed hidden, with no restart.
+
 ### The picture it sleeps under
 
 The PINE64 still life you are left staring at after you press lock is not a GNOME lock screen,
@@ -513,9 +538,19 @@ and drops the lock behaviour, and `ime.sh` checks that the option exists in this
 device's `xkeyboard-config` rather than setting it blind.
 
 Korean (`ibus-hangul`) and bopomofo (`ibus-chewing`) are installed and labelled
-but not in the list. Five sources on one button is four taps to the far end. The
-labels ship anyway, because an engine that works while its button shows the wrong
-name is the worst of the three states.
+but not in the list by default; `pn ime add chewing` puts one in. Five sources
+on one button is four taps to the far end. The labels ship anyway, because an
+engine that works while its button shows the wrong name is the worst of the
+three states.
+
+Bopomofo was tested and behaves differently from pinyin on purpose. Chewing is
+the Microsoft-Bopomofo lineage: it converts as you type and puts the characters
+straight into the preedit — 你好安安幾歲住哪裡 appeared with no candidate window at
+all — and only shows candidates when you arrow down onto a character to change
+it. That is not the bar failing; it is a different philosophy of when to ask.
+Its label is `BP`, not `ㄅ`: at 11px bold on the top bar, a two-stroke ㄅ is a
+flick next to three two-letter neighbours, and a label has to be the same kind
+of thing as the labels beside it.
 
 Bopomofo through RIME would have been free — `rime-data-bopomofo` is already
 there — but it would share the single `rime` engine slot and need `Ctrl+`` ` `` to
@@ -596,6 +631,23 @@ None of the quick paths work, and each fails in a way that looks like success:
 What works is `sudo systemctl restart gdm3`. `AutomaticLoginEnable` fires on
 GDM startup — not after a session ends — so this is also how you get back from
 the greeter if you already killed the shell. Open windows close either way.
+
+**It occasionally lands on the greeter anyway.** Once in a dozen or so restarts
+the old session's PAM worker does not exit within GDM's five-second grace:
+
+```
+gdm-session-worker [pam/gdm-autologin] isn't dying after 5 seconds, now ignoring it
+pam_unix(gdm-autologin:session): session opened      ← the new one
+pam_unix(gdm-autologin:session): session closed      ← the old one, only now
+GdmDisplay: Session never registered, failing        ← and the new one goes with it
+```
+
+That is GDM's race, not anything in this repository — the extensions had
+finished tearing down two seconds earlier. A second restart always succeeds,
+because there is no longer an old session to race with. `pn reload` schedules
+that second restart itself, twenty-five seconds out via `systemd-run`, and only
+if seat0 has no user session by then — so nobody has to type a password on the
+glass.
 
 ## The six values it draws with
 

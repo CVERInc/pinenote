@@ -1,0 +1,218 @@
+#!/usr/bin/env bash
+# pn — 這台上我們自己加的每一個功能，一個地方看現況、一個地方開關。
+#
+# 🔴 它**不擁有狀態**。每個功能的真值留在它原本的家 —— gsettings、systemd
+#    unit、~/.config/*.json、sysfs —— 這支只是統一的讀寫入口。所以重刷之後
+#    setup.sh 建好的東西它一跑就認得，不需要自己的資料庫；也所以它報的是
+#    **現況**不是設定值：Wi-Fi 省電問的是 iw、輸入法問的是 ibus、波形問的是
+#    sysfs。設定檔寫了什麼跟現在是什麼是兩件事，這台已經被這個差別咬過。
+#
+# 用法
+#   pn                      全部功能的現況
+#   pn <名字>               一個功能的現況
+#   pn <名字> on|off        開關（只有標 ⇄ 的可以）
+#   pn ime add|rm <引擎>    輸入法進出循環（順序就是戳一下的順序）
+#   pn panel hide|show <鍵>  頂列按鈕
+set -u
+
+# ── 工具 ────────────────────────────────────────────────────────────────
+ok()   { printf '  \033[1m%-14s\033[0m %s\n' "$1" "$2"; }
+warn() { printf '  \033[1m%-14s\033[0m \033[33m%s\033[0m\n' "$1" "$2"; }
+die()  { echo "pn: $*" >&2; exit 1; }
+gs()   { gsettings get "$1" "$2" 2>/dev/null; }
+unit_active() { systemctl --user is-active "$1" 2>/dev/null; }
+ext_state() {
+  gnome-extensions info "$1" 2>/dev/null | awk -F': ' '/State:/{print $2}'
+}
+# 面板的 D-Bus 介面。這台從 SSH 開，玻璃上的東西要用問的。
+panel_info() {
+  gdbus call --session --dest org.cver.PnPanel --object-path /org/cver/PnPanel \
+    --method org.cver.PnPanel.PanelInfo 2>/dev/null | python3 -c '
+import sys,json,ast
+raw=sys.stdin.read().strip()
+if not raw: sys.exit(0)
+d=json.loads(ast.literal_eval(raw)[0])
+print(json.dumps(d))'
+}
+
+# ── 每個功能一組 status / on / off ────────────────────────────────────────
+# 名字就是 setup.sh / README 用的那個。加新功能＝加一組 f_<名字>_status
+# （必要）和 f_<名字>_set on|off（可選，沒有就是唯讀）。
+
+# 打字模式：A2 波形＋清除觸發器。真值在 sysfs。
+f_typing_status() {
+  local P=/sys/module/rockchip_ebc/parameters
+  local wf; wf=$(cat $P/default_waveform 2>/dev/null)
+  local pp; pp=$(cat $P/prepare_prev_before_a2 2>/dev/null)
+  local st; st=$(unit_active pn-typing-mode.service)
+  ok typing "unit=$st waveform=${wf:-?} prepare_prev=${pp:-?}"
+}
+f_typing_set() {
+  case $1 in
+    on)  systemctl --user enable --now pn-typing-mode.service ;;
+    off) systemctl --user disable --now pn-typing-mode.service ;;
+  esac
+}
+
+# 閒置清除。
+f_idle_status() { ok idle-refresh "$(unit_active pn-idle-refresh.service)"; }
+f_idle_set() {
+  case $1 in
+    on)  systemctl --user enable --now pn-idle-refresh.service ;;
+    off) systemctl --user disable --now pn-idle-refresh.service ;;
+  esac
+}
+
+# 三個擴充。
+f_osk_status()   { ok osk   "$(ext_state pn-osk@cver.net)"; }
+f_panel_status() { ok panel "$(ext_state pn-panel@cver.net)"; }
+f_wave_status()  { ok wave  "$(ext_state pn-wave@cver.net)"; }
+f_osk_set()   { gnome-extensions "$([ "$1" = on ] && echo enable || echo disable)" pn-osk@cver.net; }
+f_panel_set() { gnome-extensions "$([ "$1" = on ] && echo enable || echo disable)" pn-panel@cver.net; }
+f_wave_set()  { gnome-extensions "$([ "$1" = on ] && echo enable || echo disable)" pn-wave@cver.net; }
+
+# k6 版面（pn-osk.json 裡的 k6Layout）。
+f_k6_status() {
+  local v; v=$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.config/pn-osk.json"))).get("k6Layout",True))' 2>/dev/null)
+  ok k6 "${v:-?}"
+}
+f_k6_set() {
+  python3 - "$1" <<'PY'
+import json,os,sys
+p=os.path.expanduser("~/.config/pn-osk.json")
+d=json.load(open(p))
+d["k6Layout"]= sys.argv[1]=="on"
+json.dump(d,open(p,"w"),indent=2,ensure_ascii=False)
+PY
+  echo "  (pn-osk 在下次 rebuild 時重讀，收起再叫出鍵盤即可)"
+}
+
+# Wi-Fi 省電。真值問 iw，不問設定檔。
+f_wifi_status() {
+  local ps; ps=$(/usr/sbin/iw dev wlan0 get power_save 2>/dev/null | awk '{print $3}')
+  if [ "$ps" = "off" ]; then ok wifi-powersave "off (good)"; else warn wifi-powersave "${ps:-unknown} — 這台會失聯，見 lifeline.sh [5]"; fi
+}
+f_wifi_set() {
+  case $1 in
+    on)  sudo /usr/sbin/iw dev wlan0 set power_save on ;;
+    off) sudo /usr/sbin/iw dev wlan0 set power_save off ;;
+  esac
+}
+
+# 輸入法。真值：gsettings 的清單 + ibus 現用引擎。
+f_ime_status() {
+  local cur; cur=$(ibus engine 2>/dev/null)
+  local list; list=$(gs org.gnome.desktop.input-sources sources)
+  ok ime "current=${cur:-?}"
+  ok "" "cycle=$list"
+}
+# pn ime add|rm <引擎>：改清單。順序就是 pn-input 戳一下的順序。
+f_ime_cmd() {
+  local op=$1 eng=${2:-}
+  [ -n "$eng" ] || die "pn ime $op <engine>  （rime / mozc-on / chewing / hangul）"
+  python3 - "$op" "$eng" <<'PY'
+import subprocess,sys,ast
+op,eng=sys.argv[1],sys.argv[2]
+raw=subprocess.check_output(["gsettings","get","org.gnome.desktop.input-sources","sources"],text=True)
+lst=ast.literal_eval(raw.strip())
+item=("ibus",eng)
+if op=="add" and item not in lst: lst.append(item)
+if op=="rm"  and item in lst:     lst.remove(item)
+if not lst or lst[0]!=("xkb","us"): lst=[("xkb","us")]+[x for x in lst if x!=("xkb","us")]
+val="["+", ".join(f"('{a}','{b}')" for a,b in lst)+"]"
+subprocess.check_call(["gsettings","set","org.gnome.desktop.input-sources","sources",val])
+print("  sources =",val)
+PY
+}
+
+# 頂列按鈕。真值問面板自己。
+f_buttons_status() {
+  panel_info | python3 -c '
+import sys,json
+raw=sys.stdin.read().strip()
+if not raw: print("  buttons        (pn-panel not reachable)"); sys.exit(0)
+d=json.loads(raw)
+rows=[i for i in d.get("right",[]) if i["role"].startswith("pn-")]
+parts=[]
+for r in rows:
+    parts.append(r["role"][3:] + "=" + ("on" if r["visible"] else "off"))
+print("  buttons       ", " ".join(parts))'
+
+}
+
+# pn buttons <input|tone|refresh|rotate> on|off：寫 ~/.config/pn-panel.json，
+# 然後 disable/enable 擴充讓它重讀。關掉的按鈕不建立（見 pn-panel 的
+# readPanelConfig），所以要重載才會消失 —— 不是即時的，但也不需要 restart gdm3。
+f_buttons_cmd() {
+  local key=$1 val=${2:-}
+  case $key in input|tone|refresh|rotate) ;; *) die "pn buttons <input|tone|refresh|rotate> on|off" ;; esac
+  case $val in on|off) ;; *) die "pn buttons $key on|off" ;; esac
+  python3 - "$key" "$val" <<'PY'
+import json,os,sys
+p=os.path.expanduser("~/.config/pn-panel.json")
+d={}
+if os.path.exists(p):
+    try: d=json.load(open(p))
+    except Exception: d={}
+d.setdefault("buttons",{})[sys.argv[1]]= sys.argv[2]=="on"
+json.dump(d,open(p,"w"),indent=2,ensure_ascii=False); open(p,"a").write("\n")
+print("  pn-panel.json buttons =",d["buttons"])
+PY
+  gnome-extensions disable pn-panel@cver.net && sleep 1 && gnome-extensions enable pn-panel@cver.net
+  sleep 2
+  f_buttons_status
+}
+
+# pn reload：restart gdm3。改了任何擴充的 extension.js 之後都要這一步 ——
+# GNOME 快取模組，disable/enable 只重讀 stylesheet 和 json，不重讀 JS。
+# autologin 是開的，session 自己會回來（README「Reloading an extension」那節）。
+# 🔴 從 SSH 跑這個會把你踢掉一次，這是預期的。
+#
+# 🔴 有時候會停在 greeter，不是我們的錯，是 gdm 的競態（2026-08-18 抓到一次）：
+#      gdm-session-worker [pam/gdm-autologin] isn't dying after 5 seconds, now ignoring it
+#      pam_unix(gdm-autologin:session): session opened      ← 新的
+#      pam_unix(gdm-autologin:session): session closed      ← 舊的這時才死
+#      GdmDisplay: Session never registered, failing        ← 新的被一起帶走
+#    舊 session 的 pam worker 沒在 5 秒內退，gdm 開了新的 autologin，然後舊的關閉
+#    時把新的一起收掉。十幾次 restart 撞到一次。第二次 restart 一定成功，因為
+#    那時候已經沒有舊 session 可以競。所以這裡等一下、看 seat0 有沒有 user
+#    session，沒有就再來一次 —— 不要讓人抱著平板打密碼。
+f_reload_cmd() {
+  echo "  restarting gdm3 (SSH will drop; the session comes back by itself)"
+  # 這支自己就在 session 裡，restart 會把自己殺掉 —— 所以把後半段丟給 systemd。
+  sudo systemd-run --on-active=25 --unit=pn-reload-guard \
+    bash -c 'if ! loginctl list-sessions --no-legend | grep -qE " 1000 +user +seat0"; then systemctl restart gdm3; fi' \
+    >/dev/null 2>&1
+  sudo systemctl restart gdm3
+}
+
+# ── 分派 ─────────────────────────────────────────────────────────────────
+ALL="typing idle osk panel wave k6 wifi ime buttons"
+
+if [ $# -eq 0 ]; then
+  echo "pn — 現況（讀的是真值，不是設定檔）"
+  for f in $ALL; do "f_${f}_status"; done
+  echo
+  echo "可開關（pn <名字> on|off）：typing idle osk panel wave k6 wifi"
+  echo "輸入法：pn ime add|rm <引擎>    頂列：pn buttons <input|tone|refresh|rotate> on|off"
+  echo "改了擴充的 JS 之後：pn reload（restart gdm3）"
+  exit 0
+fi
+
+name=$1; shift
+case $name in
+  ime)
+    if [ $# -eq 0 ]; then f_ime_status; else f_ime_cmd "$@"; fi ;;
+  buttons)
+    if [ $# -eq 0 ]; then f_buttons_status; else f_buttons_cmd "$@"; fi ;;
+  reload)
+    f_reload_cmd ;;
+  *)
+    declare -F "f_${name}_status" >/dev/null || die "unknown: $name  (one of: $ALL)"
+    if [ $# -eq 0 ]; then "f_${name}_status"
+    else
+      declare -F "f_${name}_set" >/dev/null || die "$name is read-only"
+      case $1 in on|off) ;; *) die "pn $name on|off" ;; esac
+      "f_${name}_set" "$1" && "f_${name}_status"
+    fi ;;
+esac

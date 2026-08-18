@@ -136,16 +136,36 @@ const PN_HIDDEN_PANEL_ROLES = [
 //   chewing  宣告 layout=us，自己把 US 鍵位映射成注音，所以 k6 不用動
 //   hangul   宣告 layout=kr，但 _composeLayout 沒有 kr-extended 會退回
 //            us-extended，而二式韓文本來就是用拉丁鍵位打出字母
-// 注音用「ㄅ」而不是兩個拉丁字母：TW 已經給了拼音，而對看得懂的人來說 ㄅ 是
-// 一眼的事。它比兩個大寫字母窄，撐不開 stylesheet 那個 20px。
+// 注音是 BP（bopomofo）。第一版用「ㄅ」，理由是對看得懂的人一眼就懂 —— 但在
+// 頂列 11px 粗體下，兩畫的 ㄅ 就是一撇，跟旁邊三顆兩個大寫字母的比起來像壞掉
+// （2026-08-18 真機看到）。標籤要跟同一列的其他標籤是同一種東西：兩個大寫。
+// TW 已經給了拼音，所以注音不能也叫 TW；BP 是 bopomofo 的通行縮寫。
 const PN_INPUT_LABELS = {
     us: "US",
     "mozc-on": "JP",
     "mozc-jp": "JP",
     rime: "TW",
-    chewing: "ㄅ",
+    chewing: "BP",
     hangul: "KR",
 };
+
+// ~/.config/pn-panel.json。跟 pn-osk.json 同一個模式：不存在＝全部預設。
+// 現在只有一個鍵：
+//   buttons: { "input": true, "tone": true, "refresh": true, "rotate": true }
+// 關掉的按鈕不建立（不是建了再藏）—— 藏起來的東西還在 statusArea 裡占名字，
+// 而且 _pnHidePanelItems 那條守衛會為它多跑一輪。不要的東西就不要生出來。
+// 由 setup/pn 讀寫；改完要 disable/enable 擴充（或 restart gdm3）才生效。
+function readPanelConfig() {
+    try {
+        const path = GLib.build_filenamev([GLib.get_user_config_dir(), "pn-panel.json"]);
+        const [ok, bytes] = GLib.file_get_contents(path);
+        if (!ok)
+            return {};
+        return JSON.parse(new TextDecoder().decode(bytes));
+    } catch (e) {
+        return {};
+    }
+}
 
 function box(actor) {
     if (!actor)
@@ -593,7 +613,11 @@ export default class PineNotePanelExtension extends Extension {
             .map(box => [box, box.connect("child-added",
                 () => this._pnHidePanelItems())]);
 
+        this._pnConfig = readPanelConfig();
+        const wanted = key => this._pnConfig.buttons?.[key.replace(/^pn-/, "")] !== false;
         const add = (key, name, icon, fn) => {
+            if (!wanted(key))
+                return;
             const b = this._pnMakePanelButton(name, icon, fn);
             Main.panel.addToStatusArea(key, b, 0, "right");
             this._pnPanelButtons.push(key);
@@ -622,10 +646,12 @@ export default class PineNotePanelExtension extends Extension {
             () => this._pnToneToggle());
 
         // 第四顆。文字版，見 PN_INPUT_LABELS 上面那段。
-        const input = this._pnMakeTextButton("PN Input", "—",
-            () => this._pnInputCycle());
-        Main.panel.addToStatusArea("pn-input", input, 0, "right");
-        this._pnPanelButtons.push("pn-input");
+        if (wanted("pn-input")) {
+            const input = this._pnMakeTextButton("PN Input", "—",
+                () => this._pnInputCycle());
+            Main.panel.addToStatusArea("pn-input", input, 0, "right");
+            this._pnPanelButtons.push("pn-input");
+        }
         // 輸入源也可能從別處被換掉（快速設定、應用程式自己切、Super+Space），
         // 不接這個訊號的話標籤會說謊 —— 跟 _pnSyncRotateIcon 接 monitors-changed
         // 是同一個理由。sources-changed 也要接：清單本身變了（例如剛裝好引擎、

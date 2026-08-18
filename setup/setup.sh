@@ -374,6 +374,14 @@ install -m 0644 "$D/../extensions/pn-panel@cver.net/extension.js" \
 install -m 0644 "$D/../extensions/pn-panel@cver.net/icons/"*.svg "$P/icons/"
 pn_enable_extension pn-panel@cver.net
 
+echo "== [15b] pn：一個地方看現況、開關功能 =="
+# setup/pn 是統一入口，不擁有狀態 —— 每個功能的真值留在它原本的家，pn 只是
+# 讀寫它們。所以這裡只放一個 symlink：~/.local/bin 在 Debian 的 .profile 裡
+# 本來就在 PATH 上。
+mkdir -p "$HOME/.local/bin"
+ln -sf "$D/pn" "$HOME/.local/bin/pn"
+chmod +x "$D/pn"
+
 echo "== [16] pn-wave：把全螢幕閃換成互補抖動清除 =="
 # 清除量沒有變少，變的是分配：原廠讓所有像素同時翻黑再同時翻白；這個讓一半
 # 翻黑、一半翻白，下一格對調。逐像素的待遇一模一樣（同樣的 GC16 全擺盪），
