@@ -130,6 +130,16 @@ echo "== [3a] 其他 CJK 語言（選用，預設不掛進 sources）=="
 #          us-extended，而二式韓文本來就是用拉丁鍵位打字母
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ibus-hangul ibus-chewing
 
+# chewing 是微軟注音那派：邊打邊自動選字直接進 preedit，按 ↓ 才叫候選窗。
+# iPad 的手（維護者的）會覺得它壞掉。space-as-selection 讓「打完按空白」出候選
+# —— iPad 的出口有了，chewing 的智慧選詞還在（plain-zhuyin 才會拿掉那個，
+# 不開）。chi-eng-mode-toggle 預設 caps_lock 會跟我們的 Caps→US 打架，改 shift。
+gsettings set org.freedesktop.IBus.Chewing space-as-selection true
+gsettings set org.freedesktop.IBus.Chewing chi-eng-mode-toggle "shift"
+gsettings set org.freedesktop.IBus.Chewing show-systray false
+# 鍵帽：切到 chewing 時 pn-osk 把 k6 的每一格印成大千式注音（PN_BOPOMOFO），
+# strings 不碰，送出的鍵不變 —— 標準注音鍵盤本來就是 US 鍵盤多印一層。
+
 # 要掛進循環的話，把要的加進去（順序就是 pn-input 戳一下的順序）：
 #
 #   gsettings set org.gnome.desktop.input-sources sources \

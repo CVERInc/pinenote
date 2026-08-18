@@ -52,6 +52,7 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import {Keyboard} from 'resource:///org/gnome/shell/ui/keyboard.js';
 import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
+import * as InputSourceStatus from 'resource:///org/gnome/shell/ui/status/keyboard.js';
 import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 
 const BUILD = 29;
@@ -257,6 +258,42 @@ function loadStockLayout(groupName) {
 }
 
 const charKeys = str => [...(str ?? '')].map(c => ({label: c, strings: [c]}));
+
+// ── 注音鍵帽 ────────────────────────────────────────────────────────────
+// 大千式（標準）注音鍵盤不是另一套版面 —— 它就是 US 鍵盤，每個鍵多印一個注音
+// 符號。37 個符號＋4 個聲調（一聲＝空白）剛好鋪滿字母區、數字列、和 - ; , . /。
+// chewing 收的是 US keysym、自己映射，所以**鍵盤本身完全不用動**，缺的只有
+// 鍵帽上的印刷。這張表就是印刷：現用引擎是 chewing 時，level 0 的每一格
+// label 換成注音；strings 不碰，送出的鍵完全不變。
+//
+// 只有 level 0：注音沒有 shift 層，shift 層維持大寫字母和符號。
+// 只印注音不印字母：k6 一格 109px（直向 82），1.1em 一個字。iPad 是注音大、
+// 字母小角落 —— 打注音的人看的是注音；而 St.Label 不做雙層排版，兩個字擠一格
+// 會小到都看不清。要字母的人切回 US 就有。
+const PN_BOPOMOFO = {
+    "1": "ㄅ", "q": "ㄆ", "a": "ㄇ", "z": "ㄈ",
+    "2": "ㄉ", "w": "ㄊ", "s": "ㄋ", "x": "ㄌ",
+    "e": "ㄍ", "d": "ㄎ", "c": "ㄏ",
+    "r": "ㄐ", "f": "ㄑ", "v": "ㄒ",
+    "5": "ㄓ", "t": "ㄔ", "g": "ㄕ", "b": "ㄖ",
+    "y": "ㄗ", "h": "ㄘ", "n": "ㄙ",
+    "u": "ㄧ", "j": "ㄨ", "m": "ㄩ",
+    "8": "ㄚ", "i": "ㄛ", "k": "ㄜ", ",": "ㄝ",
+    "9": "ㄞ", "o": "ㄟ", "l": "ㄠ", ".": "ㄡ",
+    "0": "ㄢ", "p": "ㄣ", ";": "ㄤ", "/": "ㄥ",
+    "-": "ㄦ",
+    "6": "ˊ", "3": "ˇ", "4": "ˋ", "7": "˙",
+};
+
+// 現用的 IBus 引擎名。InputSourceManager 是 shell 自己的，不必經過 D-Bus。
+function currentEngineId() {
+    try {
+        const src = InputSourceStatus.getInputSourceManager().currentSource;
+        return src?.type === "ibus" ? src.id : null;
+    } catch (e) {
+        return null;
+    }
+}
 const faceFor = (setting, level) =>
     level === 1 ? setting?.shift ?? setting?.default ?? '' : setting?.default ?? '';
 
@@ -365,6 +402,18 @@ function relabel(rows, map) {
         return rows;
     return rows.map(row => row.map(
         k => (k.label && map[k.label] !== undefined ? {...k, label: map[k.label]} : k)));
+}
+
+// 照鍵**送出的字**查表，不照它顯示的字。stock layout 的字母鍵沒有 label，只有
+// strings；我們自己造的 charKeys 兩者都有。這個版本兩種都認，只設 label ——
+// strings 不碰，送出去的鍵一個都不變。
+function relabelByString(rows, map) {
+    if (!map)
+        return rows;
+    return rows.map(row => row.map(k => {
+        const key = k.strings?.[0] ?? k.label;
+        return key && map[key] !== undefined ? {...k, label: map[key]} : k;
+    }));
 }
 
 // GNOME 48 renamed every keyboard-specific OSK icon to an osk- prefix.
@@ -1469,6 +1518,15 @@ export default class PineNoteOskExtension extends Extension {
                     ? {...DEFAULTS.portrait.labels, ...this._config.portrait?.labels}
                     : {}),
             });
+            // 注音鍵帽。_updateLayout 在每次引擎切換時都會重跑（journal 裡那串
+            // "composing from us" 就是），所以切到 chewing 鍵帽變、切走就恢復，
+            // 不必多接任何訊號。
+            // 🔴 用 relabelByString 不是 relabel：字母鍵是從 stock layout 拿的，
+            //    那些 key 物件沒有 label 欄位、靠 strings[0] 顯示。relabel 查
+            //    k.label 查不到它們 —— 實測第一版只換到了數字列和標點（那些是
+            //    我們自己 charKeys 造的、有 label），26 個字母全部漏掉。
+            if (level === 0 && currentEngineId() === "chewing")
+                built = relabelByString(built, PN_BOPOMOFO);
             composed[level] = built;
         }
         return composed;

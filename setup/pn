@@ -168,18 +168,33 @@ PY
 # autologin 是開的，session 自己會回來（README「Reloading an extension」那節）。
 # 🔴 從 SSH 跑這個會把你踢掉一次，這是預期的。
 #
-# 🔴 有時候會停在 greeter，不是我們的錯，是 gdm 的競態（2026-08-18 抓到一次）：
-#      gdm-session-worker [pam/gdm-autologin] isn't dying after 5 seconds, now ignoring it
-#      pam_unix(gdm-autologin:session): session opened      ← 新的
-#      pam_unix(gdm-autologin:session): session closed      ← 舊的這時才死
-#      GdmDisplay: Session never registered, failing        ← 新的被一起帶走
-#    舊 session 的 pam worker 沒在 5 秒內退，gdm 開了新的 autologin，然後舊的關閉
-#    時把新的一起收掉。十幾次 restart 撞到一次。第二次 restart 一定成功，因為
-#    那時候已經沒有舊 session 可以競。所以這裡等一下、看 seat0 有沒有 user
-#    session，沒有就再來一次 —— 不要讓人抱著平板打密碼。
+# 🔴 會停在 greeter，而且不是偶爾 —— 這台的 session 拆解要五秒以上，gdm 等
+#    舊 PAM worker 的 grace 剛好五秒。前十幾次贏、後兩次連輸，差別只是 SoC
+#    當下忙不忙。日誌長這樣：
+#      15:49:47  Stopping gnome-terminal-server / gvfs-* / xdg-*-portal ...
+#      15:49:52  gdm-session-worker [pam/gdm-autologin] isn't dying after 5 seconds
+#      15:49:52  pam_unix(gdm-autologin:session): session opened      ← 新的
+#      15:49:53  pam_unix(gdm-autologin:session): session closed      ← 舊的才死
+#      15:49:53  GdmDisplay: Session never registered, failing        ← 新的被帶走
+#    在邊緣上賭沒有意義。所以先把 session 拆乾淨（terminate-session 然後等它
+#    真的從 loginctl 消失），gdm 起來時就沒有東西可以等 —— 不是靠第二次
+#    restart 補救，是讓第一次沒有理由失敗。
+#
+#    這支自己就在 session 裡（SSH 也算 user 的 session，但不是 seat0 那個），
+#    terminate 的是 seat0 那個 graphical session，SSH 這條會活著。
 f_reload_cmd() {
-  echo "  restarting gdm3 (SSH will drop; the session comes back by itself)"
-  # 這支自己就在 session 裡，restart 會把自己殺掉 —— 所以把後半段丟給 systemd。
+  local sid
+  sid=$(loginctl list-sessions --no-legend | awk '$2==1000 && $4=="seat0"{print $1}' | head -1)
+  if [ -n "$sid" ]; then
+    echo "  terminating graphical session $sid first (gdm's 5s grace is not enough on this SoC)"
+    sudo loginctl terminate-session "$sid"
+    for _ in $(seq 1 30); do
+      loginctl list-sessions --no-legend | awk '{print $1}' | grep -qx "$sid" || break
+      sleep 1
+    done
+  fi
+  echo "  restarting gdm3 (autologin brings the session back)"
+  # 保險：萬一還是掉到 greeter，25 秒後再來一次。
   sudo systemd-run --on-active=25 --unit=pn-reload-guard \
     bash -c 'if ! loginctl list-sessions --no-legend | grep -qE " 1000 +user +seat0"; then systemctl restart gdm3; fi' \
     >/dev/null 2>&1
