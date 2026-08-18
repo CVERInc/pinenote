@@ -605,19 +605,37 @@ export default class PineNotePanelExtension extends Extension {
             }
             const cur = popup._candidateArea?._cursorPosition ?? 0;
             const steps = picked - cur;
-            const keyOnce = (kv, cb) => { send(kv); GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60, () => { cb(); return GLib.SOURCE_REMOVE; }); };
+            // 🔴 每步之間要等 RIME 真的處理完 —— 鍵是 IBus 往返，非同步。60ms 時
+            //    space 到的時候游標還沒移完，選單留在畫面（log：Down×2 then
+            //    space → menu stuck）。外部 context 的實測用的是 400ms 每步，
+            //    每次都成；這裡 250ms，比它緊一點但仍在安全側。
+            const keyOnce = (kv, cb) => { send(kv); GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => { cb(); return GLib.SOURCE_REMOVE; }); };
             const walk = n => {
                 if (n > 0) { keyOnce(IBus.KEY_Down, () => walk(n - 1)); return; }
                 if (n < 0) { keyOnce(IBus.KEY_Up,   () => walk(n + 1)); return; }
                 keyOnce(IBus.KEY_space, () => {
                     // 選單該關了。萬一沒關，補 Escape ——
                     // 別讓使用者卡在一個他沒打開的選單裡。然後才把候選列還給他。
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
-                        const still = (popup?._candidateArea?._candidateBoxes ?? [])
-                            .some(b => b.visible && /拼音|注音/.test(b._candidateLabel?.text ?? ""));
-                        if (still) {
-                            console.log("[pn-panel] rime: menu stuck after space, escaping");
+                    // 🔴 沒關＝沒切成：pending **留著**，下一次乾淨時刻再來，不要
+                    //    在這裡標記成功。第一版在 walk 之前就清了 pending，stuck
+                    //    之後標籤說注音、RIME 還在拼音，而且再也不會重試。
+                    // 🔴 選單收掉要超過 300ms（真機：space 生效了、選單還在，被
+                    //    誤判 stuck）。等 600ms；而且「成功」不只看選單消失 ——
+                    //    選單還在但第 1 格已經變成目標，也是成功（RIME 切完會
+                    //    重排選單，現用排最前）。只有「選單在、第 1 格還是舊的」
+                    //    才是真的沒切。
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 600, () => {
+                        const rows = (popup?._candidateArea?._candidateBoxes ?? [])
+                            .filter(b => b.visible).map(b => b._candidateLabel?.text ?? "");
+                        const menuUp = rows.some(t => /拼音|注音/.test(t));
+                        const switched = !menuUp || (rows[0] ?? "").includes(target.menuMatch);
+                        if (menuUp)
                             send(IBus.KEY_Escape);
+                        if (switched) {
+                            this._pnRimePending = null;
+                            console.log(`[pn-panel] rime: switched to "${texts[picked]}"${menuUp ? " (menu lingered, escaped)" : ""}`);
+                        } else {
+                            console.log(`[pn-panel] rime: switch did not take (row 1 = "${rows[0]}"), keeping pending`);
                         }
                         this._pnOskCandidates(true);
                         return GLib.SOURCE_REMOVE;
@@ -626,7 +644,6 @@ export default class PineNotePanelExtension extends Extension {
             };
             walk(steps);
             console.log(`[pn-panel] rime: → "${texts[picked]}" (item ${picked + 1}, cursor at ${cur + 1}, ${steps >= 0 ? "Down" : "Up"}×${Math.abs(steps)} then space)`);
-            this._pnRimePending = null;
             this._pnRimeFace = face;
             this._pnSyncInputLabel();
             return GLib.SOURCE_REMOVE;
