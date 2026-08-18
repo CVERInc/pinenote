@@ -1889,6 +1889,15 @@ export default class PineNoteOskExtension extends Extension {
         //    沒有使用者設定能改，日文輸入法的候選窗傳統就是直的。所以在接收端
         //    統一：setOrientation 不管收到什麼都當 HORIZONTAL。覆寫實例方法，
         //    跟 _reposition 同一個理由。
+        // 三個孩子（preedit / aux / candidateArea）都置中。滿版的 VERTICAL box
+        // 裡孩子預設 FILL：candidateArea 從左緣排起、aux 那行也是 —— 拼音沒有
+        // aux 所以看不出來，Mozc 的「Tabキーで選択」一來，整組就靠左了。
+        for (const child of [popup._preeditText, popup._auxText, popup._candidateArea]) {
+            if (child && child._pnOrigXAlign === undefined) {
+                child._pnOrigXAlign = child.x_align;
+                child.x_align = Clutter.ActorAlign.CENTER;
+            }
+        }
         const carea = popup._candidateArea;
         if (carea && !carea._pnOrigSetOrientation) {
             carea._pnOrigSetOrientation = carea.setOrientation.bind(carea);
@@ -1930,6 +1939,12 @@ export default class PineNoteOskExtension extends Extension {
         if (popup?._pnOrigReposition) {
             popup._reposition = popup._pnOrigReposition;
             delete popup._pnOrigReposition;
+        }
+        for (const child of [popup?._preeditText, popup?._auxText, popup?._candidateArea]) {
+            if (child && child._pnOrigXAlign !== undefined) {
+                child.x_align = child._pnOrigXAlign;
+                delete child._pnOrigXAlign;
+            }
         }
         const carea = popup?._candidateArea;
         if (carea?._pnOrigSetOrientation) {
