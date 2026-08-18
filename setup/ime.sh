@@ -83,6 +83,12 @@ patch:
   key_binder/bindings:
     - {when: always, accept: F7, select: luna_pinyin_tw}
     - {when: always, accept: F8, select: bopomofo_tw}
+    # Tab 循環候選，跟 Mozc 一樣。RIME 原生的「下一個候選」是 Down —— 直列時代
+    # 的方向詞，而這台的候選列被排成橫的，按「下」去選「右邊那個」是設計殘留
+    # （維護者原話：畢竟我們硬把它從直列變橫的）。has_menu 限定只在有候選時
+    # 重映射，平常 Tab 照舊。探針實測兩個方案都通：Tab Tab space 選第三個。
+    - {when: has_menu, accept: Tab, send: Down}
+    - {when: has_menu, accept: "Shift+Tab", send: Up}
 EOF
 
 # 注音方案的選字標籤清空。方案預設 alternative_select_keys 是 ABCDEFGHIJ（大寫），
