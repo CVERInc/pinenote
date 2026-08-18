@@ -198,8 +198,16 @@ gsettings set org.gnome.desktop.wm.keybindings switch-input-source-backward "['M
 #
 #    先確認這個選項名字在這台的 xkeyboard-config 裡真的存在，不要盲設：
 if grep -qE '^\s*caps:menu\b' /usr/share/X11/xkb/rules/evdev.lst; then
-  gsettings set org.gnome.desktop.input-sources xkb-options "['caps:menu']"
-  echo "   caps:menu 已設定"
+  # 🔴 用加的：setup.sh 也往這個 key 放 altwin:swap_lalt_lwin（Mac 鍵盤），整個
+  #    陣列蓋掉會把它幹掉。
+  python3 - <<'PY'
+import subprocess, ast
+cur = ast.literal_eval(subprocess.check_output(["gsettings","get","org.gnome.desktop.input-sources","xkb-options"], text=True).strip())
+if "caps:menu" not in cur:
+    cur.append("caps:menu")
+subprocess.check_call(["gsettings","set","org.gnome.desktop.input-sources","xkb-options", repr(cur)])
+print("   xkb-options =", cur)
+PY
 else
   echo "   ⚠️ 這台的 xkeyboard-config 沒有 caps:menu，Caps 那個鍵不會生效。"
   echo "      可用的候選：grep -E '^\s*caps:' /usr/share/X11/xkb/rules/evdev.lst"

@@ -56,8 +56,8 @@ It is idempotent, and it installs:
   one yet. An existing config is never overwritten.
 - **The panel** — `extensions/pn-panel@cver.net` installed and enabled. Separate
   from the keyboard on purpose; see *The panel it taps*.
-- **Input methods** — not part of `setup.sh`; run `setup/ime.sh` if you want them.
-  Pinyin that outputs traditional, Japanese by romaji, and Korean and bopomofo
+- **Input methods** — `setup/ime.sh`, run by `setup.sh` unless `PINENOTE_NO_IME=1`.
+  Pinyin and bopomofo that output traditional, Japanese by romaji, Korean
   installed but left out of the switching list; see *The languages it types in*.
 - **Terminal legibility** — pure black on pure white, no cursor blink, a large monospace face,
   and a sixteen-slot ANSI palette split into marks and plates; see *The agent it codes with*.
@@ -409,9 +409,9 @@ not a design that was computed. It is what two ways of being wrong converged on.
 
 ## The languages it types in
 
-`setup/ime.sh`. Pinyin that outputs traditional characters, and Japanese by
-romaji, on the same on-screen keyboard — plus Korean and bopomofo installed for
-anyone who needs them.
+`setup/ime.sh`, run from `setup.sh`. Pinyin and bopomofo that output
+traditional characters, and Japanese by romaji, on the same on-screen keyboard
+— plus Korean installed for anyone who needs it.
 
 **IBus, not fcitx5.** This is not a preference. There is no physical keyboard
 here, so the primary input device is `pn-osk`, which patches GNOME Shell's own

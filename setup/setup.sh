@@ -274,8 +274,27 @@ echo "== [12] Mac 模式的藍牙鍵盤：把左 Alt 與左 Super 換回 PC 佈�
 # 🔴 kernel 這邊本來有更對的解：`hid_apple` 驅動帶 `swap_opt_cmd` 參數，但這顆 kernel
 #    `# CONFIG_HID_APPLE is not set`，所以鍵盤只能落到 hid-generic，那些參數不存在。
 #    XKB 這條是使用者空間的繞法，不需要動 kernel。
-gsettings set org.gnome.desktop.input-sources xkb-options "['altwin:swap_lalt_lwin']"
+# 🔴 用加的，不要整個陣列蓋掉：ime.sh 也會往這個 key 放 caps:menu（Caps→US），
+#    兩支各自寫死陣列的話後跑的蓋前面的（2026-08-18 真的發生：Mac 鍵盤那條被
+#    蓋掉了，沒人發現，因為它只在接 Mac 鍵盤時才看得出來）。
+python3 - <<'PY'
+import subprocess, ast
+cur = ast.literal_eval(subprocess.check_output(["gsettings","get","org.gnome.desktop.input-sources","xkb-options"], text=True).strip())
+if "altwin:swap_lalt_lwin" not in cur:
+    cur.append("altwin:swap_lalt_lwin")
+subprocess.check_call(["gsettings","set","org.gnome.desktop.input-sources","xkb-options", repr(cur)])
+print("   xkb-options =", cur)
+PY
 echo "   已套用（驗證只能靠人：XKB 在 evdev 之上，evdev 層的 keycode 不會變）"
+
+echo "== [18] 輸入法（PINENOTE_NO_IME=1 跳過）=="
+# 拼音、注音、日文。以前是「想要再自己跑」，但重刷之後少了它這台就打不了中日文，
+# 而 pn-input 那顆按鈕會指著不存在的東西 —— 這不是可選的。不要的人設環境變數。
+if [ "${PINENOTE_NO_IME:-0}" = "1" ]; then
+  echo "   跳過（PINENOTE_NO_IME=1）"
+else
+  "$D/ime.sh"
+fi
 
 echo "== done =="
 
