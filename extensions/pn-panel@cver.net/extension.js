@@ -430,7 +430,11 @@ export default class PineNotePanelExtension extends Extension {
         const face = this._pnRimePending;
         if (!face)
             return;
-        if (!Main.inputMethod?._context)
+        // 🔴 守門看 currentFocus 不是 _context：context 建一次就一直在，拿它守門
+        //    等於不守 —— 在 overview 戳臉時鍵會送進虛空、RIME 沒切、pending 卻被
+        //    清掉。currentFocus 是 shell 端「現在有沒有輸入框在收字」的真值。
+        const im = Main.inputMethod;
+        if (!im?.currentFocus || !im?._context)
             return;   // 留著，focus-in 時再來
         this._pnRimeSelectSchema(face);
     }
@@ -476,7 +480,7 @@ export default class PineNotePanelExtension extends Extension {
     //    同步的鍵 —— 探針實測 F7/F8 兩個方向都直達，沒有任何可見的中間狀態。
     //    如果將來壞了，先查 default.custom.yaml 的 key_binder/bindings 有沒有
     //    活過 RIME 重編（rime_deployer 那個 last_build_time 陷阱，見 ime.sh）。
-    _pnRimeSelectSchema(face, didCommit = false) {
+    _pnRimeSelectSchema(face) {
         const target = PN_RIME_FACES[face];
         if (!target)
             return;
@@ -492,34 +496,38 @@ export default class PineNotePanelExtension extends Extension {
             return true;
         };
 
-        // 使用者在打字（終端裡那串底線字）就先幫他送出再切 —— 戳臉＝「我要換
-        // 了」，把手上那段送出是他要的，跟他自己按 Enter 一樣。
-        // 🔴 只試一次：Return 之後 preedit 沒清＝stale 或送不到，再送只是往終端
-        //    灌 Enter（真機灌過每分鐘 169 個）。第二次就不猜，pending 留著等
-        //    focus-in。
-        const clientPre = im?._preeditStr ?? "";
-        if (clientPre && !clientPre.includes("方案選單")) {
-            if (didCommit) {
-                console.log(`[pn-panel] rime: preedit still ${JSON.stringify(clientPre)} after Return — stale or unfocused; keeping pending`);
+        const finish = () => {
+            if (!send(IBus[`KEY_${target.key}`])) {
+                console.log(`[pn-panel] rime: no IM context for ${target.key}, keeping pending`);
                 return;
             }
-            console.log(`[pn-panel] rime: committing user's composition (${JSON.stringify(clientPre)}) before switching`);
+            this._pnRimePending = null;
+            this._pnRimeFace = face;
+            this._pnSyncInputLabel();
+            console.log(`[pn-panel] rime: → ${target.schema} via ${target.key}`);
+        };
+
+        // 使用者在打字（終端裡那串底線字）就先幫他送出再切 —— 戳臉＝「我要換
+        // 了」，把手上那段送出是他要的；直接送 F8 會把組字**默默丟掉**（探針：
+        // 沒有 COMMIT 事件，下一鍵直接是新方案），那是掉字。
+        //
+        // 🔴 送出之後**不驗證、不遞迴**，等一拍直接切。驗證那版死過兩次：
+        //    200ms 內 preedit 沒清（SoC 上往返比這慢、或使用者緊接著又打）→
+        //    判 stale → pending 掛起 → 使用者一直在終端裡，focus-in 永遠不來
+        //    → 「怎麼戳都無法打開」。而遞迴那版每分鐘灌 169 個 Enter。
+        //    Return＋切換鍵都送給同一個 context，到得了就都到得了；上面
+        //    currentFocus 守門保證這時真的有輸入框在收。
+        const clientPre = im?._preeditStr ?? "";
+        if (clientPre && !clientPre.includes("方案選單")) {
+            console.log(`[pn-panel] rime: committing user's composition (${JSON.stringify(clientPre)}) then switching`);
             send(IBus.KEY_Return);
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
-                this._pnRimeSelectSchema(face, true);
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 300, () => {
+                finish();
                 return GLib.SOURCE_REMOVE;
             });
             return;
         }
-
-        if (!send(IBus[`KEY_${target.key}`])) {
-            console.log(`[pn-panel] rime: no IM context for ${target.key}, keeping pending`);
-            return;
-        }
-        this._pnRimePending = null;
-        this._pnRimeFace = face;
-        this._pnSyncInputLabel();
-        console.log(`[pn-panel] rime: → ${target.schema} via ${target.key}`);
+        finish();
     }
 
     // Caps 的目的地：拉丁那一源。找 type === 'xkb' 而不是寫死 'us'，因為版面
