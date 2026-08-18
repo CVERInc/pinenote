@@ -458,7 +458,7 @@ export default class PineNotePanelExtension extends Extension {
         const ibm = IBusManager.getIBusManager();
         if (!ibm || this._pnRimeFocusId)
             return;
-        this._pnRimeFocusId = ibm.connect("focus-in", () => {
+        const tryLater = () => {
             if (!this._pnRimePending)
                 return;
             // 引擎在 focus-in 之後才 attach；給它一拍。
@@ -466,13 +466,34 @@ export default class PineNotePanelExtension extends Extension {
                 this._pnRimeFlushPending();
                 return GLib.SOURCE_REMOVE;
             });
-        });
+        };
+        this._pnRimeFocusId = ibm.connect("focus-in", tryLater);
+        // 🔴 也接候選列**消失**那一刻。使用者在打字中途戳了另一張臉（拼音打到一半
+        //    戳注音 —— 完全合理），那時不能切（見 _pnRimeSelectSchema 的
+        //    mid-composition 守衛），而他已經在輸入框裡、不會再有 focus-in。
+        //    他按 Enter／Escape 送出或清掉那段之後候選列會收起來 —— 那就是下一個
+        //    乾淨的時刻。
+        const popup = IBusManager.getIBusManager()?._candidatePopup;
+        if (popup) {
+            this._pnRimePopupId = popup.connect("notify::visible", () => {
+                if (!popup.visible)
+                    tryLater();
+            });
+        }
     }
 
     _pnRemoveRimeFocusHook() {
         if (this._pnRimeFocusId) {
             IBusManager.getIBusManager()?.disconnect(this._pnRimeFocusId);
             this._pnRimeFocusId = 0;
+        }
+        if (this._pnRimePopupId) {
+            try {
+                IBusManager.getIBusManager()?._candidatePopup?.disconnect(this._pnRimePopupId);
+            } catch (e) {
+                // 已拆
+            }
+            this._pnRimePopupId = 0;
         }
     }
 
@@ -495,6 +516,17 @@ export default class PineNotePanelExtension extends Extension {
             ctx.process_key_event_async(keyval, 0, mods | IBus.ModifierType.RELEASE_MASK, -1, null, null);
             return true;
         };
+        // 🔴 使用者正在打字（preedit 有東西）就不切。F4 在那個狀態不開選單，而
+        //    我們後面的任何鍵都會打進他的輸入。pending 留著，等他打完（下一次
+        //    focus-in 或候選列清空）再來。
+        const popupNow = IBusManager.getIBusManager()?._candidatePopup;
+        const nowTexts = (popupNow?._candidateArea?._candidateBoxes ?? [])
+            .filter(b => b.visible).map(b => b._candidateLabel?.text ?? "");
+        const nowIsMenu = nowTexts.some(t => /拼音|注音/.test(t));
+        if (popupNow?.visible && nowTexts.length && !nowIsMenu) {
+            console.log(`[pn-panel] rime: user is mid-composition ([${nowTexts.slice(0, 3).join(" | ")}]), deferring schema switch`);
+            return;
+        }
         // 0. 切方案期間不畫候選列。選單閃一下對使用者是「壞掉了」而不是「在切」，
         //    而且切完之後才是他要的候選列。pn-osk 接管了那條列，叫它先閉眼。
         this._pnOskCandidates(false);
@@ -525,7 +557,24 @@ export default class PineNotePanelExtension extends Extension {
                 this._pnOskCandidates(true);
                 return GLib.SOURCE_REMOVE;
             }
+            // 🔴 先確認候選列裡的是**方案選單**，不是使用者打到一半的候選字。
+            //    F4 在 RIME 已經有 preedit 時不會開選單（或被吃掉），250ms 後讀到
+            //    的就是「你好 妳好 逆號…」—— 第一版看到裡面沒有「注音」就 Escape，
+            //    把使用者打到一半的字一起清掉了（2026-08-18 真機，log 留著）。
+            //    選單的特徵是 preedit 含〔方案選單〕。不是選單就什麼都不碰，
+            //    pending 留著，等下一次乾淨的 focus-in 再試。
+            //    選單的特徵：候選文字裡有方案名（含「拼音」或「注音」的格）。
+            //    ⚠️ 不能用 popup._preeditText —— 那是 popup 自己的 label，RIME
+            //    的〔方案選單〕preedit 是送給 client 的（顯示在終端裡），popup
+            //    這個欄位在這條路上是空的（真機：選單開著、游標在注音、卻被判成
+            //    「沒開」而放掉）。
             const texts = visible.map(b => b._candidateLabel?.text ?? "");
+            const isMenu = texts.some(t => t.includes("拼音") || t.includes("注音"));
+            if (!isMenu) {
+                console.log(`[pn-panel] rime: F4 did not open the menu (bar has [${texts.join(" | ")}]), leaving input alone, keeping pending`);
+                this._pnOskCandidates(true);
+                return GLib.SOURCE_REMOVE;
+            }
             const picked = texts.findIndex(t => t.includes(target.menuMatch));
             if (picked < 0) {
                 console.log(`[pn-panel] rime: "${target.menuMatch}" not in menu [${texts.join(" | ")}], escaping`);
@@ -564,7 +613,8 @@ export default class PineNotePanelExtension extends Extension {
                     // 選單該關了。萬一沒關，補 Escape ——
                     // 別讓使用者卡在一個他沒打開的選單裡。然後才把候選列還給他。
                     GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
-                        const still = (popup?._preeditText?.text ?? "").includes("方案選單");
+                        const still = (popup?._candidateArea?._candidateBoxes ?? [])
+                            .some(b => b.visible && /拼音|注音/.test(b._candidateLabel?.text ?? ""));
                         if (still) {
                             console.log("[pn-panel] rime: menu stuck after space, escaping");
                             send(IBus.KEY_Escape);
