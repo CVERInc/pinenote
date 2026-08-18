@@ -1905,6 +1905,32 @@ export default class PineNoteOskExtension extends Extension {
             carea.setOrientation(IBus.Orientation.HORIZONTAL);
         }
 
+        // 🔴 點候選字＝合成那個方案的選字鍵。上游的點擊路徑是
+        //    candidate-clicked → panelService.candidate_clicked() → 引擎 —— 而
+        //    ibus-rime 1.5.1 沒有實作那個回呼（binary 查無 candidate_clicked；
+        //    librime 明明有 RimeSelectCandidateOnCurrentPage，前端沒接）。症狀：
+        //    翻頁可以（另一條路）、點字沒反應。Mozc 有實作，所以只攔 rime。
+        //    選字鍵是方案的：拼音 1-9；注音 Shift+A-J（大千式的數字列是注音
+        //    符號，方案把選字鍵讓給大寫字母）。臉是 pn-panel 推來的 _pnInputFace。
+        //    探針另證：Down/Up 移高亮 + space 選、Shift+B 直選第 2，鍵盤路本來
+        //    就通 —— 壞的只有點擊。
+        if (popup._candidateArea && !popup._pnClickId) {
+            popup._pnClickId = popup._candidateArea.connect("candidate-clicked",
+                (area, index) => {
+                    if (currentEngineId() !== "rime")
+                        return;   // Mozc 自己會處理
+                    const ctx = Main.inputMethod?._context;
+                    if (!ctx)
+                        return;
+                    const bp = this._pnInputFace === "bopomofo";
+                    const keyval = bp ? IBus.KEY_A + index : IBus.KEY_1 + index;
+                    const mods = bp ? IBus.ModifierType.SHIFT_MASK : 0;
+                    ctx.process_key_event_async(keyval, 0, mods, -1, null, null);
+                    ctx.process_key_event_async(keyval, 0,
+                        mods | IBus.ModifierType.RELEASE_MASK, -1, null, null);
+                });
+        }
+
         popup._pnOrigUpdateVisibility = popup._updateVisibility.bind(popup);
         popup._updateVisibility = () => {
             const isVisible = popup._preeditText.visible ||
@@ -1940,6 +1966,14 @@ export default class PineNoteOskExtension extends Extension {
 
     _pnUndockCandidatePopup() {
         const popup = IBusManager.getIBusManager()?._candidatePopup;
+        if (popup?._pnClickId) {
+            try {
+                popup._candidateArea?.disconnect(popup._pnClickId);
+            } catch (e) {
+                // 已拆
+            }
+            delete popup._pnClickId;
+        }
         if (popup?._pnOrigReposition) {
             popup._reposition = popup._pnOrigReposition;
             delete popup._pnOrigReposition;
