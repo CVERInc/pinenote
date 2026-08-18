@@ -520,7 +520,10 @@ export default class PineNotePanelExtension extends Extension {
         //    → 「怎麼戳都無法打開」。而遞迴那版每分鐘灌 169 個 Enter。
         //    Return＋切換鍵都送給同一個 context，到得了就都到得了；上面
         //    currentFocus 守門保證這時真的有輸入框在收。
-        const clientPre = im?._preeditStr ?? "";
+        // 🔴 hasPreedit() 不是 _preeditStr：hide-preedit-text 只清 visible 不清
+        //    字串（inputMethod.js 讀出來的），殘值會把「早就送出了」誤判成
+        //    「還在打」—— 先前那批「preedit still stale after Return」全是這個。
+        const clientPre = im?.hasPreedit?.() ? (im._preeditStr ?? "") : "";
         if (clientPre && !clientPre.includes("方案選單")) {
             console.log(`[pn-panel] rime: committing user's composition (${JSON.stringify(clientPre)}) then switching`);
             send(IBus.KEY_Return);

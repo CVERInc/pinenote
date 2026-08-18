@@ -1905,21 +1905,11 @@ export default class PineNoteOskExtension extends Extension {
             carea.setOrientation(IBus.Orientation.HORIZONTAL);
         }
 
-        // 🔴 點候選字＝合成那個方案的選字鍵。上游的點擊路徑是
-        //    candidate-clicked → panelService.candidate_clicked() → 引擎 —— 而
-        //    ibus-rime 1.5.1 沒有實作那個回呼（binary 查無 candidate_clicked；
-        //    librime 明明有 RimeSelectCandidateOnCurrentPage，前端沒接）。症狀：
-        //    翻頁可以（另一條路）、點字沒反應。Mozc 有實作，所以只攔 rime。
-        //    選字鍵是方案的：拼音 1-9；注音 Shift+A-J（大千式的數字列是注音
-        //    符號，方案把選字鍵讓給大寫字母）。臉是 pn-panel 推來的 _pnInputFace。
-        //    探針另證：Down/Up 移高亮 + space 選、Shift+B 直選第 2，鍵盤路本來
-        //    就通 —— 壞的只有點擊。
         // 🔴 候選格只接了 button-release-event（上游），而純觸控**根本不送**
         //    button 事件 —— pn-panel 的檔案裡早寫著同一課：「觸控要自己接」。
-        //    所以「手指戳選字」三個引擎全死、滑鼠反而可以，翻頁能動只因 ‹ › 是
-        //    St.Button（內建吃觸控）。每一格補上 touch-event，TOUCH_END 時發出
-        //    跟上游一模一樣的 candidate-clicked —— 原本那條 panelService 路
-        //    （Mozc 吃這個）和下面 rime 合成那條都會被餵到。
+        //    所以「手指戳選字」三個引擎全死、翻頁能動只因 ‹ › 是 St.Button
+        //    （內建吃觸控）。每一格補上 touch-event，TOUCH_END 時發出跟上游
+        //    一模一樣的 candidate-clicked，餵進 panelService 那條路。
         if (popup._candidateArea && !popup._pnTouchIds) {
             popup._pnTouchIds = popup._candidateArea._candidateBoxes.map((box, j) =>
                 box.connect("touch-event", (actor, event) => {
@@ -1930,23 +1920,14 @@ export default class PineNoteOskExtension extends Extension {
                 }));
         }
 
-        if (popup._candidateArea && !popup._pnClickId) {
-            popup._pnClickId = popup._candidateArea.connect("candidate-clicked",
-                (area, index) => {
-                    if (currentEngineId() !== "rime")
-                        return;   // Mozc 自己會處理
-                    const ctx = Main.inputMethod?._context;
-                    if (!ctx)
-                        return;
-                    const bp = this._pnInputFace === "bopomofo";
-                    const keyval = bp ? IBus.KEY_A + index : IBus.KEY_1 + index;
-                    const mods = bp ? IBus.ModifierType.SHIFT_MASK : 0;
-                    ctx.process_key_event_async(keyval, 0, mods, -1, null, null);
-                    ctx.process_key_event_async(keyval, 0,
-                        mods | IBus.ModifierType.RELEASE_MASK, -1, null, null);
-                });
-        }
-
+        // 🔴 rime 的點擊**不需要**我們合成選字鍵 —— 這裡曾經有一段合成
+        //    Shift+A / 1-9 的 hook，前提是「ibus-rime 沒實作 candidate_clicked」，
+        //    而那個前提是用 strings/nm 查的：librime 的呼叫全走 rime_get_api()
+        //    的函式表，符號表看不到，**查無不等於沒有**。真機的判決：戳「今天」
+        //    變「今天A」—— 上游 panelService.candidate_clicked 正常選了字，我們
+        //    的 Shift+A 在送出之後才到、落成字面 A。防抖（250ms）和 hasPreedit
+        //    gate 都擋不住：同一次發射、兩個消費者、同一個 tick。合成整段拆除；
+        //    點擊缺的只是 touch 事件（上面補的），不缺引擎支援。
         popup._pnOrigUpdateVisibility = popup._updateVisibility.bind(popup);
         popup._updateVisibility = () => {
             const isVisible = popup._preeditText.visible ||
@@ -1991,14 +1972,6 @@ export default class PineNoteOskExtension extends Extension {
                 }
             });
             delete popup._pnTouchIds;
-        }
-        if (popup?._pnClickId) {
-            try {
-                popup._candidateArea?.disconnect(popup._pnClickId);
-            } catch (e) {
-                // 已拆
-            }
-            delete popup._pnClickId;
         }
         if (popup?._pnOrigReposition) {
             popup._reposition = popup._pnOrigReposition;
