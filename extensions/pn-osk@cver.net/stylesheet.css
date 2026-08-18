@@ -157,6 +157,95 @@
     box-shadow: none;
 }
 
+/* ── 候選字列 ──────────────────────────────────────────────────────────
+   它貼在鍵盤正上方，所以它是鍵盤的延伸，配色就照鍵盤那套讀：
+   底是紙 #fff、字是墨 #000、選中那格是影 #aaa —— 跟 #keyboard 的底同一個值。
+   維護者要的就是這一條：選中的那格看起來是從下一列長出來的，不是浮在上面的
+   另一個東西。
+
+   🔴 這裡寫的是**看到的值**，不是反相前的值。候選窗曾經掛在 pn-posterise 上，
+   那時候任何 CSS 值都會被反相一次（#aaa 會畫成 #555），而鍵盤沒有被反相 ——
+   兩個表面規則不同，就沒有任何一個值能讓它們對齊。所以它已經從
+   _pnPosteriseActors() 拿掉了，理由寫在那裡。
+
+   🔴 寬度釘在**最外層**（BoxPointer），不釘 .candidate-popup-content。
+   第一版釘的是 content 那層，結果候選字多的時候整個容器被擠：字被省略成
+   「萬...」、翻頁鈕被推出視野。因為 content 是 VERTICAL 盒（preedit / aux /
+   candidateArea 疊著），寬度一釘死，裡面那條 HORIZONTAL 的候選列就只能在
+   這個寬度裡自己想辦法 —— 它想的辦法就是 ellipsize。
+   釘外層、內容置中，候選列要多寬畫多寬，翻頁鈕永遠跟在最右邊。
+
+   為什麼要釘：BoxPointer 的 _reposition 算 x 是
+      resX = sourceCenterX - (halfMargin + (natWidth - margin) * alignment)
+   natWidth 隨候選字內容變（量到 624 / 652 / 696），位置每打一個字就跳一次
+   —— 那就是「一下飄到右邊再飄回來」。（定位現在已經接管過來自己算了，見
+   _pnDockCandidatePopup；但釘死寬度仍然對：滿版的一條，視覺上才是工具列
+   而不是氣泡。）
+   🔴 寬度本身不寫在這裡。936 是橫向的邏輯寬，直向是 702 —— 寫死任何一個，
+   轉個方向就破。它由 _pnDockCandidatePopup 的 place() 在每次顯示時從
+   primaryMonitor 讀，跟停靠線同一個時機、同一個來源。 */
+.candidate-popup-boxpointer {
+    background-color: #fff;
+    border: none;
+    box-shadow: none;
+    -arrow-background-color: #fff;
+    -arrow-border-width: 0;
+    -arrow-rise: 0;
+    -boxpointer-gap: 0;
+}
+
+/* 內容不釘寬、置中。原廠給 content 6px 內距 + 12px 圓角 + 深底，全部歸零：
+   它是一條貼邊的列，不是一顆氣泡。 */
+.candidate-popup-boxpointer .candidate-popup-content {
+    background-color: #fff;
+    color: #000;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 4px 12px;
+    spacing: 4px;
+}
+
+.candidate-popup-boxpointer .candidate-box {
+    background-color: #fff;
+    color: #000;
+    border: none;
+    border-radius: 6px;
+}
+
+/* 選中那格＝鍵盤的底。兩個表面同一個值，讀起來才是連著的。 */
+.candidate-popup-boxpointer .candidate-box:selected {
+    background-color: #aaa;
+    color: #000;
+    border: none;
+}
+
+.candidate-popup-boxpointer .candidate-box:hover {
+    background-color: #ddd;
+    color: #000;
+}
+
+.candidate-popup-boxpointer .candidate-index,
+.candidate-popup-boxpointer .candidate-label {
+    color: #000;
+}
+
+/* 翻頁鈕跟功能鍵同一組讀法：有重量但不發言。 */
+.candidate-popup-boxpointer .candidate-page-button {
+    background-color: #fff;
+    color: #333;
+    border: none;
+    box-shadow: none;
+}
+
+/* 翻頁鈕那一小塊釘在右緣（見 _pnDockCandidatePopup），長候選會從它底下穿過去
+   被 clip。它自己要有不透明的底，不然穿過去的字會透出來跟箭頭疊在一起；左邊
+   留 12px 是讓被截斷的字跟箭頭之間有一口氣，不會黏著。 */
+.candidate-popup-boxpointer .candidate-page-button-box {
+    background-color: #fff;
+    padding-left: 12px;
+}
+
 /* 功能鍵退到後面。GNOME 給非字元鍵掛 .default-key。 */
 #keyboard .keyboard-key.default-key {
     background-color: #333;

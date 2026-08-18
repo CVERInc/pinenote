@@ -1689,7 +1689,7 @@ export default class PineNoteOskExtension extends Extension {
     //    一個，而原型上還有別人；跟 _forceFullWidth 覆寫 ac.setRatio 同一個理由。
     _pnDockCandidatePopup() {
         const popup = IBusManager.getIBusManager()?._candidatePopup;
-        if (!popup || popup._pnOrigSetDummy)
+        if (!popup || popup._pnOrigReposition)
             return;
 
         // 停靠線：OSK 開著就是鍵盤上緣，沒開就是螢幕底緣。
@@ -1707,79 +1707,113 @@ export default class PineNoteOskExtension extends Extension {
         const dockLine = () => {
             const mon = Main.layoutManager.primaryMonitor;
             if (!mon)
-                return null;
+                return 0;
             let y = mon.y + mon.height;
             const kb = Main.keyboard?._keyboard;
             if (Main.keyboard?.visible && kb?.height)
                 y -= kb.height;
-            return [mon.x, y, mon.width, 0];
+            return y;
         };
 
-        const applyDock = () => {
-            const dock = dockLine();
-            if (!dock)
-                return false;
-            // 🔴 箭頭要在**下**。BoxPointer 建構時是 St.Side.TOP，意思是箭頭在
-            //    上、盒子在下 —— 錨在鍵盤上緣的結果是候選字整條畫進數字列裡
-            //    （2026-08-18 量到 box y=468 h=54，鍵盤正好從 468 開始）。
-            //    我原本以為「下面沒空間就會自己翻」，但下面有空間：那是鍵盤佔的
-            //    螢幕，不是螢幕外。翻不翻是它自己決定的，不是我們要的保證。
-            //    _reposition 的 St.Side.BOTTOM 分支算的是
-            //        resY = sourceTopLeft.y - natHeight - gap
-            //    正是我們要的「盒子貼在錨點上方」。
-            //
-            // 🔴 要寫 _userArrowSide，不能只呼叫 updateArrowSide()。後者只改
-            //    _arrowSide 並重畫邊框，而每次配置都會跑 _updateFlip()：
-            //        let arrowSide = this._calculateArrowSide(this._userArrowSide);
-            //    它是從 _userArrowSide 重算再覆寫 _arrowSide 的 —— 所以只呼叫
-            //    updateArrowSide 的話，下一次配置就被建構時那個 TOP 打回去。
-            //    實測就是這樣：改了 arrow side，量到的位置一格都沒動。
-            popup._userArrowSide = St.Side.BOTTOM;
-            popup.updateArrowSide(St.Side.BOTTOM);
-            popup._pnOrigSetDummy(...dock);
-            return true;
+        // 🔴 定位不再交給 BoxPointer，我們自己算。
+        //
+        //    它是為「指向某個東西的氣泡」設計的，不是為「貼邊的工具列」，而這個
+        //    差別在三個地方咬過人：
+        //      · St.Side.TOP 的意思是盒子在錨點**下方**，不是「箭頭朝上所以在上」
+        //      · 改方向要寫 _userArrowSide，updateArrowSide() 會被 _updateFlip 蓋掉
+        //      · vfunc_allocate 只在 `this._sourceActor.mapped` 時才重新定位 ——
+        //        假游標是個 opacity:0、高度 0 的 actor，那個條件不是我們能保證的
+        //        東西。它沒成立的時候盒子就停在 0,0，量到的就是 {x:0,y:0}。
+        //
+        //    再加上 resX 是從 natWidth 算出來的，所以候選字一換寬度、位置就跳
+        //    —— 那就是「一下飄到右邊再飄回來」。CSS 把寬度釘死解掉了半邊，另外
+        //    半邊是這裡：把 _reposition 換成「用我們設好的座標」，兩條路（有沒有
+        //    跑到 _reposition）就都落在同一個答案上。
+        // place() 只管 x 和寬。y 由 _reposition 在配置時算 —— 見下面那段的
+        // 理由（簡單說：只有配置那一刻的高度是這批候選字的真值）。
+        const place = () => {
+            const mon = Main.layoutManager.primaryMonitor;
+            if (!mon)
+                return;
+            // 滿版：跟鍵盤同一個左右緣。寬度從螢幕讀，不寫進 CSS ——
+            // 橫向 936、直向 702，寫死哪個轉個方向都會破。
+            popup.set_width(mon.width);
+            popup.set_x(mon.x);
+            // 🔴 _sourceActor 一定要有東西，不然 vfunc_allocate 根本不叫
+            //    _reposition：
+            //        if (this._sourceActor && this._sourceActor.mapped)
+            //            this._reposition(box);
+            //    上一版拆掉假游標那條路之後它是 null，_reposition 從此不跑，
+            //    盒子就停在 0,0 —— 你看到的「飄到上面去」不是有意的，是沒人
+            //    擺它。這裡把它設回上游自己那個 _dummyCursor（在 uiGroup 裡，
+            //    永遠 mapped）；我們的 _reposition 不讀它的位置，只借它讓那個
+            //    if 成立。alignment 傳什麼都無所謂，同一個理由。
+            popup.setPosition(popup._dummyCursor, 0);
+            popup.queue_relayout();
         };
 
-        popup._pnOrigArrowSide = popup._userArrowSide;
-        popup._pnOrigSetDummy = popup._setDummyCursorGeometry.bind(popup);
-        popup._setDummyCursorGeometry = (x, y, w, h) => {
-            if (!applyDock())
-                popup._pnOrigSetDummy(x, y, w, h);
+        // 翻頁鈕釘在右緣。它們是 _candidateArea（HORIZONTAL BoxLayout）的最後
+        // 一個孩子，原本跟在最後一個候選字後面 —— 關掉 ellipsize 之後長候選會
+        // 把它們一路推出 936 被 clip 掉。x_expand 讓它們吃掉剩下的空間、
+        // x_align END 讓它們貼在那個空間的右邊；候選字塞不下的部分被 clip，
+        // 按鈕永遠看得到 —— 而看得到翻頁鈕，正是候選字被 clip 時唯一的出路。
+        const buttons = popup._candidateArea?._buttonBox;
+        if (buttons) {
+            popup._pnOrigButtonLayout = [buttons.x_expand, buttons.x_align];
+            buttons.x_expand = true;
+            buttons.x_align = Clutter.ActorAlign.END;
+        }
+        // 🔴 「...」不是寬度問題，是 St.Label 預設 ellipsize=END 加上 BoxLayout
+        //    的分配規則：孩子的最小寬度就是「...」，總自然寬一超過可用寬，它就
+        //    按比例把**每一格**縮到最小 —— 所以不管 page_size 是 9 還是 5，
+        //    只要有一個候選是整句，全部都會變「1 ...」「2 ...」。
+        //
+        //    關掉 ellipsize，label 的最小寬＝自然寬，BoxLayout 沒得縮。塞不下的
+        //    候選超出容器邊界，被 clip 掉 —— 那就是 macOS 的行為：第一個要多長
+        //    給多長，後面塞幾個算幾個，剩的靠翻頁鈕。
+        //
+        //    這幾個 label 是 _candidateArea 建構時就造好的，一共
+        //    MAX_CANDIDATES_PER_PAGE 個，之後只換 text，所以設一次就穩。
+        const area = popup._candidateArea;
+        popup._pnOrigEllipsize = [];
+        for (const box of area?._candidateBoxes ?? []) {
+            for (const label of [box._indexLabel, box._candidateLabel]) {
+                if (!label?.clutter_text)
+                    continue;
+                popup._pnOrigEllipsize.push([label, label.clutter_text.ellipsize]);
+                label.clutter_text.ellipsize = Pango.EllipsizeMode.NONE;
+            }
+        }
+
+        popup._pnOrigReposition = popup._reposition.bind(popup);
+        // 🔴 y 在**這裡**算，用這次配置框的高度。
+        //    _reposition 是 vfunc_allocate 呼叫的，那一刻 allocationBox 的高度是
+        //    這批候選字排好之後的真值。之前放在 place() 裡算，跑在 open() 之後、
+        //    內容排好之前，問到的是上一批的高度 —— 量到 h=42 卻擺在 460，底緣
+        //    502 蓋到 Esc 那列。接 notify::height 也補不到：高度變化發生在
+        //    allocate 裡面，訊號在它之後才發，配置已經用舊的 y 定案了。
+        //    x 沒這個問題，寬度是 set_width 釘死的。
+        //    _updateFlip 也會呼叫這個，對它無害：只會再算出同一個答案。
+        //
+        // 🔴 一定要**先叫原廠的** _reposition，再蓋原點。vfunc_allocate 是
+        //        this._reposition(box); this._updateFlip(box);
+        //    而 _updateFlip → _calculateArrowSide 會讀 this._sourceExtents 和
+        //    this._workArea —— 那兩個欄位是原廠 _reposition 才會填的。整個換掉的
+        //    版本從沒填過它們，_updateFlip 一跑就丟 undefined，配置在 vfunc 裡
+        //    中止、GJS 把例外吞掉，日誌一個字都沒有。症狀是 Geometry 量到
+        //    visible/mapped/sourceMapped 全 true、五個候選都在、opacity 255，
+        //    但 box 是 None —— 一切都在，就是沒有 allocation（2026-08-18）。
+        popup._reposition = allocationBox => {
+            try {
+                popup._pnOrigReposition(allocationBox);
+            } catch (e) {
+                // 原廠算不出來也無所謂：我們反正要蓋掉原點。它算的那份只是
+                // 為了把 _sourceExtents / _workArea 填好給 _updateFlip 用。
+            }
+            const h = allocationBox.get_height();
+            allocationBox.set_origin(popup.x, Math.floor(dockLine() - h));
         };
 
-        // 🔴 上游把浮動窗和 OSK 當成互斥的兩條路：
-        //        isVisible = !Main.keyboard.visible && (preedit || aux || candidates)
-        //    OSK 開著時它關掉自己，候選改由 Main.keyboard.addSuggestion() 推進
-        //    OSK 上緣那條 suggestions strip。
-        //
-        //    而那條 strip 在這台上拿不到高度：fillWidth 把 AspectContainer 的比例
-        //    釘成整條帶子（setRatio(keyboard.width, keyboard.height)），按鍵區的
-        //    偏好高度就是整條帶子，配置時先被餵飽，strip 剩 0。兩邊同時失效，
-        //    所以 OSK 一開就什麼候選都看不到 —— 而實體鍵盤（OSK 沒開）正常。
-        //
-        //    🔴 歸因更正（2026-08-18）：這裡一度寫成「kb._suggestions 是 null」。
-        //       那是誤讀 —— 當時 Geometry 還沒有 suggestions 欄位，而讀取端把
-        //       「鍵不存在」和「值是 null」收斂成同一個 None。補上欄位再量，它
-        //       是 visible=true / children=0 / naturalHeight=0，也就是存在但被
-        //       擠成沒有高度。strip 從來沒有消失過，只是沒有位置。
-        //
-        //    修法有兩個，選了後者：
-        //      (a) 讓 strip 拿回高度 —— 有候選時把它的自然高度從比例裡扣掉。
-        //          能動，但候選字會出現在兩個地方（浮動窗貼底、strip 貼鍵盤），
-        //          而且 strip 這條路沒有編號：addSuggestion(text, callback) 不帶
-        //          index，只能用點的。
-        //      (b) 把 !Main.keyboard.visible 拿掉，讓浮動窗同時服務兩種情況，
-        //          strip 就維持 0 —— 那也讓 fillWidth 賺到的滿版不必還回去。
-        //          一個元件、一個位置、有 1-9 可以按。
-        //
-        //    圖層不必自己處理：
-        //    上游在 isVisible 分支裡本來就有
-        //        this.get_parent().set_child_above_sibling(this, keyboardBox)
-        //    註解寫著「just above the keyboard gets us to the right layer」——
-        //    它早就準備好被畫在 OSK 之上，只是從來沒有機會。
-        //
-        // ⚠️ 這一段是照抄上游的 _updateVisibility 再拿掉一個條件，所以它會跟著
-        //    上游漂移。升級 gnome-shell 之後候選窗行為變怪的話，先來對這一段。
         popup._pnOrigUpdateVisibility = popup._updateVisibility.bind(popup);
         popup._updateVisibility = () => {
             const isVisible = popup._preeditText.visible ||
@@ -1787,15 +1821,13 @@ export default class PineNoteOskExtension extends Extension {
                 popup._candidateArea.visible;
 
             if (isVisible) {
-                // 🔴 每次要顯示之前重算停靠線。位置本來只在 cursor-location-changed
-                //    的時候算一次，而那一刻 OSK 常常還沒升起 —— 算出來的是螢幕底
-                //    緣，然後就這樣定住，候選窗整條蓋在鍵盤上。顯示時機才是唯一
-                //    保證「OSK 現在到底在不在」已成定局的時機。
-                applyDock();
-                // 錨點是滿寬的一條線，alignment 0.5 才會置中；0 會把盒子推向一邊
-                // （量到 x=234 w=696，右緣貼著 930）。
-                popup.setPosition(popup._dummyCursor, 0.5);
                 popup.open(BoxPointer.PopupAnimation.NONE);
+                // 🔴 每次顯示都重擺，而且是在 open() 之後。
+                //    重擺：停靠線跟著 OSK 走，而 OSK 升起的時機不受我們控制 ——
+                //    只有「要顯示了」這一刻，鍵盤在不在已成定局。
+                //    在 open() 之後：要等內容進去，get_preferred_* 才是這一批
+                //    候選字的真尺寸。
+                place();
                 const {keyboardBox} = Main.layoutManager;
                 popup.get_parent().set_child_above_sibling(popup, keyboardBox);
             } else {
@@ -1806,30 +1838,25 @@ export default class PineNoteOskExtension extends Extension {
 
     _pnUndockCandidatePopup() {
         const popup = IBusManager.getIBusManager()?._candidatePopup;
-        if (popup?._pnOrigSetDummy) {
-            popup._setDummyCursorGeometry = popup._pnOrigSetDummy;
-            delete popup._pnOrigSetDummy;
+        if (popup?._pnOrigReposition) {
+            popup._reposition = popup._pnOrigReposition;
+            delete popup._pnOrigReposition;
         }
-        if (popup?._pnOrigUpdateVisibility) {
-            popup._updateVisibility = popup._pnOrigUpdateVisibility;
-            delete popup._pnOrigUpdateVisibility;
+        if (popup?._pnOrigButtonLayout) {
+            const buttons = popup._candidateArea?._buttonBox;
+            if (buttons)
+                [buttons.x_expand, buttons.x_align] = popup._pnOrigButtonLayout;
+            delete popup._pnOrigButtonLayout;
         }
-        // 箭頭方向也要還原，不然停用擴充之後候選窗會繼續畫在游標上方。
-        //
-        // 🔴 要包 try。disable 有一半的情況是整個 shell 在拆，那時候這顆 popup
-        //    可能已經被 C 端 dispose 掉了，而 updateArrowSide() 會去碰
-        //    this._border / this.bin —— 丟出 "this.bin is undefined"，然後把
-        //    後面還沒還原的東西一起跳過。實測看得到：restart gdm3 的日誌裡，
-        //    舊 session 熄燈前正好噴兩個這種 JS ERROR。
-        if (popup && popup._pnOrigArrowSide !== undefined) {
+        for (const [label, mode] of popup?._pnOrigEllipsize ?? []) {
             try {
-                popup._userArrowSide = popup._pnOrigArrowSide;
-                popup.updateArrowSide(popup._pnOrigArrowSide);
+                label.clutter_text.ellipsize = mode;
             } catch (e) {
-                // 已經拆掉了，本來就不需要還原
+                // 已拆
             }
-            delete popup._pnOrigArrowSide;
         }
+        if (popup)
+            delete popup._pnOrigEllipsize;
     }
 
     _restoreRatio() {
@@ -1923,7 +1950,19 @@ export default class PineNoteOskExtension extends Extension {
                 return {
                     box: box(p),
                     visible: p.visible,
+                    mapped: p.mapped,
+                    opacity: p.opacity,
+                    // 這三個是「visible=true 卻量不到 box」時要看的：sourceActor
+                    // 沒 mapped 的話 vfunc_allocate 根本不會呼叫 _reposition；
+                    // 沒有 parent 就是還沒進 stage。
+                    hasSourceActor: !!p._sourceActor,
+                    sourceMapped: p._sourceActor?.mapped ?? null,
+                    parent: p.get_parent()?.constructor?.name ?? null,
                     dummyCursor: box(p._dummyCursor),
+                    candidateArea: box(p._candidateArea),
+                    candidateAreaVisible: p._candidateArea?.visible ?? null,
+                    nCandidatesVisible: (p._candidateArea?._candidateBoxes ?? [])
+                        .filter(b => b.visible).length,
                 };
             })(),
             suggestions: kb?._suggestions
@@ -2120,16 +2159,19 @@ export default class PineNoteOskExtension extends Extension {
             if (arrow)
                 list.push([`arrow:${which}`, arrow]);
         }
-        // 候選字窗。同樣的故事第二次：它走 Main.layoutManager.addTopChrome()，
-        // 落在 uiGroup 底下 —— 跟上面那組箭頭一樣在量化器射程之外。
+        // 🔴 候選字窗**不在**這份清單裡，而它曾經在。
         //
-        // 差別是這一顆不是我們搬出去的，是上游本來就放在那裡，所以在輸入法進來
-        // 之前沒有人會發現。它是原廠 Adwaita 深色：黑底、白字、選取那格是藍的，
-        // 而藍色在這片面板上沒有對應的灰階 —— 抖動之後就是一格雜訊，剛好蓋在
-        // 你要讀的那個候選字上。
-        const candidates = IBusManager.getIBusManager()?._candidatePopup;
-        if (candidates)
-            list.push(["candidates", candidates]);
+        // 掛進來是對的第一步：它走 addTopChrome() 落在 uiGroup 底下，跟翻頁箭頭
+        // 一樣在射程外，所以原廠 Adwaita 深色和那格藍色選取直接打在臉上。量化器
+        // 一掛就解決了。
+        //
+        // 拿出來是對的第二步。維護者要的是「選中那格的底色跟下一列一樣」——
+        // 下一列是鍵盤，而鍵盤的底是 CSS 寫死的 #aaa，**而且鍵盤不在這份清單裡**
+        // （它在 keyboardBox，不在 panel/modals/overview 底下）。兩個表面一個被
+        // 反相一個沒有，就沒有任何一個 CSS 值能同時對：寫 #aaa 會被反相成 #555。
+        //
+        // 所以照這個 repo 自己的分工辦：**物理歸量化器，設計永遠是 CSS**。候選窗
+        // 現在是打字介面的一部分，跟鍵盤同一類，不是鄰居的表面。顏色見 stylesheet。
         return list;
     }
 
