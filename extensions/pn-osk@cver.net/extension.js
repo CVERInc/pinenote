@@ -1914,6 +1914,22 @@ export default class PineNoteOskExtension extends Extension {
         //    符號，方案把選字鍵讓給大寫字母）。臉是 pn-panel 推來的 _pnInputFace。
         //    探針另證：Down/Up 移高亮 + space 選、Shift+B 直選第 2，鍵盤路本來
         //    就通 —— 壞的只有點擊。
+        // 🔴 候選格只接了 button-release-event（上游），而純觸控**根本不送**
+        //    button 事件 —— pn-panel 的檔案裡早寫著同一課：「觸控要自己接」。
+        //    所以「手指戳選字」三個引擎全死、滑鼠反而可以，翻頁能動只因 ‹ › 是
+        //    St.Button（內建吃觸控）。每一格補上 touch-event，TOUCH_END 時發出
+        //    跟上游一模一樣的 candidate-clicked —— 原本那條 panelService 路
+        //    （Mozc 吃這個）和下面 rime 合成那條都會被餵到。
+        if (popup._candidateArea && !popup._pnTouchIds) {
+            popup._pnTouchIds = popup._candidateArea._candidateBoxes.map((box, j) =>
+                box.connect("touch-event", (actor, event) => {
+                    if (event.type() !== Clutter.EventType.TOUCH_END)
+                        return Clutter.EVENT_PROPAGATE;
+                    popup._candidateArea.emit("candidate-clicked", j, 1, 0);
+                    return Clutter.EVENT_STOP;
+                }));
+        }
+
         if (popup._candidateArea && !popup._pnClickId) {
             popup._pnClickId = popup._candidateArea.connect("candidate-clicked",
                 (area, index) => {
@@ -1966,6 +1982,16 @@ export default class PineNoteOskExtension extends Extension {
 
     _pnUndockCandidatePopup() {
         const popup = IBusManager.getIBusManager()?._candidatePopup;
+        if (popup?._pnTouchIds) {
+            popup._candidateArea?._candidateBoxes?.forEach((box, j) => {
+                try {
+                    box.disconnect(popup._pnTouchIds[j]);
+                } catch (e) {
+                    // 已拆
+                }
+            });
+            delete popup._pnTouchIds;
+        }
         if (popup?._pnClickId) {
             try {
                 popup._candidateArea?.disconnect(popup._pnClickId);
