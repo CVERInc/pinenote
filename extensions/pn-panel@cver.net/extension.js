@@ -405,9 +405,11 @@ export default class PineNotePanelExtension extends Extension {
         if (!face)
             this._pnPushFaceToOsk(null);
         if (face) {
-            // 標籤先變 —— 這是使用者剛剛按下去的意圖，頂列要立刻回應。
-            this._pnRimeFace = face;
-            this._pnPushFaceToOsk(face);
+            // 🔴 標籤和鍵帽**不在這裡**變 —— 在 _pnRimeSelectSchema 的 finish()，
+            //    也就是切換鍵真的送出去之後。第一版在這裡立刻把鍵帽換成注音，
+            //    而 F8 要等 focus-in／送出延遲才到引擎：那幾百毫秒裡使用者照著
+            //    注音鍵帽打，引擎還在拼音，吐出來的是羅馬字（真機：「有時候會
+            //    發出羅馬字」）。鍵帽跟著引擎走，不跟著意圖走 —— 慢一拍但誠實。
             // 🔴 方案切換是「懶」的：記下待送，能送就送，不能就等下一次焦點。
             //    RIME 只在有輸入焦點時處理鍵 —— 沒有輸入框在聽的時候（例如在
             //    overview 戳頂列），送 F4 什麼都不會發生（實測選單沒進候選列，
@@ -503,6 +505,7 @@ export default class PineNotePanelExtension extends Extension {
             }
             this._pnRimePending = null;
             this._pnRimeFace = face;
+            this._pnPushFaceToOsk(face);
             this._pnSyncInputLabel();
             console.log(`[pn-panel] rime: → ${target.schema} via ${target.key}`);
         };
