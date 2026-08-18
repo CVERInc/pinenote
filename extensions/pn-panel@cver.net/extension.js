@@ -359,7 +359,12 @@ export default class PineNotePanelExtension extends Extension {
     }
 
     // 切方案期間叫 pn-osk 不要畫候選列（那時候列裡是方案選單，不是候選字）。
+    // 🔴 旗標**同步**設在 globalThis 上，再補一個 D-Bus 讓 pn-osk 把已經開著的
+    //    popup 立刻壓掉。只走 D-Bus 是不夠的：它非同步，F4 送出去選單先畫、
+    //    suppress 後到，選單整條露出來（2026-08-18 真機）。同一個 shell 行程裡
+    //    globalThis 是共用的，pn-osk 在 open() 之後讀它，一定看得到。
     _pnOskCandidates(show) {
+        globalThis._pnSuppressCandidates = !show;
         Gio.DBus.session.call(
             "org.cver.PnOsk", "/org/cver/PnOsk", "org.cver.PnOsk",
             "SuppressCandidates", new GLib.Variant("(b)", [!show]), null,
@@ -534,6 +539,21 @@ export default class PineNotePanelExtension extends Extension {
             //    F4 開啟時游標預設位置不固定（有時在現用、有時在上一個），所以
             //    也不能「直接 space」。游標現在在哪從 _candidateArea 讀
             //    （_cursorPosition），要按的次數 = 目標 − 現在。
+            // 🔴 目標在第 1 格＝已經是現用方案（RIME 把現用排最前，其他照
+            //    schema_list）。這時**不能** space：選現用＝RIME 什麼都不做、選單留在
+            //    畫面上（真機：〔方案選單〕留在 preedit、游標停在拼音）。Escape 收掉。
+            if (picked === 0) {
+                send(IBus.KEY_Escape);
+                console.log(`[pn-panel] rime: already on "${texts[0]}", menu closed`);
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 120, () => {
+                    this._pnOskCandidates(true);
+                    return GLib.SOURCE_REMOVE;
+                });
+                this._pnRimePending = null;
+                this._pnRimeFace = face;
+                this._pnSyncInputLabel();
+                return GLib.SOURCE_REMOVE;
+            }
             const cur = popup._candidateArea?._cursorPosition ?? 0;
             const steps = picked - cur;
             const keyOnce = (kv, cb) => { send(kv); GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60, () => { cb(); return GLib.SOURCE_REMOVE; }); };

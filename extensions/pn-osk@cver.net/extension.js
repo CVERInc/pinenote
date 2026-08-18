@@ -1918,7 +1918,11 @@ export default class PineNoteOskExtension extends Extension {
                 // 蓋掉（真機：選單照樣整條畫出來）。opacity 0 而不是不 open：
                 // popup 的內部狀態（_candidateArea 的文字、_cursorPosition）還是
                 // 要更新，pn-panel 靠它們找選單裡的目標和算要按幾次 Down。
-                if (this._pnSuppressCandidates)
+                // 旗標從 global 讀，不是從 this：pn-panel 跟我們在同一個 shell 行程，
+                // 它切方案前**同步**設 global._pnSuppressCandidates 再送 F4，我們這裡
+                // 就一定看得到。走 D-Bus 的話 call 是非同步的，F4 先到、選單先畫，
+                // suppress 後到 —— 真機上選單就整條露出來了。
+                if (globalThis._pnSuppressCandidates)
                     popup.opacity = 0;
                 // 🔴 每次顯示都重擺，而且是在 open() 之後。
                 //    重擺：停靠線跟著 OSK 走，而 OSK 升起的時機不受我們控制 ——
@@ -2430,7 +2434,7 @@ export default class PineNoteOskExtension extends Extension {
     // 選字，畫出來對使用者是「壞掉了」而不是「在切」。這裡把它按住；切完放開。
     // 只按顯示，不動 popup 的狀態機 —— 選單照樣開、鍵照樣送、RIME 照樣切。
     SuppressCandidates(suppress) {
-        this._pnSuppressCandidates = !!suppress;
+        globalThis._pnSuppressCandidates = !!suppress;
         const popup = IBusManager.getIBusManager()?._candidatePopup;
         if (popup)
             popup.opacity = suppress ? 0 : 255;
