@@ -468,56 +468,16 @@ export default class PineNotePanelExtension extends Extension {
             });
         };
         this._pnRimeFocusId = ibm.connect("focus-in", tryLater);
-        // 🔴 也接候選列**消失**那一刻。使用者在打字中途戳了另一張臉（拼音打到一半
-        //    戳注音 —— 完全合理），那時不能切（見 _pnRimeSelectSchema 的
-        //    mid-composition 守衛），而他已經在輸入框裡、不會再有 focus-in。
-        //    他按 Enter／Escape 送出或清掉那段之後候選列會收起來 —— 那就是下一個
-        //    乾淨的時刻。
-        const popup = IBusManager.getIBusManager()?._candidatePopup;
-        if (popup) {
-            this._pnRimePopupId = popup.connect("notify::visible", () => {
-                if (popup.visible) {
-                    // 又開始打了：取消排程中的那次
-                    if (this._pnRimeQuietId) {
-                        GLib.Source.remove(this._pnRimeQuietId);
-                        this._pnRimeQuietId = 0;
-                    }
-                    return;
-                }
-                if (!this._pnRimePending)
-                    return;
-                // 🔴 候選列收起**不是**乾淨時刻 —— 那是 Enter 到下一個字之間的一道
-                //    窄縫，搶它必撞到使用者（真機：F4 送出、他已經在打 n、讀到
-                //    「你那呢能年」、選單跟他的輸入疊在一起）。等一秒都安靜才算
-                //    他停手了。這一秒裡他又打字，上面那條會取消。
-                if (this._pnRimeQuietId)
-                    GLib.Source.remove(this._pnRimeQuietId);
-                this._pnRimeQuietId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
-                    this._pnRimeQuietId = 0;
-                    if (!popup.visible)
-                        this._pnRimeFlushPending();
-                    return GLib.SOURCE_REMOVE;
-                });
-            });
-        }
+        // 🔴 只接 focus-in。曾經也接候選列收起（等 1 秒安靜再切），那條拆了：
+        //    「使用者停了沒」猜不準 —— 1 秒的窗口跟他下一個字撞。現在的做法是
+        //    戳臉當下若在打字就先幫他 Enter 再切（見 _pnRimeSelectSchema），
+        //    不需要等任何時刻。
     }
 
     _pnRemoveRimeFocusHook() {
         if (this._pnRimeFocusId) {
             IBusManager.getIBusManager()?.disconnect(this._pnRimeFocusId);
             this._pnRimeFocusId = 0;
-        }
-        if (this._pnRimeQuietId) {
-            GLib.Source.remove(this._pnRimeQuietId);
-            this._pnRimeQuietId = 0;
-        }
-        if (this._pnRimePopupId) {
-            try {
-                IBusManager.getIBusManager()?._candidatePopup?.disconnect(this._pnRimePopupId);
-            } catch (e) {
-                // 已拆
-            }
-            this._pnRimePopupId = 0;
         }
     }
 
@@ -543,12 +503,20 @@ export default class PineNotePanelExtension extends Extension {
         // 🔴 使用者正在打字（preedit 有東西）就不切。F4 在那個狀態不開選單，而
         //    我們後面的任何鍵都會打進他的輸入。pending 留著，等他打完（下一次
         //    focus-in 或候選列清空）再來。
-        // 🔴 看 Main.inputMethod._preeditStr —— 那是 shell 收到的 client preedit，
-        //    就是終端裡那串底線字。它比候選列準：候選列可能還沒出、preedit 已經
-        //    有東西了。有東西（且不是我們自己開的〔方案選單〕）＝使用者在打字。
+        // 🔴 使用者在打字（Main.inputMethod._preeditStr 有東西＝終端裡那串底線
+        //    字）就**先幫他送出**再切。戳臉＝「我要換了」，把手上那段送出是他
+        //    要的；等他自己送出再切這條路試過了 —— 等 1 秒安靜的窗口跟他下一個
+        //    字撞、猜「停了沒」永遠猜不準（真機：他打 su3cl3 時方案還沒切，
+        //    出來的是拼音「速除了」）。不猜：Enter，然後正常切。
+        //    Enter 在 RIME 拼音裡是「以字母送出」—— 跟他自己按 Enter 一樣。
         const clientPre = Main.inputMethod?._preeditStr ?? "";
         if (clientPre && !clientPre.includes("方案選單")) {
-            console.log(`[pn-panel] rime: user is mid-composition (${JSON.stringify(clientPre)}), deferring schema switch`);
+            console.log(`[pn-panel] rime: committing user's composition (${JSON.stringify(clientPre)}) before switching`);
+            send(IBus.KEY_Return);
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+                this._pnRimeSelectSchema(face);
+                return GLib.SOURCE_REMOVE;
+            });
             return;
         }
         // 0. 切方案期間不畫候選列。選單閃一下對使用者是「壞掉了」而不是「在切」，
