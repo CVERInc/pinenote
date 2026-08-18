@@ -44,7 +44,15 @@ mkdir -p "$HOME/.config/ibus/rime"
 cat > "$HOME/.config/ibus/rime/default.custom.yaml" <<'EOF'
 # 由 setup/ime.sh 產生。理由寫在那支腳本裡，這裡只留跟這台硬體綁著的兩條。
 #
-# page_size 9。RIME 預設只有 5。
+# page_size 5 —— RIME 的預設值，改過一次又改回來。
+#
+# 🔴 曾經是 9（2026-08-17），理由是「k6 有完整數字列，九個候選按數字直選」。
+#    那個理由對，但輸給了另一件事：橫排的候選列只有 936 邏輯像素寬，而拼音是
+#    整句打的 —— 第一個候選是「實際上打字時可能會一次打一大排」這種長度時，
+#    九格擠不下，St 只能把每格 ellipsize 成「七...」「5 ...」，翻頁鈕直接被推出
+#    視野。這是算術不是排版：不管對齊怎麼調，九個含長句的候選就是塞不進 936。
+#    macOS 的做法是第一個候選要多長給多長、後面塞幾個算幾個、剩的往下翻 ——
+#    page_size 5 就是往那個方向靠。1-5 照樣數字直選，6-9 變成翻一頁。
 #
 # 🔴 候選字走兩條路，而它們的選字方式不一樣 —— 這台實際跑的
 #    ibusCandidatePopup.js 裡，_updateVisibility() 是
@@ -52,9 +60,8 @@ cat > "$HOME/.config/ibus/rime/default.custom.yaml" <<'EOF'
 #    螢幕鍵盤開著時浮動窗不出現，候選改由 Main.keyboard.addSuggestion() 推進
 #    OSK 上緣那條 suggestions strip。而 addSuggestion(text, callback) 不帶 index
 #    標籤（indexes 只送給浮動窗），所以 OSK 那條是**用點的**，數字鍵選不到。
-#
-#    9 是為實體鍵盤那條路設的（浮動窗有編號，k6 也有完整數字列）。對 OSK 它的
-#    意義只是「一次看得到九個」，而那條 strip 塞不塞得下九個中文詞還沒量過。
+#    （pn-osk 已經把那個條件拿掉、讓浮動窗兩種情況都服務，見它的
+#    _pnDockCandidatePopup；但這段留著，因為它解釋了為什麼要那樣做。）
 #
 # schema_list 只留一個是刻意的：RIME 的方案切換是 Ctrl+`，而 k6 的 portrait
 # topRow 是 "1234567890-=" 沒有反引號（landscape 的 "`1234567890-=" 才有）。
@@ -62,7 +69,7 @@ cat > "$HOME/.config/ibus/rime/default.custom.yaml" <<'EOF'
 patch:
   schema_list:
     - schema: luna_pinyin_tw
-  menu/page_size: 9
+  menu/page_size: 5
 EOF
 
 # 候選字橫排。這是 **ibus-rime 前端自己的**設定，不是 default.yaml、也不是方案。
@@ -95,15 +102,18 @@ rm -rf "$HOME/.config/ibus/rime/build" "$HOME/.config/ibus/rime/user.yaml"
 #    交給前端自己部署：重啟 ibus，等它編完（這顆 SoC 上約 20 秒）。
 
 echo "== [3] 輸入源 =="
-# 🔴 順序有意義。('xkb','us') 一定放第一個：終端一律回到它，不要靠引擎的內部
-#    英數模式。Mozc 若改成 Kotoeri keymap（見 [4]），Ctrl+J/K/L 會跟 readline
-#    的換行／砍到行尾／清畫面全撞——而這台整副 OSK 本來就是為終端做的。
+# 🔴 順序有兩層意思。('xkb','us') 一定放第一個：終端一律回到它，不要靠引擎的
+#    內部英數模式 —— Mozc 若改成 Kotoeri keymap（見 [4]），Ctrl+J/K/L 會跟
+#    readline 的換行／砍到行尾／清畫面全撞，而這台整副 OSK 本來就是為終端做的。
+#
+#    後面兩個排 JP 再 TW，於是 pn-input 戳出來的循環是 US → JP → TW → US。
+#    照 A-Z 記得住，照「常用度」記不住。
 # 🔴 日文用 mozc-on 不是 mozc-jp。mozc-jp 啟用時停在直接入力，打羅馬字直接吐
 #    英文字母（看起來就像輸入法沒裝好），而 k6 版面沒有半角/全角鍵切不出來。
 #    mozc-on（Mozc:あ）一啟用就是假名。等同 macOS 把「かな」「英数」分成兩個
 #    輸入源的做法。
 gsettings set org.gnome.desktop.input-sources sources \
-  "[('xkb','us'),('ibus','rime'),('ibus','mozc-on')]"
+  "[('xkb','us'),('ibus','mozc-on'),('ibus','rime')]"
 
 # GNOME 下不需要設 GTK_IM_MODULE／XMODIFIERS：Wayland 的 shell 自己就是 IM，
 # ibus-daemon 由 org.freedesktop.IBus.session.GNOME.service 隨 session 起來
@@ -133,9 +143,13 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ibus-hangul ibus-chewing
 # 沒有反引號。所以獨立引擎的 chewing 才是這台上對的選擇。
 
 echo "== [3b] IBus registry cache =="
-# 🔴 裝完新引擎一定要重建。cache 是在**安裝前**建的，裡面沒有 rime 和 mozc，
-#    症狀是：gsettings 裡看得到那個源、面板也切得過去，但打字沒有任何反應，
-#    候選窗時有時無。mozc 自己的 component XML 裡就寫了這句話。
+# 裝完新引擎重建一次，mozc 自己的 component XML 就建議這麼做。便宜、無害。
+#
+# 🔴 歸因更正（2026-08-18）：這裡一度寫成「不重建的話 gsettings 看得到那個源、
+#    面板切得過去，但打字沒反應」。那個症狀是真的，原因不是這個 —— 實測
+#    `ibus list-engine` 在 write-cache **之前**就已經列出 rime 和 mozc-jp。
+#    真正的原因是引擎選錯（mozc-jp 停在直接入力，見上面 [3]），跟 cache 無關。
+#    留著這一步，但不要再用它解釋那個症狀。
 ibus write-cache || true
 ibus restart 2>/dev/null || true
 
@@ -143,7 +157,7 @@ echo "== [3c] 實體鍵盤的兩個鍵 =="
 # 行為在 pn-panel 的 _pnInstallKeybindings 裡（它挾持這兩個綁定，把 MRU 循環
 # 換成清單順序循環）。這裡只寫 accel。
 #
-# Ctrl+Space → 循環 US → TW → JP → US
+# Ctrl+Space → 循環 US → JP → TW → US（順序來自上面的 sources）
 gsettings set org.gnome.desktop.wm.keybindings switch-input-source "['<Control>space']"
 # Caps → 回到 US（已經在 US 就跳回剛才那個源，macOS 的行為）
 gsettings set org.gnome.desktop.wm.keybindings switch-input-source-backward "['Menu']"
