@@ -69,14 +69,20 @@ cat > "$HOME/.config/ibus/rime/default.custom.yaml" <<'EOF'
 patch:
   # 🔴 恰好兩個。注音走 RIME 不走 chewing —— RIME 邊打邊出候選（跟拼音同一個
   #    引擎、同一條列、同一套詞庫），chewing 打完按空白才出。pn-input 的循環把
-  #    rime 源展開成 TW / BP 兩張臉，切臉時對 RIME 送 F4 選單再 Down+Return。
+  #    rime 源展開成 pinyin / bopomofo 兩張臉，切臉＝送下面綁的 F7/F8 直達鍵。
   schema_list:
     - schema: luna_pinyin_tw
     - schema: bopomofo_tw
   menu/page_size: 5
-  # 選單照 schema_list 順序排、不 MRU。沒有這個的話第 1 項是現用方案、另一個被
-  # 選項推到第二頁，pn-input 在第一頁找不到目標。有了它位置固定，直接選。
+  # 選單照 schema_list 順序排、不 MRU（給人手動 F4 用的；pn-input 已不走選單）。
   switcher/fix_schema_list_order: true
+  # 直達鍵，給 pn-panel 的 pn-input 用。librime key_binder 的 select 動作直接切
+  # 方案 —— 不開選單、沒有中間狀態。F7/F8 是 k6 版面上不存在的鍵，人按不到，
+  # 只有 pn-panel 合成得出來。曾經走 F4 選單（讀格子、走游標、space 確認），
+  # 每一步都是 race —— 這兩行讓那台機器整個退役。
+  key_binder/bindings:
+    - {when: always, accept: F7, select: luna_pinyin_tw}
+    - {when: always, accept: F8, select: bopomofo_tw}
 EOF
 
 # 注音方案的選字標籤清空。方案預設 alternative_select_keys 是 ABCDEFGHIJ（大寫），

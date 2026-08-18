@@ -183,9 +183,13 @@ const PN_INPUT_LABELS = {
 //    register-properties / update-property 一個都沒來）。「現在是拼音還是注音」
 //    的真值是 pn-panel 上次成功切到的那個。重啟後 RIME 記得上次的方案而我們
 //    不記得 —— 所以 enable 時把預設臉設成待送，第一次 focus-in 就對齊。
+// key 是 ime.sh 在 default.custom.yaml 裡綁的直達鍵：
+//   key_binder/bindings: {when: always, accept: F7, select: luna_pinyin_tw} …
+// librime 的 select 動作直接切方案 —— 不開選單。F7/F8 挑的是 k6 版面上不存在
+// 的鍵，人按不到，只有我們合成得出來。
 const PN_RIME_FACES = {
-    pinyin:   {schema: "luna_pinyin_tw", menuMatch: "拼音"},
-    bopomofo: {schema: "bopomofo_tw",    menuMatch: "注音"},
+    pinyin:   {schema: "luna_pinyin_tw", key: "F7"},
+    bopomofo: {schema: "bopomofo_tw",    key: "F8"},
 };
 // rime 源在循環裡展開成這幾張臉，順序就是戳的順序。
 const PN_RIME_FACE_ORDER = ["pinyin", "bopomofo"];
@@ -358,24 +362,6 @@ export default class PineNotePanelExtension extends Extension {
         return faces;
     }
 
-    // 切方案期間叫 pn-osk 不要畫候選列（那時候列裡是方案選單，不是候選字）。
-    // 🔴 旗標**同步**設在 globalThis 上，再補一個 D-Bus 讓 pn-osk 把已經開著的
-    //    popup 立刻壓掉。只走 D-Bus 是不夠的：它非同步，F4 送出去選單先畫、
-    //    suppress 後到，選單整條露出來（2026-08-18 真機）。同一個 shell 行程裡
-    //    globalThis 是共用的，pn-osk 在 open() 之後讀它，一定看得到。
-    _pnOskCandidates(show) {
-        globalThis._pnSuppressCandidates = !show;
-        Gio.DBus.session.call(
-            "org.cver.PnOsk", "/org/cver/PnOsk", "org.cver.PnOsk",
-            "SuppressCandidates", new GLib.Variant("(b)", [!show]), null,
-            Gio.DBusCallFlags.NONE, -1, null, (bus, res) => {
-                try {
-                    bus.call_finish(res);
-                } catch (e) {
-                    // pn-osk 不在：選單會閃一下，不致命
-                }
-            });
-    }
 
     // 鍵帽歸 pn-osk 畫，臉歸我們記。推過去，非同步，它不在也無所謂。
     _pnPushFaceToOsk(face) {
@@ -481,176 +467,59 @@ export default class PineNotePanelExtension extends Extension {
         }
     }
 
-    // 對 RIME 說「換到 face 那個方案」。走 shell 自己的 IM（Main.inputMethod）
-    // 送鍵，不建外部 context —— 外部 context 拿不到焦點，我們前面已經被這件事
-    // 咬過很多次。
-    _pnRimeSelectSchema(face) {
+    // 對 RIME 說「換到 face 那個方案」：送一個直達鍵（見 PN_RIME_FACES）。
+    //
+    // 🔴 這裡曾經是一台機器：F4 開選單 → 遮住候選列 → 讀每格文字找目標 → 讀游標
+    //    → Down/Up 走過去 → space 確認 → 600ms 後讀回來驗證 → 失敗重試。每一步
+    //    都是一個 race，修一個冒一個（選單開在使用者輸入底下、space 太快、驗證
+    //    太早、Return 無限迴圈…）。key_binder 的 select 動作把這一切變成一個
+    //    同步的鍵 —— 探針實測 F7/F8 兩個方向都直達，沒有任何可見的中間狀態。
+    //    如果將來壞了，先查 default.custom.yaml 的 key_binder/bindings 有沒有
+    //    活過 RIME 重編（rime_deployer 那個 last_build_time 陷阱，見 ime.sh）。
+    _pnRimeSelectSchema(face, didCommit = false) {
         const target = PN_RIME_FACES[face];
         if (!target)
             return;
         const im = Main.inputMethod;
-        const send = (keyval, mods = 0) => {
+        const send = keyval => {
             const ctx = im?._context;
             if (!ctx)
                 return false;
             // 簽名照 inputMethod.js 的 vfunc_filter_key_event：
             //   (keyval, keycode, state, timeout, cancellable, callback)
-            // keycode 0 對 RIME 沒差，它看 keyval。
-            ctx.process_key_event_async(keyval, 0, mods, -1, null, null);
-            ctx.process_key_event_async(keyval, 0, mods | IBus.ModifierType.RELEASE_MASK, -1, null, null);
+            ctx.process_key_event_async(keyval, 0, 0, -1, null, null);
+            ctx.process_key_event_async(keyval, 0, IBus.ModifierType.RELEASE_MASK, -1, null, null);
             return true;
         };
-        // 🔴 使用者正在打字（preedit 有東西）就不切。F4 在那個狀態不開選單，而
-        //    我們後面的任何鍵都會打進他的輸入。pending 留著，等他打完（下一次
-        //    focus-in 或候選列清空）再來。
-        // 🔴 使用者在打字（Main.inputMethod._preeditStr 有東西＝終端裡那串底線
-        //    字）就**先幫他送出**再切。戳臉＝「我要換了」，把手上那段送出是他
-        //    要的；等他自己送出再切這條路試過了 —— 等 1 秒安靜的窗口跟他下一個
-        //    字撞、猜「停了沒」永遠猜不準（真機：他打 su3cl3 時方案還沒切，
-        //    出來的是拼音「速除了」）。不猜：Enter，然後正常切。
-        //    Enter 在 RIME 拼音裡是「以字母送出」—— 跟他自己按 Enter 一樣。
-        const clientPre = Main.inputMethod?._preeditStr ?? "";
+
+        // 使用者在打字（終端裡那串底線字）就先幫他送出再切 —— 戳臉＝「我要換
+        // 了」，把手上那段送出是他要的，跟他自己按 Enter 一樣。
+        // 🔴 只試一次：Return 之後 preedit 沒清＝stale 或送不到，再送只是往終端
+        //    灌 Enter（真機灌過每分鐘 169 個）。第二次就不猜，pending 留著等
+        //    focus-in。
+        const clientPre = im?._preeditStr ?? "";
         if (clientPre && !clientPre.includes("方案選單")) {
+            if (didCommit) {
+                console.log(`[pn-panel] rime: preedit still ${JSON.stringify(clientPre)} after Return — stale or unfocused; keeping pending`);
+                return;
+            }
             console.log(`[pn-panel] rime: committing user's composition (${JSON.stringify(clientPre)}) before switching`);
             send(IBus.KEY_Return);
             GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
-                this._pnRimeSelectSchema(face);
+                this._pnRimeSelectSchema(face, true);
                 return GLib.SOURCE_REMOVE;
             });
             return;
         }
-        // 0. 切方案期間不畫候選列。選單閃一下對使用者是「壞掉了」而不是「在切」，
-        //    而且切完之後才是他要的候選列。pn-osk 接管了那條列，叫它先閉眼。
-        this._pnOskCandidates(false);
-        // 1. 開選單
-        if (!send(IBus.KEY_F4)) {
-            console.log("[pn-panel] rime: no IM context to send F4 to");
-            this._pnOskCandidates(true);
+
+        if (!send(IBus[`KEY_${target.key}`])) {
+            console.log(`[pn-panel] rime: no IM context for ${target.key}, keeping pending`);
             return;
         }
-        // 2. 等選單進候選列，找目標在第幾格，選它。
-        //
-        // 🔴 switcher/fix_schema_list_order: true —— 選單照 schema_list 順序排，
-        //    不 MRU。沒有這個的話第 1 項是現用方案、另一個被選項推到第二頁，
-        //    「找目標在第幾格」在第一頁找不到（2026-08-18 真機截圖）。有了它，
-        //    1 拼音 / 2 注音 永遠固定，而且**不能**再用「第 1 項＝現用」推論
-        //    現在在哪 —— 那條路已經拆了，每次都直接選目標，選到現用方案無害。
-        //
-        // 🔴 選字鍵只高亮，space 才確認 —— 真機兩次：Return 關了選單但方案沒換。
-        //    選字鍵是**現用方案**的：拼音 1-9、注音 Shift+A-J。現用是哪個讀
-        //    不到，兩種都送：另一種在該方案下不是選字鍵，會被當一般鍵吞掉或
-        //    無效，不影響結果。
-        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
-            const popup = IBusManager.getIBusManager()?._candidatePopup;
-            const boxes = popup?._candidateArea?._candidateBoxes ?? [];
-            const visible = boxes.filter(b => b.visible);
-            if (!visible.length) {
-                console.log(`[pn-panel] rime: menu not visible, keeping pending`);
-                this._pnOskCandidates(true);
-                return GLib.SOURCE_REMOVE;
-            }
-            // 🔴 先確認候選列裡的是**方案選單**，不是使用者打到一半的候選字。
-            //    F4 在 RIME 已經有 preedit 時不會開選單（或被吃掉），250ms 後讀到
-            //    的就是「你好 妳好 逆號…」—— 第一版看到裡面沒有「注音」就 Escape，
-            //    把使用者打到一半的字一起清掉了（2026-08-18 真機，log 留著）。
-            //    選單的特徵是 preedit 含〔方案選單〕。不是選單就什麼都不碰，
-            //    pending 留著，等下一次乾淨的 focus-in 再試。
-            //    選單的特徵：候選文字裡有方案名（含「拼音」或「注音」的格）。
-            //    ⚠️ 不能用 popup._preeditText —— 那是 popup 自己的 label，RIME
-            //    的〔方案選單〕preedit 是送給 client 的（顯示在終端裡），popup
-            //    這個欄位在這條路上是空的（真機：選單開著、游標在注音、卻被判成
-            //    「沒開」而放掉）。
-            const texts = visible.map(b => b._candidateLabel?.text ?? "");
-            const isMenu = texts.some(t => t.includes("拼音") || t.includes("注音"));
-            if (!isMenu) {
-                // 候選列裡是使用者的東西。但 F4 可能還是把選單開在**下面**了
-                // （真機：候選列是「你那呢能年」、preedit 卻是〔方案選單〕，選單和
-                //  輸入疊著）。看 preedit —— 這時 RIME 送給 client 的 preedit 會是
-                //  〔方案選單〕；Main.inputMethod 拿得到。是的話 Escape 收掉選單
-                //  （只收選單，使用者那段還在 RIME 裡）。
-                const clientPreedit = Main.inputMethod?._preeditStr ?? "";
-                if (clientPreedit.includes("方案選單")) {
-                    console.log(`[pn-panel] rime: menu opened under the user's candidates, escaping it; keeping pending`);
-                    send(IBus.KEY_Escape);
-                } else {
-                    console.log(`[pn-panel] rime: F4 did not open the menu (bar has [${texts.join(" | ")}]), leaving input alone, keeping pending`);
-                }
-                this._pnOskCandidates(true);
-                return GLib.SOURCE_REMOVE;
-            }
-            const picked = texts.findIndex(t => t.includes(target.menuMatch));
-            if (picked < 0) {
-                console.log(`[pn-panel] rime: "${target.menuMatch}" not in menu [${texts.join(" | ")}], escaping`);
-                send(IBus.KEY_Escape);
-                this._pnOskCandidates(true);
-                return GLib.SOURCE_REMOVE;
-            }
-            // 🔴 Down 走到目標、space 確認。這是外部 context 實測裡**唯一**每次
-            //    都成功的組合（menukeys.py：F4 Down Down space a → 拼音候選）。
-            //    數字鍵和 Shift+字母在這個選單裡都不是選字鍵（送了游標不動）；
-            //    F4 開啟時游標預設位置不固定（有時在現用、有時在上一個），所以
-            //    也不能「直接 space」。游標現在在哪從 _candidateArea 讀
-            //    （_cursorPosition），要按的次數 = 目標 − 現在。
-            // 🔴 目標在第 1 格＝已經是現用方案（RIME 把現用排最前，其他照
-            //    schema_list）。這時**不能** space：選現用＝RIME 什麼都不做、選單留在
-            //    畫面上（真機：〔方案選單〕留在 preedit、游標停在拼音）。Escape 收掉。
-            if (picked === 0) {
-                send(IBus.KEY_Escape);
-                console.log(`[pn-panel] rime: already on "${texts[0]}", menu closed`);
-                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 120, () => {
-                    this._pnOskCandidates(true);
-                    return GLib.SOURCE_REMOVE;
-                });
-                this._pnRimePending = null;
-                this._pnRimeFace = face;
-                this._pnSyncInputLabel();
-                return GLib.SOURCE_REMOVE;
-            }
-            const cur = popup._candidateArea?._cursorPosition ?? 0;
-            const steps = picked - cur;
-            // 🔴 每步之間要等 RIME 真的處理完 —— 鍵是 IBus 往返，非同步。60ms 時
-            //    space 到的時候游標還沒移完，選單留在畫面（log：Down×2 then
-            //    space → menu stuck）。外部 context 的實測用的是 400ms 每步，
-            //    每次都成；這裡 250ms，比它緊一點但仍在安全側。
-            const keyOnce = (kv, cb) => { send(kv); GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => { cb(); return GLib.SOURCE_REMOVE; }); };
-            const walk = n => {
-                if (n > 0) { keyOnce(IBus.KEY_Down, () => walk(n - 1)); return; }
-                if (n < 0) { keyOnce(IBus.KEY_Up,   () => walk(n + 1)); return; }
-                keyOnce(IBus.KEY_space, () => {
-                    // 選單該關了。萬一沒關，補 Escape ——
-                    // 別讓使用者卡在一個他沒打開的選單裡。然後才把候選列還給他。
-                    // 🔴 沒關＝沒切成：pending **留著**，下一次乾淨時刻再來，不要
-                    //    在這裡標記成功。第一版在 walk 之前就清了 pending，stuck
-                    //    之後標籤說注音、RIME 還在拼音，而且再也不會重試。
-                    // 🔴 選單收掉要超過 300ms（真機：space 生效了、選單還在，被
-                    //    誤判 stuck）。等 600ms；而且「成功」不只看選單消失 ——
-                    //    選單還在但第 1 格已經變成目標，也是成功（RIME 切完會
-                    //    重排選單，現用排最前）。只有「選單在、第 1 格還是舊的」
-                    //    才是真的沒切。
-                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 600, () => {
-                        const rows = (popup?._candidateArea?._candidateBoxes ?? [])
-                            .filter(b => b.visible).map(b => b._candidateLabel?.text ?? "");
-                        const menuUp = rows.some(t => /拼音|注音/.test(t));
-                        const switched = !menuUp || (rows[0] ?? "").includes(target.menuMatch);
-                        if (menuUp)
-                            send(IBus.KEY_Escape);
-                        if (switched) {
-                            this._pnRimePending = null;
-                            console.log(`[pn-panel] rime: switched to "${texts[picked]}"${menuUp ? " (menu lingered, escaped)" : ""}`);
-                        } else {
-                            console.log(`[pn-panel] rime: switch did not take (row 1 = "${rows[0]}"), keeping pending`);
-                        }
-                        this._pnOskCandidates(true);
-                        return GLib.SOURCE_REMOVE;
-                    });
-                });
-            };
-            walk(steps);
-            console.log(`[pn-panel] rime: → "${texts[picked]}" (item ${picked + 1}, cursor at ${cur + 1}, ${steps >= 0 ? "Down" : "Up"}×${Math.abs(steps)} then space)`);
-            this._pnRimeFace = face;
-            this._pnSyncInputLabel();
-            return GLib.SOURCE_REMOVE;
-        });
+        this._pnRimePending = null;
+        this._pnRimeFace = face;
+        this._pnSyncInputLabel();
+        console.log(`[pn-panel] rime: → ${target.schema} via ${target.key}`);
     }
 
     // Caps 的目的地：拉丁那一源。找 type === 'xkb' 而不是寫死 'us'，因為版面
