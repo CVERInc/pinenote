@@ -218,6 +218,9 @@ const IFACE = `
     <method name="SetInputFace">
       <arg type="s" direction="in" name="face"/>
     </method>
+    <method name="SuppressCandidates">
+      <arg type="b" direction="in" name="suppress"/>
+    </method>
     <method name="ShowKeyboard"/>
     <method name="HideKeyboard"/>
     <method name="Palette">
@@ -1530,7 +1533,9 @@ export default class PineNoteOskExtension extends Extension {
             //    我們自己 charKeys 造的、有 label），26 個字母全部漏掉。
             // 「臉」由 pn-panel 推過來（SetInputFace）：它是 rime 源上 TW/BP
             //    的真值持有者，我們只被告知。chewing 也印注音，給還在用它的人。
-            if (level === 0 && (this._pnInputFace === "BP" || currentEngineId() === "chewing"))
+            // 字母表層是從輸入法層推出來的：bopomofo 這張臉印注音；chewing 也是
+            // 注音（給還在用它的人）。pinyin / romaji 維持拉丁 —— 那是原本的鍵帽。
+            if (level === 0 && (this._pnInputFace === "bopomofo" || currentEngineId() === "chewing"))
                 built = relabelByString(built, PN_BOPOMOFO);
             composed[level] = built;
         }
@@ -1885,6 +1890,13 @@ export default class PineNoteOskExtension extends Extension {
 
             if (isVisible) {
                 popup.open(BoxPointer.PopupAnimation.NONE);
+                // 切方案期間按住不畫（見 SuppressCandidates）。要在 open() **之後**
+                // 設 —— BoxPointer.open() 自己會把 opacity 寫成 255，寫在前面就被
+                // 蓋掉（真機：選單照樣整條畫出來）。opacity 0 而不是不 open：
+                // popup 的內部狀態（_candidateArea 的文字、_cursorPosition）還是
+                // 要更新，pn-panel 靠它們找選單裡的目標和算要按幾次 Down。
+                if (this._pnSuppressCandidates)
+                    popup.opacity = 0;
                 // 🔴 每次顯示都重擺，而且是在 open() 之後。
                 //    重擺：停靠線跟著 OSK 走，而 OSK 升起的時機不受我們控制 ——
                 //    只有「要顯示了」這一刻，鍵盤在不在已成定局。
@@ -2378,6 +2390,16 @@ export default class PineNoteOskExtension extends Extension {
             return;
         this._pnInputFace = face;
         this._rebuild();
+    }
+
+    // pn-panel 切 RIME 方案時叫的：那幾百毫秒裡候選列裝的是〔方案選單〕，不是候
+    // 選字，畫出來對使用者是「壞掉了」而不是「在切」。這裡把它按住；切完放開。
+    // 只按顯示，不動 popup 的狀態機 —— 選單照樣開、鍵照樣送、RIME 照樣切。
+    SuppressCandidates(suppress) {
+        this._pnSuppressCandidates = !!suppress;
+        const popup = IBusManager.getIBusManager()?._candidatePopup;
+        if (popup)
+            popup.opacity = suppress ? 0 : 255;
     }
 
     ShowKeyboard() {

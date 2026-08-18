@@ -141,46 +141,54 @@ const PN_HIDDEN_PANEL_ROLES = [
 //   chewing  宣告 layout=us，自己把 US 鍵位映射成注音，所以 k6 不用動
 //   hangul   宣告 layout=kr，但 _composeLayout 沒有 kr-extended 會退回
 //            us-extended，而二式韓文本來就是用拉丁鍵位打出字母
-// 注音是 BP（bopomofo）。第一版用「ㄅ」，理由是對看得懂的人一眼就懂 —— 但在
-// 頂列 11px 粗體下，兩畫的 ㄅ 就是一撇，跟旁邊三顆兩個大寫字母的比起來像壞掉
-// （2026-08-18 真機看到）。標籤要跟同一列的其他標籤是同一種東西：兩個大寫。
-// TW 已經給了拼音，所以注音不能也叫 TW；BP 是 bopomofo 的通行縮寫。
+// 注音不另外給標籤：拼音和注音都是台灣正體，都是 TW。第一版給過「ㄅ」（11px
+// 粗體下兩畫是一撇，像壞掉）、再給過「BP」——都是把輸入法層的差別畫到語言層的
+// 標籤上。分辨兩者的是鍵帽。見 PN_RIME_FACES 上面那三層。
 const PN_INPUT_LABELS = {
     us: "US",
     "mozc-on": "JP",
     "mozc-jp": "JP",
     rime: "TW",
-    chewing: "BP",
+    chewing: "TW",   // 也是台灣正體；它是輸入法層的另一個選擇，不是另一種語言
     hangul: "KR",
 };
 
 // ── 一個 rime 源、兩張臉 ────────────────────────────────────────────────
+// 三個層次，混用就會亂，所以先把線畫清楚：
+//
+//   語言層     US / JP / TW              ← 頂列標籤只到這一層
+//   輸入法層   TW: pinyin / bopomofo     ← 「臉」。同一種語言的兩套音標
+//              JP: romaji（將來 kana 就放這裡）
+//   字母表層   pinyin、romaji 印拉丁；bopomofo 印注音；kana 印假名
+//                                        ← 鍵帽。pn-osk 從臉推出來，不是另一個狀態
+//
+// 所以注音**不叫 BP**、頂列不顯示 BP：拼音和注音都是台灣正體，都是 TW。分辨兩者
+// 的是鍵帽（一邊拉丁一邊注音），頂列不重複這個訊息。實體鍵盤時 OSK 收著看不到
+// 鍵帽 —— 打一個鍵就知道了（拼音出字母、注音出符號），跟 macOS 一樣。
+//
 // RIME 的注音（bopomofo_tw）跟拼音（luna_pinyin_tw）是同一個 IBus 引擎裡的兩個
 // **方案**，不是兩個源 —— IBus 不讓同一個引擎在 sources 裡出現兩次，ibus-rime
-// 也只宣告一個引擎名。但注音要走 RIME 而不是 chewing，理由是維護者在玻璃上
-// 看到的那件事：RIME 邊打邊出候選（跟拼音一模一樣、同一條列、同一套詞庫），
-// chewing 要打完按空白才出。
+// 也只宣告一個引擎名。注音走 RIME 而不是 chewing，理由是維護者在玻璃上看到的
+// 那件事：RIME 邊打邊出候選（跟拼音一模一樣、同一條列、同一套詞庫），chewing
+// 要打完按空白才出。
 //
-// 所以 pn-input 的循環不再是「源的清單」，是「臉的清單」：每張臉＝一個源＋
-// 可選的 RIME 方案。US → JP → TW → BP 裡 TW 和 BP 都是 ('ibus','rime')，差別
-// 只在切過去之後要不要對 RIME 說「換方案」。
+// 所以 pn-input 的循環不是「源的清單」，是「臉的清單」：每張臉＝一個源＋可選的
+// RIME 方案。US → JP → TW(pinyin) → TW(bopomofo)。
 //
-// 🔴 RIME 沒有「直接切到方案 X」的外部入口，只有 F4 選單。而選單順序是 MRU
-//    （現用的排最後、其他照 schema_list），數字對不準。所以不猜：送 F4 → 選單
-//    出現在候選列 → 讀每格文字找含目標名的那格 → 送它的數字。候選列是我們的
-//    （pn-osk 已經把它接管），內容拿得到，而且使用者看得到發生什麼。
+// 🔴 RIME 沒有「直接切到方案 X」的外部入口，只有 F4 選單。所以走選單，但要
+//    確定性：switcher/fix_schema_list_order 讓選單順序固定（不 MRU），送 F4 →
+//    讀候選列（我們的）找目標那格 → 送選字鍵高亮 → 送 space 確認。
 //
-// 🔴 標籤由這裡記，不從引擎讀：RIME 不透過 IBus property 回報現用方案
-//    （實測 register-properties / update-property 一個都沒來）。所以「現在是
-//    TW 還是 BP」的真值是 pn-panel 上次成功切到的那個；重啟後 RIME 記得上次的
-//    方案（user.yaml），而我們不記得 —— 那時候標籤顯示 TW 但 RIME 可能在注音。
-//    這個不一致只有一次、戳一下就對回來，記在這裡不假裝它不存在。
+// 🔴 臉由這裡記，不從引擎讀：RIME 不透過 IBus property 回報現用方案（實測
+//    register-properties / update-property 一個都沒來）。「現在是拼音還是注音」
+//    的真值是 pn-panel 上次成功切到的那個。重啟後 RIME 記得上次的方案而我們
+//    不記得 —— 所以 enable 時把預設臉設成待送，第一次 focus-in 就對齊。
 const PN_RIME_FACES = {
-    TW: {schema: "luna_pinyin_tw", menuMatch: "拼音"},
-    BP: {schema: "bopomofo_tw",    menuMatch: "注音"},
+    pinyin:   {schema: "luna_pinyin_tw", menuMatch: "拼音"},
+    bopomofo: {schema: "bopomofo_tw",    menuMatch: "注音"},
 };
 // rime 源在循環裡展開成這幾張臉，順序就是戳的順序。
-const PN_RIME_FACE_ORDER = ["TW", "BP"];
+const PN_RIME_FACE_ORDER = ["pinyin", "bopomofo"];
 
 // ~/.config/pn-panel.json。跟 pn-osk.json 同一個模式：不存在＝全部預設。
 // 現在只有一個鍵：
@@ -256,10 +264,12 @@ export default class PineNotePanelExtension extends Extension {
     // 直接跳到某張臉（US / JP / TW / BP / …）。pn ime face 用它；也是從 SSH
     // 驗證 rime 換方案這條路的唯一方法 —— 循環要戳好幾下才到，而且中間會經過
     // 別的源。
+    // name 是臉的名字（pinyin / bopomofo / romaji…）或語言層的名字（US / JP / TW）。
+    // 語言層名對到那個源的第一張臉。
     InputFace(name) {
         const faces = this._pnInputFaces();
-        const target = faces.find(f =>
-            (f.face ?? PN_INPUT_LABELS[f.source.id] ?? f.source.shortName) === name);
+        const target = faces.find(f => f.face === name) ??
+            faces.find(f => (PN_INPUT_LABELS[f.source.id] ?? f.source.shortName) === name);
         if (!target) {
             console.log(`[pn-panel] InputFace: no face named "${name}"`);
             return;
@@ -346,6 +356,20 @@ export default class PineNotePanelExtension extends Extension {
                 faces.push({source: src, face: null});
         }
         return faces;
+    }
+
+    // 切方案期間叫 pn-osk 不要畫候選列（那時候列裡是方案選單，不是候選字）。
+    _pnOskCandidates(show) {
+        Gio.DBus.session.call(
+            "org.cver.PnOsk", "/org/cver/PnOsk", "org.cver.PnOsk",
+            "SuppressCandidates", new GLib.Variant("(b)", [!show]), null,
+            Gio.DBusCallFlags.NONE, -1, null, (bus, res) => {
+                try {
+                    bus.call_finish(res);
+                } catch (e) {
+                    // pn-osk 不在：選單會閃一下，不致命
+                }
+            });
     }
 
     // 鍵帽歸 pn-osk 畫，臉歸我們記。推過去，非同步，它不在也無所謂。
@@ -466,9 +490,13 @@ export default class PineNotePanelExtension extends Extension {
             ctx.process_key_event_async(keyval, 0, mods | IBus.ModifierType.RELEASE_MASK, -1, null, null);
             return true;
         };
+        // 0. 切方案期間不畫候選列。選單閃一下對使用者是「壞掉了」而不是「在切」，
+        //    而且切完之後才是他要的候選列。pn-osk 接管了那條列，叫它先閉眼。
+        this._pnOskCandidates(false);
         // 1. 開選單
         if (!send(IBus.KEY_F4)) {
             console.log("[pn-panel] rime: no IM context to send F4 to");
+            this._pnOskCandidates(true);
             return;
         }
         // 2. 等選單進候選列，找目標在第幾格，選它。
@@ -489,6 +517,7 @@ export default class PineNotePanelExtension extends Extension {
             const visible = boxes.filter(b => b.visible);
             if (!visible.length) {
                 console.log(`[pn-panel] rime: menu not visible, keeping pending`);
+                this._pnOskCandidates(true);
                 return GLib.SOURCE_REMOVE;
             }
             const texts = visible.map(b => b._candidateLabel?.text ?? "");
@@ -496,15 +525,37 @@ export default class PineNotePanelExtension extends Extension {
             if (picked < 0) {
                 console.log(`[pn-panel] rime: "${target.menuMatch}" not in menu [${texts.join(" | ")}], escaping`);
                 send(IBus.KEY_Escape);
+                this._pnOskCandidates(true);
                 return GLib.SOURCE_REMOVE;
             }
-            send(IBus.KEY_1 + picked);
-            send(IBus.KEY_A + picked, IBus.ModifierType.SHIFT_MASK);
-            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 80, () => {
-                send(IBus.KEY_space);
-                return GLib.SOURCE_REMOVE;
-            });
-            console.log(`[pn-panel] rime: → "${texts[picked]}" (item ${picked + 1}, ${1 + picked}/Shift+${String.fromCharCode(65 + picked)} then space)`);
+            // 🔴 Down 走到目標、space 確認。這是外部 context 實測裡**唯一**每次
+            //    都成功的組合（menukeys.py：F4 Down Down space a → 拼音候選）。
+            //    數字鍵和 Shift+字母在這個選單裡都不是選字鍵（送了游標不動）；
+            //    F4 開啟時游標預設位置不固定（有時在現用、有時在上一個），所以
+            //    也不能「直接 space」。游標現在在哪從 _candidateArea 讀
+            //    （_cursorPosition），要按的次數 = 目標 − 現在。
+            const cur = popup._candidateArea?._cursorPosition ?? 0;
+            const steps = picked - cur;
+            const keyOnce = (kv, cb) => { send(kv); GLib.timeout_add(GLib.PRIORITY_DEFAULT, 60, () => { cb(); return GLib.SOURCE_REMOVE; }); };
+            const walk = n => {
+                if (n > 0) { keyOnce(IBus.KEY_Down, () => walk(n - 1)); return; }
+                if (n < 0) { keyOnce(IBus.KEY_Up,   () => walk(n + 1)); return; }
+                keyOnce(IBus.KEY_space, () => {
+                    // 選單該關了。萬一沒關，補 Escape ——
+                    // 別讓使用者卡在一個他沒打開的選單裡。然後才把候選列還給他。
+                    GLib.timeout_add(GLib.PRIORITY_DEFAULT, 200, () => {
+                        const still = (popup?._preeditText?.text ?? "").includes("方案選單");
+                        if (still) {
+                            console.log("[pn-panel] rime: menu stuck after space, escaping");
+                            send(IBus.KEY_Escape);
+                        }
+                        this._pnOskCandidates(true);
+                        return GLib.SOURCE_REMOVE;
+                    });
+                });
+            };
+            walk(steps);
+            console.log(`[pn-panel] rime: → "${texts[picked]}" (item ${picked + 1}, cursor at ${cur + 1}, ${steps >= 0 ? "Down" : "Up"}×${Math.abs(steps)} then space)`);
             this._pnRimePending = null;
             this._pnRimeFace = face;
             this._pnSyncInputLabel();
@@ -598,12 +649,9 @@ export default class PineNotePanelExtension extends Extension {
         if (!label)
             return;
         const source = Keyboard.getInputSourceManager().currentSource;
-        // rime 源顯示記住的臉；其他源查表。id 先於 shortName：覆寫表存在的
-        // 理由就是 shortName 有時沒有用。
-        if (source?.type === "ibus" && source.id === "rime")
-            label.text = this._pnRimeFace ?? PN_RIME_FACE_ORDER[0];
-        else
-            label.text = PN_INPUT_LABELS[source?.id] ?? source?.shortName ?? "—";
+        // 標籤只到語言層：rime 源不管哪張臉都是 TW（見 PN_RIME_FACES 上面那段）。
+        // id 先於 shortName：覆寫表存在的理由就是 shortName 有時沒有用。
+        label.text = PN_INPUT_LABELS[source?.id] ?? source?.shortName ?? "—";
     }
 
     _pnTriggerRefresh() {

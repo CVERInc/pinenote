@@ -113,11 +113,12 @@ if raw:
   ok "" "cycle=$list"
 }
 # pn ime add|rm <引擎>：改清單。順序就是 pn-input 戳一下的順序。
-# pn ime face <US|JP|TW|BP>：直接跳到那張臉（TW/BP 是同一個 rime 源的兩個方案）。
+# pn ime face <US|JP|TW|pinyin|bopomofo>：直接跳到那張臉。TW＝pinyin（第一張）；
+# pinyin / bopomofo 是同一個 rime 源的兩個方案，頂列都顯示 TW，差別在鍵帽。
 f_ime_cmd() {
   local op=$1 eng=${2:-}
   if [ "$op" = face ]; then
-    [ -n "$eng" ] || die "pn ime face <US|JP|TW|BP>"
+    [ -n "$eng" ] || die "pn ime face <US|JP|TW|pinyin|bopomofo>"
     gdbus call --session --dest org.cver.PnPanel --object-path /org/cver/PnPanel \
       --method org.cver.PnPanel.InputFace "$eng" >/dev/null && f_ime_status
     return
