@@ -67,9 +67,22 @@ cat > "$HOME/.config/ibus/rime/default.custom.yaml" <<'EOF'
 # topRow 是 "1234567890-=" 沒有反引號（landscape 的 "`1234567890-=" 才有）。
 # 不要讓自己依賴一個轉個方向就消失的鍵。
 patch:
+  # 🔴 恰好兩個。注音走 RIME 不走 chewing —— RIME 邊打邊出候選（跟拼音同一個
+  #    引擎、同一條列、同一套詞庫），chewing 打完按空白才出。pn-input 的循環把
+  #    rime 源展開成 TW / BP 兩張臉，切臉時對 RIME 送 F4 選單再 Down+Return。
   schema_list:
     - schema: luna_pinyin_tw
+    - schema: bopomofo_tw
   menu/page_size: 5
+EOF
+
+# 注音方案的選字標籤清空。方案預設 alternative_select_keys 是 ABCDEFGHIJ（大寫），
+# 因為大千式的 1-9 是注音符號。候選列因此標 A B C D E —— 而鍵帽印的是注音，兩邊
+# 對不上。iPad 注音沒有選字鍵：用點的。候選列每格本來就是按鈕。按鍵照舊
+# （Shift+A 仍選第一個），只是不畫。
+cat > "$HOME/.config/ibus/rime/bopomofo_tw.custom.yaml" <<'EOF'
+patch:
+  menu/alternative_select_labels: [" ", " ", " ", " ", " ", " ", " ", " ", " ", " "]
 EOF
 
 # 候選字橫排。這是 **ibus-rime 前端自己的**設定，不是 default.yaml、也不是方案。
@@ -128,6 +141,10 @@ echo "== [3a] 其他 CJK 語言（選用，預設不掛進 sources）=="
 #   chewing（新酷音，注音）宣告 layout=us，自己把 US 鍵位映射成注音
 #   hangul（韓文）宣告 layout=kr，_composeLayout 沒有 kr-extended 會退回
 #          us-extended，而二式韓文本來就是用拉丁鍵位打字母
+#
+# 🔴 注音的**預設**路是 RIME 的 bopomofo_tw（上面 [2]），不是 chewing。chewing
+#    留著給習慣微軟注音那派的人（自動選字、按 ↓ 才問）；要用它就
+#    pn ime add chewing。兩條路鍵帽都印注音。
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ibus-hangul ibus-chewing
 
 # chewing 是微軟注音那派：邊打邊自動選字直接進 preedit，按 ↓ 才叫候選窗。

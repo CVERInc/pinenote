@@ -103,12 +103,25 @@ f_wifi_set() {
 f_ime_status() {
   local cur; cur=$(ibus engine 2>/dev/null)
   local list; list=$(gs org.gnome.desktop.input-sources sources)
-  ok ime "current=${cur:-?}"
+  local face; face=$(panel_info | python3 -c '
+import sys,json
+raw=sys.stdin.read().strip()
+if raw:
+    d=json.loads(raw)
+    print([i["content"][0] for i in d.get("right",[]) if i["role"]=="pn-input"][0])' 2>/dev/null)
+  ok ime "current=${cur:-?} face=${face:-?}"
   ok "" "cycle=$list"
 }
 # pn ime add|rm <引擎>：改清單。順序就是 pn-input 戳一下的順序。
+# pn ime face <US|JP|TW|BP>：直接跳到那張臉（TW/BP 是同一個 rime 源的兩個方案）。
 f_ime_cmd() {
   local op=$1 eng=${2:-}
+  if [ "$op" = face ]; then
+    [ -n "$eng" ] || die "pn ime face <US|JP|TW|BP>"
+    gdbus call --session --dest org.cver.PnPanel --object-path /org/cver/PnPanel \
+      --method org.cver.PnPanel.InputFace "$eng" >/dev/null && f_ime_status
+    return
+  fi
   [ -n "$eng" ] || die "pn ime $op <engine>  （rime / mozc-on / chewing / hangul）"
   python3 - "$op" "$eng" <<'PY'
 import subprocess,sys,ast
@@ -183,22 +196,26 @@ PY
 #    這支自己就在 session 裡（SSH 也算 user 的 session，但不是 seat0 那個），
 #    terminate 的是 seat0 那個 graphical session，SSH 這條會活著。
 f_reload_cmd() {
-  local sid
-  sid=$(loginctl list-sessions --no-legend | awk '$2==1000 && $4=="seat0"{print $1}' | head -1)
-  if [ -n "$sid" ]; then
-    echo "  terminating graphical session $sid first (gdm's 5s grace is not enough on this SoC)"
-    sudo loginctl terminate-session "$sid"
-    for _ in $(seq 1 30); do
-      loginctl list-sessions --no-legend | awk '{print $1}' | grep -qx "$sid" || break
-      sleep 1
-    done
-  fi
-  echo "  restarting gdm3 (autologin brings the session back)"
-  # 保險：萬一還是掉到 greeter，25 秒後再來一次。
-  sudo systemd-run --on-active=25 --unit=pn-reload-guard \
-    bash -c 'if ! loginctl list-sessions --no-legend | grep -qE " 1000 +user +seat0"; then systemctl restart gdm3; fi' \
-    >/dev/null 2>&1
-  sudo systemctl restart gdm3
+  # 🔴 整段丟給 systemd 跑，不在這個 shell 裡做。terminate-session 會把同一個
+  #    使用者的 SSH scope 一起收掉 —— 從 SSH 跑的話這支腳本自己就是第一個死的，
+  #    後半段（restart gdm3）沒人跑，而且正在 scp 的檔案會寫一半（2026-08-18
+  #    真的發生：extension.js 截斷在第 808 行、U+0000）。
+  #    systemd-run 的 unit 是 system 層的，不屬於任何 user session，活得過去。
+  echo "  handing off to systemd: terminate seat0 session → wait → restart gdm3"
+  echo "  (this SSH connection will drop; the desktop is back in ~10s)"
+  sudo systemd-run --unit=pn-reload --collect bash -c '
+    sid=$(loginctl list-sessions --no-legend | awk "\$2==1000 && \$4==\"seat0\"{print \$1}" | head -1)
+    if [ -n "$sid" ]; then
+      loginctl terminate-session "$sid"
+      for _ in $(seq 1 30); do
+        loginctl list-sessions --no-legend | awk "{print \$1}" | grep -qx "$sid" || break
+        sleep 1
+      done
+    fi
+    systemctl restart gdm3
+    sleep 25
+    loginctl list-sessions --no-legend | grep -qE " 1000 +user +seat0" || systemctl restart gdm3
+  ' >/dev/null 2>&1
 }
 
 # ── 分派 ─────────────────────────────────────────────────────────────────

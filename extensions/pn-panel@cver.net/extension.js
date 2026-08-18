@@ -31,6 +31,8 @@ import St from 'gi://St';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as Keyboard from 'resource:///org/gnome/shell/ui/status/keyboard.js';
+import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
+import IBus from 'gi://IBus';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 const BUILD = 2;
@@ -41,6 +43,9 @@ const IFACE = `<node>
     <method name="Tone"/>
     <method name="Refresh"/>
     <method name="Input"/>
+    <method name="InputFace">
+      <arg type="s" direction="in" name="face"/>
+    </method>
     <method name="PanelInfo">
       <arg type="s" direction="out" name="info"/>
     </method>
@@ -149,6 +154,34 @@ const PN_INPUT_LABELS = {
     hangul: "KR",
 };
 
+// ── 一個 rime 源、兩張臉 ────────────────────────────────────────────────
+// RIME 的注音（bopomofo_tw）跟拼音（luna_pinyin_tw）是同一個 IBus 引擎裡的兩個
+// **方案**，不是兩個源 —— IBus 不讓同一個引擎在 sources 裡出現兩次，ibus-rime
+// 也只宣告一個引擎名。但注音要走 RIME 而不是 chewing，理由是維護者在玻璃上
+// 看到的那件事：RIME 邊打邊出候選（跟拼音一模一樣、同一條列、同一套詞庫），
+// chewing 要打完按空白才出。
+//
+// 所以 pn-input 的循環不再是「源的清單」，是「臉的清單」：每張臉＝一個源＋
+// 可選的 RIME 方案。US → JP → TW → BP 裡 TW 和 BP 都是 ('ibus','rime')，差別
+// 只在切過去之後要不要對 RIME 說「換方案」。
+//
+// 🔴 RIME 沒有「直接切到方案 X」的外部入口，只有 F4 選單。而選單順序是 MRU
+//    （現用的排最後、其他照 schema_list），數字對不準。所以不猜：送 F4 → 選單
+//    出現在候選列 → 讀每格文字找含目標名的那格 → 送它的數字。候選列是我們的
+//    （pn-osk 已經把它接管），內容拿得到，而且使用者看得到發生什麼。
+//
+// 🔴 標籤由這裡記，不從引擎讀：RIME 不透過 IBus property 回報現用方案
+//    （實測 register-properties / update-property 一個都沒來）。所以「現在是
+//    TW 還是 BP」的真值是 pn-panel 上次成功切到的那個；重啟後 RIME 記得上次的
+//    方案（user.yaml），而我們不記得 —— 那時候標籤顯示 TW 但 RIME 可能在注音。
+//    這個不一致只有一次、戳一下就對回來，記在這裡不假裝它不存在。
+const PN_RIME_FACES = {
+    TW: {schema: "luna_pinyin_tw", menuMatch: "拼音"},
+    BP: {schema: "bopomofo_tw",    menuMatch: "注音"},
+};
+// rime 源在循環裡展開成這幾張臉，順序就是戳的順序。
+const PN_RIME_FACE_ORDER = ["TW", "BP"];
+
 // ~/.config/pn-panel.json。跟 pn-osk.json 同一個模式：不存在＝全部預設。
 // 現在只有一個鍵：
 //   buttons: { "input": true, "tone": true, "refresh": true, "rotate": true }
@@ -220,6 +253,20 @@ export default class PineNotePanelExtension extends Extension {
         this._pnInputCycle();
     }
 
+    // 直接跳到某張臉（US / JP / TW / BP / …）。pn ime face 用它；也是從 SSH
+    // 驗證 rime 換方案這條路的唯一方法 —— 循環要戳好幾下才到，而且中間會經過
+    // 別的源。
+    InputFace(name) {
+        const faces = this._pnInputFaces();
+        const target = faces.find(f =>
+            (f.face ?? PN_INPUT_LABELS[f.source.id] ?? f.source.shortName) === name);
+        if (!target) {
+            console.log(`[pn-panel] InputFace: no face named "${name}"`);
+            return;
+        }
+        this._pnActivateFace(target);
+    }
+
     // ── 頂列 ──────────────────────────────────────────────────────────
     // 這台上按得最兇的兩件事是「全域刷新」和「旋轉」，而旋轉原本埋在一個狀態
     // 顯示器的選單裡第十幾項。兩個都升成單獨一顆，而且是我們自己呼叫底層介面，
@@ -282,20 +329,180 @@ export default class PineNotePanelExtension extends Extension {
     //
     // inputSources 是稀疏的 {index: source}，索引不保證連續（GNOME 會跳過
     // 建不起來的源），所以先取鍵再排，不要假設 0..n-1。
-    _pnInputCycle() {
+    // 循環裡的每一張臉：{source, face}。rime 源展開成 PN_RIME_FACE_ORDER，
+    // 其他源一張臉。
+    _pnInputFaces() {
         const ism = Keyboard.getInputSourceManager();
-        const indices = Object.keys(ism.inputSources)
+        const sources = Object.keys(ism.inputSources)
             .map(Number)
-            .sort((a, b) => a - b);
-        if (indices.length < 2) {
-            // 只有一個源的時候這顆按鈕沒有意義，但它仍然在頂列上占著位子 ——
+            .sort((a, b) => a - b)
+            .map(i => ism.inputSources[i]);
+        const faces = [];
+        for (const src of sources) {
+            if (src.type === "ibus" && src.id === "rime")
+                for (const face of PN_RIME_FACE_ORDER)
+                    faces.push({source: src, face});
+            else
+                faces.push({source: src, face: null});
+        }
+        return faces;
+    }
+
+    // 鍵帽歸 pn-osk 畫，臉歸我們記。推過去，非同步，它不在也無所謂。
+    _pnPushFaceToOsk(face) {
+        Gio.DBus.session.call(
+            "org.cver.PnOsk", "/org/cver/PnOsk", "org.cver.PnOsk",
+            "SetInputFace", new GLib.Variant("(s)", [face ?? ""]), null,
+            Gio.DBusCallFlags.NONE, -1, null, (bus, res) => {
+                try {
+                    bus.call_finish(res);
+                } catch (e) {
+                    // pn-osk 沒裝或沒起來，鍵帽就維持拉丁，不是錯誤
+                }
+            });
+    }
+
+    _pnInputCycle() {
+        const faces = this._pnInputFaces();
+        if (faces.length < 2) {
+            // 只有一張臉的時候這顆按鈕沒有意義，但它仍然在頂列上占著位子 ——
             // 說出來，不要讓一次沒反應的戳看起來像壞掉。
-            console.log("[pn-panel] input: only one source, nothing to cycle");
+            console.log("[pn-panel] input: only one face, nothing to cycle");
             return;
         }
-        const at = indices.indexOf(ism.currentSource?.index ?? -1);
-        const next = indices[(at + 1) % indices.length];
-        ism.inputSources[next]?.activate(true);
+        const ism = Keyboard.getInputSourceManager();
+        const cur = ism.currentSource;
+        // 現在在哪張臉：同一個源裡，rime 用記住的 face；找不到就當第一張。
+        const curFace = this._pnRimeFace ?? PN_RIME_FACE_ORDER[0];
+        let at = faces.findIndex(f =>
+            f.source.index === cur?.index && (f.face === null || f.face === curFace));
+        if (at < 0)
+            at = faces.findIndex(f => f.source.index === cur?.index);
+        const next = faces[(at + 1) % faces.length];
+        this._pnActivateFace(next);
+    }
+
+    _pnActivateFace({source, face}) {
+        const ism = Keyboard.getInputSourceManager();
+        const switching = source.index !== ism.currentSource?.index;
+        if (switching)
+            source.activate(true);
+        if (!face)
+            this._pnPushFaceToOsk(null);
+        if (face) {
+            // 標籤先變 —— 這是使用者剛剛按下去的意圖，頂列要立刻回應。
+            this._pnRimeFace = face;
+            this._pnPushFaceToOsk(face);
+            // 🔴 方案切換是「懶」的：記下待送，能送就送，不能就等下一次焦點。
+            //    RIME 只在有輸入焦點時處理鍵 —— 沒有輸入框在聽的時候（例如在
+            //    overview 戳頂列），送 F4 什麼都不會發生（實測選單沒進候選列，
+            //    n=0）。這跟我們從外部 context 送鍵推不動 shell 是同一堵牆，
+            //    只是這次從裡面撞。所以 Main.inputMethod 的 focus_in 被接住了
+            //    （見 _pnInstallRimeFocusHook）：下一個輸入框拿到焦點那一刻，
+            //    有待送的方案就送。RIME 切過一次會自己記住，之後不必再送。
+            this._pnRimePending = face;
+            const delay = switching ? 400 : 0;
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, delay, () => {
+                this._pnRimeFlushPending();
+                return GLib.SOURCE_REMOVE;
+            });
+        }
+        this._pnSyncInputLabel();
+    }
+
+    // 有焦點就送、沒焦點就留著。
+    _pnRimeFlushPending() {
+        const face = this._pnRimePending;
+        if (!face)
+            return;
+        if (!Main.inputMethod?._context)
+            return;   // 留著，focus-in 時再來
+        this._pnRimeSelectSchema(face);
+    }
+
+    _pnInstallRimeFocusHook() {
+        // 🔴 接 IBusManager 的 focus-in，不要覆寫 Main.inputMethod.vfunc_focus_in。
+        //    GObject 的 vfunc 是從原型派發的，覆寫實例屬性 C 端根本不會呼叫 ——
+        //    第一版就是這樣寫的，一個 log 都沒印，看起來像「使用者還沒打字」。
+        //    IBusManager 的 focus-in 來自 IBus panel service，是引擎真正開始
+        //    收鍵的那一刻，比 shell 那邊的焦點更準。
+        const ibm = IBusManager.getIBusManager();
+        if (!ibm || this._pnRimeFocusId)
+            return;
+        this._pnRimeFocusId = ibm.connect("focus-in", () => {
+            if (!this._pnRimePending)
+                return;
+            // 引擎在 focus-in 之後才 attach；給它一拍。
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 150, () => {
+                this._pnRimeFlushPending();
+                return GLib.SOURCE_REMOVE;
+            });
+        });
+    }
+
+    _pnRemoveRimeFocusHook() {
+        if (this._pnRimeFocusId) {
+            IBusManager.getIBusManager()?.disconnect(this._pnRimeFocusId);
+            this._pnRimeFocusId = 0;
+        }
+    }
+
+    // 對 RIME 說「換到 face 那個方案」。走 shell 自己的 IM（Main.inputMethod）
+    // 送鍵，不建外部 context —— 外部 context 拿不到焦點，我們前面已經被這件事
+    // 咬過很多次。
+    _pnRimeSelectSchema(face) {
+        const target = PN_RIME_FACES[face];
+        if (!target)
+            return;
+        const im = Main.inputMethod;
+        const send = (keyval, mods = 0) => {
+            const ctx = im?._context;
+            if (!ctx)
+                return false;
+            // 簽名照 inputMethod.js 的 vfunc_filter_key_event：
+            //   (keyval, keycode, state, timeout, cancellable, callback)
+            // keycode 0 對 RIME 沒差，它看 keyval。
+            ctx.process_key_event_async(keyval, 0, mods, -1, null, null);
+            ctx.process_key_event_async(keyval, 0, mods | IBus.ModifierType.RELEASE_MASK, -1, null, null);
+            return true;
+        };
+        // 1. 開選單
+        if (!send(IBus.KEY_F4)) {
+            console.log("[pn-panel] rime: no IM context to send F4 to");
+            return;
+        }
+        // 2. 等選單進候選列，讀文字，送數字
+        GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
+            const popup = IBusManager.getIBusManager()?._candidatePopup;
+            const boxes = popup?._candidateArea?._candidateBoxes ?? [];
+            let picked = -1;
+            boxes.forEach((b, i) => {
+                if (b.visible && picked < 0 &&
+                    (b._candidateLabel?.text ?? "").includes(target.menuMatch))
+                    picked = i;
+            });
+            if (picked < 0) {
+                // 選單沒來（多半是沒焦點，pending 留著等 focus_in）。萬一其實
+                // 開了但文字對不上，Escape 收掉，別把它留在畫面上。
+                console.log(`[pn-panel] rime: menu for "${target.menuMatch}" not visible, keeping pending`);
+                if ((popup?._candidateArea?._candidateBoxes ?? []).some(b => b.visible))
+                    send(IBus.KEY_Escape);
+                return GLib.SOURCE_REMOVE;
+            }
+            // 🔴 用方向鍵＋Enter，不用數字鍵。方案選單吃的是**現用方案的選字鍵**：
+            //    拼音是 1-9，注音是 ABCDEFGHIJ（大寫）—— 在注音上送 KEY_1 什麼都
+            //    不會發生，選單就留在畫面上（2026-08-18 真機看到，log 說 switched
+            //    但 RIME 還在〔方案選單〕）。Down×i + Return 在每個方案都成立。
+            //    游標從第 0 項開始，所以是 picked 次 Down。
+            for (let k = 0; k < picked; k++)
+                send(IBus.KEY_Down);
+            send(IBus.KEY_Return);
+            console.log(`[pn-panel] rime: switched to "${target.menuMatch}" (menu item ${picked + 1}, via Down×${picked}+Return)`);
+            this._pnRimePending = null;
+            this._pnRimeFace = face;
+            this._pnSyncInputLabel();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     // Caps 的目的地：拉丁那一源。找 type === 'xkb' 而不是寫死 'us'，因為版面
@@ -384,8 +591,12 @@ export default class PineNotePanelExtension extends Extension {
         if (!label)
             return;
         const source = Keyboard.getInputSourceManager().currentSource;
-        // id 先於 shortName：覆寫表存在的理由就是 shortName 有時沒有用。
-        label.text = PN_INPUT_LABELS[source?.id] ?? source?.shortName ?? "—";
+        // rime 源顯示記住的臉；其他源查表。id 先於 shortName：覆寫表存在的
+        // 理由就是 shortName 有時沒有用。
+        if (source?.type === "ibus" && source.id === "rime")
+            label.text = this._pnRimeFace ?? PN_RIME_FACE_ORDER[0];
+        else
+            label.text = PN_INPUT_LABELS[source?.id] ?? source?.shortName ?? "—";
     }
 
     _pnTriggerRefresh() {
@@ -677,6 +888,15 @@ export default class PineNotePanelExtension extends Extension {
         this._pnApplyShortNames();
         this._pnSyncInputLabel();
         this._pnInstallKeybindings();
+        this._pnInstallRimeFocusHook();
+        // 🔴 啟動對齊。RIME 記得上次的方案（user.yaml），我們不記得 —— 重啟後
+        //    標籤說 TW 而 RIME 可能在注音（實測就是這樣）。與其讓使用者戳一下
+        //    才對回來，啟動時就把「標籤說的那張臉」設成待送，第一次 focus-in
+        //    RIME 就會被拉回來。標籤是真值，RIME 跟標籤走，不是反過來 ——
+        //    因為 RIME 不回報方案，反過來根本做不到。
+        const cur = ism.currentSource;
+        if (cur?.type === "ibus" && cur.id === "rime")
+            this._pnRimePending = this._pnRimeFace ?? PN_RIME_FACE_ORDER[0];
 
         // 六顆一致，不是 3+3。我們三顆已經收到底（見 stylesheet），剩下那道縫
         // 整個在鄰居身上：quickSettings 左緣到 Wi-Fi 中心是 24.5 邏輯像素，而
@@ -699,6 +919,7 @@ export default class PineNotePanelExtension extends Extension {
 
     _pnRemovePanel() {
         this._pnRemoveKeybindings();
+        this._pnRemoveRimeFocusHook();
         for (const id of this._pnInputSignals ?? [])
             Keyboard.getInputSourceManager().disconnect(id);
         this._pnInputSignals = null;

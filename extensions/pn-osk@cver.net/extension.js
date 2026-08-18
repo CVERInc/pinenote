@@ -215,6 +215,9 @@ const IFACE = `
     <method name="Unquantise">
       <arg type="s" direction="out" name="json"/>
     </method>
+    <method name="SetInputFace">
+      <arg type="s" direction="in" name="face"/>
+    </method>
     <method name="ShowKeyboard"/>
     <method name="HideKeyboard"/>
     <method name="Palette">
@@ -1525,7 +1528,9 @@ export default class PineNoteOskExtension extends Extension {
             //    那些 key 物件沒有 label 欄位、靠 strings[0] 顯示。relabel 查
             //    k.label 查不到它們 —— 實測第一版只換到了數字列和標點（那些是
             //    我們自己 charKeys 造的、有 label），26 個字母全部漏掉。
-            if (level === 0 && currentEngineId() === "chewing")
+            // 「臉」由 pn-panel 推過來（SetInputFace）：它是 rime 源上 TW/BP
+            //    的真值持有者，我們只被告知。chewing 也印注音，給還在用它的人。
+            if (level === 0 && (this._pnInputFace === "BP" || currentEngineId() === "chewing"))
                 built = relabelByString(built, PN_BOPOMOFO);
             composed[level] = built;
         }
@@ -2363,6 +2368,16 @@ export default class PineNoteOskExtension extends Extension {
 
     Unquantise() {
         return this._pnQuantise(false);
+    }
+
+    // pn-panel 切輸入源的臉時推過來。同一個 rime 引擎有 TW（拼音）和 BP（注音）
+    // 兩張臉，IBus 層看不出差別，鍵帽要印哪套只有 pn-panel 知道。推不拉：
+    // shell 裡同步 D-Bus 會卡主迴圈（README 記過），而 _composeLayout 是同步的。
+    SetInputFace(face) {
+        if (this._pnInputFace === face)
+            return;
+        this._pnInputFace = face;
+        this._rebuild();
     }
 
     ShowKeyboard() {
