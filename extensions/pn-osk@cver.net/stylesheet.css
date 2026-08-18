@@ -230,6 +230,15 @@
     color: #000;
 }
 
+/* 引擎的提示列（Mozc 的「Tabキーで選択」、RIME 的〔方案選單〕標題）走
+   .candidate-popup-text。它是資訊不是候選，在一條貼底的工具列裡不該跟候選字
+   一樣大：縮一級、用岩色。不藏 —— 「Tab 選字」對第一次用的人是真的有用。 */
+.candidate-popup-boxpointer .candidate-popup-text {
+    font-size: 0.85em;
+    color: #777;
+    padding: 0 12px;
+}
+
 /* 翻頁鈕跟功能鍵同一組讀法：有重量但不發言。 */
 .candidate-popup-boxpointer .candidate-page-button {
     background-color: #fff;

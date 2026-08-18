@@ -36,6 +36,7 @@
 
 import Clutter from 'gi://Clutter';
 import Pango from 'gi://Pango';
+import IBus from 'gi://IBus';
 
 // 名字最多兩行。三行的名字（ImageMagick (color depth=q16)）在這台上是異數，
 // 讓它省略，不要讓它去撐高每一格。
@@ -1882,6 +1883,19 @@ export default class PineNoteOskExtension extends Extension {
             allocationBox.set_origin(popup.x, Math.floor(dockLine() - h));
         };
 
+        // 🔴 方向一律橫排，不聽引擎的。這條列是貼底的工具列，橫是它的形狀，不該
+        //    由每個引擎各自決定：RIME 要在 ibus_rime.yaml 設 style/horizontal 才會
+        //    送 HORIZONTAL；Mozc 寫死送 VERTICAL（實測 orientation=1、page=3），
+        //    沒有使用者設定能改，日文輸入法的候選窗傳統就是直的。所以在接收端
+        //    統一：setOrientation 不管收到什麼都當 HORIZONTAL。覆寫實例方法，
+        //    跟 _reposition 同一個理由。
+        const carea = popup._candidateArea;
+        if (carea && !carea._pnOrigSetOrientation) {
+            carea._pnOrigSetOrientation = carea.setOrientation.bind(carea);
+            carea.setOrientation = () => carea._pnOrigSetOrientation(IBus.Orientation.HORIZONTAL);
+            carea.setOrientation(IBus.Orientation.HORIZONTAL);
+        }
+
         popup._pnOrigUpdateVisibility = popup._updateVisibility.bind(popup);
         popup._updateVisibility = () => {
             const isVisible = popup._preeditText.visible ||
@@ -1916,6 +1930,11 @@ export default class PineNoteOskExtension extends Extension {
         if (popup?._pnOrigReposition) {
             popup._reposition = popup._pnOrigReposition;
             delete popup._pnOrigReposition;
+        }
+        const carea = popup?._candidateArea;
+        if (carea?._pnOrigSetOrientation) {
+            carea.setOrientation = carea._pnOrigSetOrientation;
+            delete carea._pnOrigSetOrientation;
         }
         if (popup?._pnOrigButtonLayout) {
             const buttons = popup._candidateArea?._buttonBox;
