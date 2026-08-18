@@ -543,14 +543,28 @@ on one button is four taps to the far end. The labels ship anyway, because an
 engine that works while its button shows the wrong name is the worst of the
 three states.
 
-Bopomofo was tested and behaves differently from pinyin on purpose. Chewing is
-the Microsoft-Bopomofo lineage: it converts as you type and puts the characters
-straight into the preedit — 你好安安幾歲住哪裡 appeared with no candidate window at
-all — and only shows candidates when you arrow down onto a character to change
-it. That is not the bar failing; it is a different philosophy of when to ask.
-Its label is `BP`, not `ㄅ`: at 11px bold on the top bar, a two-stroke ㄅ is a
-flick next to three two-letter neighbours, and a label has to be the same kind
-of thing as the labels beside it.
+Bopomofo behaves differently from pinyin, and half of that is on purpose.
+Chewing is the Microsoft-Bopomofo lineage: it converts as you type and puts the
+characters straight into the preedit — 你好安安幾歲住哪裡 appeared with no candidate
+window at all — and only asks when you arrow down onto a character. That is not
+the bar failing; it is a different philosophy of when to ask, and it is the
+philosophy every Windows bopomofo typist already has in their hands. The
+maintainer's hands are iPad's, which shows candidates as you go, so
+`space-as-selection` is on: type, press space, the bar appears with 1-5, or
+press Enter and take chewing's guess. `plain-zhuyin` would make it iPad-exact
+and throw away the phrase model; it stays off.
+
+The OSK prints bopomofo when chewing is active. The standard 大千式 keyboard is
+the US keyboard with a second symbol on each key, and chewing maps US keysyms
+itself, so nothing about the k6 layout changed — level 0 is relabelled through
+`PN_BOPOMOFO` and `strings` are untouched. Only bopomofo on the cap: St.Label
+does not do two-tier layout, and two glyphs in a 109px key are both too small.
+The first pass relabelled the digit row and punctuation and left all 26 letters
+alone, because stock-layout keys have no `label` and display through
+`strings[0]`; `relabelByString` looks up what the key sends.
+
+Its top-bar label is `BP`, not `ㄅ`: at 11px bold a two-stroke ㄅ is a flick next
+to three two-letter neighbours.
 
 Bopomofo through RIME would have been free — `rime-data-bopomofo` is already
 there — but it would share the single `rime` engine slot and need `Ctrl+`` ` `` to
@@ -643,11 +657,13 @@ GdmDisplay: Session never registered, failing        ← and the new one goes wi
 ```
 
 That is GDM's race, not anything in this repository — the extensions had
-finished tearing down two seconds earlier. A second restart always succeeds,
-because there is no longer an old session to race with. `pn reload` schedules
-that second restart itself, twenty-five seconds out via `systemd-run`, and only
-if seat0 has no user session by then — so nobody has to type a password on the
-glass.
+finished tearing down two seconds earlier — but it is not rare here: session
+teardown on this SoC takes longer than five seconds often enough that two
+consecutive restarts landed on the greeter. `pn reload` does not bet on the
+grace. It terminates the seat0 session first, waits for it to be gone, and only
+then restarts gdm3, so there is nothing left to race with; a `systemd-run` guard
+twenty-five seconds out restarts again if seat0 still has no user session. The
+last dozen reloads came back in five seconds each.
 
 ## The six values it draws with
 
