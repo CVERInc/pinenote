@@ -1063,6 +1063,34 @@ Two of those are readings a person actually chooses between:
 
 One button, two states, the same shape as the rotation button beside it.
 
+**Which one this device starts in, said out loud.** `setup.sh` writes the
+`bw-mode` gsetting on a first run and never again, defaulting to greyscale;
+`PINENOTE_TONE=bw` picks the other. The value it wrote before this was upstream
+Pinenote Helper's own schema default, which happens to be 0 — so the device had
+been in greyscale for weeks by inheritance rather than by choice, and an upstream
+change to that default would have moved it with nothing in the repository
+mentioning either state. A marker file makes the write happen once: the panel
+button is the way to change tone afterwards, and re-running setup should not
+undo a choice made with it. The `auto-refresh` write above it carries no marker
+on purpose — that one is correctness rather than taste, since the kernel's own
+refresh path produces the stock flash and nothing here can restyle it.
+
+`/etc/modprobe.d/rockchip_ebc.conf` no longer sets `bw_mode` or
+`default_waveform` for the same reason `typing-mode.sh` stopped: two writers for
+one value is a race, and this one was visible. The module loaded at 1, Pinenote
+Helper applied 0 at login, and the clearing daemon logged the mode changing
+under it five times in the first ninety seconds of every boot. One owner, no
+flapping.
+
+**What follows from the choice.** Greyscale pairs with GC16, which is a full
+reset waveform, so every screen update clears as it draws and ghosting never
+accumulates. The dither clear in `pn-wave` is therefore skipped entirely — the
+daemon reads `bw_mode` each second and stands down, saying so once in the
+journal. On a greyscale device `Clear()` firing zero times per boot is the
+design working, not the daemon being broken. Black-and-white is the mode that
+needs it: A2 is fast and quiet and accumulates, which is what the whole clearing
+half of this repository exists for.
+
 **The state belongs to Pinenote Helper, not to the driver.** Its `bw-mode`
 gsetting is re-applied whenever that extension is enabled, so changing the driver
 alone works until the next login and then silently reverts — which is what

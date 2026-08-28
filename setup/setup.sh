@@ -124,7 +124,7 @@ D="$(cd "$(dirname "$0")" && pwd)"
 
 # runtime 的波形設定不持久，開機要靠 modprobe.d
 sudo tee /etc/modprobe.d/rockchip_ebc.conf >/dev/null <<'EOF'
-options rockchip_ebc bw_mode=1 default_waveform=1 refresh_waveform=4 auto_refresh=0 refresh_threshold=4 prepare_prev_before_a2=1
+options rockchip_ebc refresh_waveform=4 auto_refresh=0 refresh_threshold=4 prepare_prev_before_a2=1
 EOF
 
 mkdir -p "$HOME/.config/systemd/user"
@@ -419,6 +419,29 @@ PNH=/usr/share/gnome-shell/extensions/pnhelper@m-weigand.github.com/schemas
 if [ -d "$PNH" ]; then
   gsettings --schemadir "$PNH" set org.gnome.shell.extensions.pnhelper auto-refresh false
   echo "   -> pnhelper 的 auto-refresh 已設為 false（否則它會用全閃搶先開火）"
+
+  # 色調模式的預設值。這裡宣告它，而不是繼承上游 schema 的預設——那個目前剛好
+  # 也是 0，所以這台一直是灰階，但那是運氣不是設計：上游哪天改掉預設，這台就
+  # 跟著換模式，而沒有任何一處會提到這件事。
+  #
+  # 🔴 只在第一次跑的時候寫。這是口味不是正確性：使用者按了面板上那顆按鈕之後
+  #    再跑一次 setup.sh，不該把他的選擇翻回來。標記檔存在就完全不碰。
+  #    （auto-refresh 上面那個沒有標記，因為那條是正確性——核心那條路徑產生的
+  #    是我們改不了樣子的原廠全閃，任何時候都必須關著。）
+  TONE_MARK="$HOME/.config/pinenote-tone-default"
+  case "${PINENOTE_TONE:-greyscale}" in
+    greyscale) TONE_VALUE=0 ;;
+    bw)        TONE_VALUE=1 ;;
+    *) echo "   -> PINENOTE_TONE 只吃 greyscale 或 bw，收到 ${PINENOTE_TONE}" >&2; TONE_VALUE=0 ;;
+  esac
+  if [ -f "$TONE_MARK" ]; then
+    echo "   -> 色調模式先前已設過，保留你目前的選擇"
+  else
+    gsettings --schemadir "$PNH" set org.gnome.shell.extensions.pnhelper \
+      bw-mode "$TONE_VALUE"
+    : > "$TONE_MARK"
+    echo "   -> 色調預設 = ${PINENOTE_TONE:-greyscale}（之後用面板那顆按鈕改，這裡不再碰）"
+  fi
 else
   echo "   -> 找不到 pnhelper schemas，跳過；auto_refresh 仍由 modprobe.d 關著" >&2
 fi
