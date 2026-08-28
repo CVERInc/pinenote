@@ -442,7 +442,38 @@ const byIcon = name => {
         (alias !== undefined && k.iconName === alias);
 };
 const byAction = name => k => k.action === name;
-const keyval = (label, key) => ({label, keyval: key});
+
+// 🔴 原廠版面 JSON 裡 keyval 是**十六進位字串**（'0xff0d'），不是數字。
+//
+// 給數字不會報錯，會送錯：parseInt(65307, 16) 在 JS 裡先把數字轉成 "65307"
+// 再當十六進位解，得到 0x65307 = 414983，一顆完全不同的鍵。症狀因此是
+// 「按了沒反應」而不是任何一行錯誤訊息。
+//
+// 從原廠撈來重用的鍵（Enter、Backspace、四個方向鍵）自帶字串，所以一直是好的；
+// 壞的正好就是我們自己造的那五種：Esc、Home、End、PgUp、PgDn。壞掉的集合和
+// 「我們自己造的」集合完全重合，那個分割就是診斷本身。
+const hexKeyval = n => {
+    if (typeof n !== 'number') {
+        console.error(`pn-osk: hexKeyval expects a number, got ${typeof n} (${n})`);
+        return n;
+    }
+    return `0x${n.toString(16)}`;
+};
+
+// 出廠前自己看一眼：任何 keyval 不是字串就出聲。這一條就是上面那個缺陷
+// 從裝上那天起沒有被抓到的原因——沒有人問過送出去的是什麼型別。
+function auditKeyvals(rows, where) {
+    for (const row of rows ?? []) {
+        for (const k of row ?? []) {
+            if (k && 'keyval' in k && typeof k.keyval !== 'string')
+                console.error(`pn-osk: ${where}: keyval on ${k.label ?? k.iconName ?? '?'} `
+                            + `is ${typeof k.keyval}, must be a hex string like "0xff1b"`);
+        }
+    }
+    return rows;
+}
+
+const keyval = (label, key) => ({label, keyval: hexKeyval(key)});
 
 function box(actor) {
     if (!actor)
@@ -1563,13 +1594,13 @@ export default class PineNoteOskExtension extends Extension {
         const flexIn = (row, match) => row.findIndex(match);
         const cols = p.columns;
 
-        return [
-            [{label: L.esc, keyval: Clutter.KEY_Escape, width: w.esc ?? 1}, ...charKeys(faceFor(p.topRow, level))],
+        return auditKeyvals([
+            [{label: L.esc, keyval: hexKeyval(Clutter.KEY_Escape), width: w.esc ?? 1}, ...charKeys(faceFor(p.topRow, level))],
             balance(qwerty, flexIn(qwerty, byAction('delete')), cols),
             homeRow,
             letterRow,
             balance(bottom, flexIn(bottom, k => k.label === ' ' || k.strings?.[0] === ' '), cols),
-        ];
+        ], `portrait level ${level}`);
     }
 
     _composeLevel(rows, level) {
@@ -1627,8 +1658,8 @@ export default class PineNoteOskExtension extends Extension {
 
         const icons = {...DEFAULTS.navIcons, ...cfg.navIcons};
         const navKey = (label, key, role) => (icons[role]
-            ? {iconName: icons[role], keyval: key, width: w.nav}
-            : {label, keyval: key, width: w.nav});
+            ? {iconName: icons[role], keyval: hexKeyval(key), width: w.nav}
+            : {label, keyval: hexKeyval(key), width: w.nav});
         const L = cfg.navLabels ?? DEFAULTS.navLabels;
 
         // Each row names the key that absorbs its slack, so every row lands on
@@ -1643,7 +1674,7 @@ export default class PineNoteOskExtension extends Extension {
 
         const rowsOut = [
             [
-                {label: L.esc, keyval: Clutter.KEY_Escape, width: w.esc ?? 1},
+                {label: L.esc, keyval: hexKeyval(Clutter.KEY_Escape), width: w.esc ?? 1},
                 ...charKeys(faceFor(cfg.topRow, level)),
                 flexBackspace,
                 navKey(L.home, Clutter.KEY_Home, 'home'),
@@ -1693,7 +1724,7 @@ export default class PineNoteOskExtension extends Extension {
             total: row.reduce((t, k) => t + (k.width ?? 1), 0),
             keys: row.map(k => `${k.label ?? k.iconName ?? k.action ?? "?"}:${k.width ?? 1}`),
         }));
-        return out;
+        return auditKeyvals(out, `landscape level ${level}`);
     }
 
     // AspectContainer keeps the keys at the layout's column:row ratio and
