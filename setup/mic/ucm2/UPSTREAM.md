@@ -22,15 +22,22 @@ for the format.
   mailing-list-only project like alsa-lib/alsa-driver.
 - The README asks explicitly: *"If you create a pull request for new
   hardware, please, add also the alsa-info.sh output to emulate this
-  hardware in the UCM validator."* CI runs submissions through the UCM
+  hardware in the UCM validator."* **That output is a file in a different
+  repository, not an attachment on the PR** -- the validator reads its card
+  dumps from `alsa-tests/python/ucm-validator/configs/<Vendor>/<Card>.txt`
+  (e.g. `configs/Rockchip/rk3399-gru-sound.txt`, ~1900 lines of raw
+  alsa-info.sh output). So this is two pull requests: the profile to
+  alsa-ucm-conf, the dump to alsa-tests. CI runs submissions through the UCM
   validator (https://github.com/alsa-project/alsa-tests/tree/master/python/ucm-validator),
   which replays `alsa-info.sh` output to emulate the card's control/PCM
   topology without the real hardware attached. A PR without that dump is
   not testable by a maintainer who doesn't own a PineNote.
-- No DCO/Signed-off-by requirement was found in the README; a plain PR
-  appears sufficient, but that should be re-checked against
-  `CONTRIBUTING.md` if one exists at PR time (none was found at the repo
-  root as of this check).
+- **Corrected 2026-08-31:** an earlier version of this note said no DCO
+  requirement was found. There is one -- `DCO.txt` sits at the repo root, and
+  recent commits carry `Signed-off-by:` trailers (checked with
+  `git log --format='%(trailers:key=Signed-off-by)'`). The README does not
+  mention it, which is how the first check missed it: it looked in the README
+  and not at the tree. Commits need a sign-off.
 - Path convention confirmed against `ucm2/README.md` shipped on-device
   (from the `alsa-ucm-conf` Debian package): the real files live at a
   vendor-qualified path (here `Rockchip/PineNote/`, matching the sibling
@@ -40,27 +47,37 @@ for the format.
 
 ## What's missing before a PR is postable
 
-1. **`alsa-info.sh` output**, captured on the actual PineNote and attached to
-   the PR, per the README's explicit ask. Not run as part of this task
-   (out of scope / not installed on-device); would need to be fetched from
-   `https://www.alsa-project.org/alsa-info/alsa-info.sh` and run there, or
-   assembled by hand from `/proc/asound/*`, `amixer -c0 contents`, and
-   `arecord -l` -- most of which is already gathered in this repo's README
-   section "The microphones nobody uses" and in this task's session log.
-2. **A run through the actual UCM validator** (alsa-tests), not just
-   `alsaucm -c PineNote ...` against the live card. The validator emulates
-   the card from the alsa-info.sh dump, which is a slightly different code
-   path than opening a real control device, and is what CI will actually
-   run.
-3. **A decision on the `Headphones` device.** The rk817 codec's `Playback
-   Mux` control offers an `HP` item and the borrowed `Speaker` section
-   assumes both exist, but nothing in this task confirmed the PineNote
-   actually wires out a headphone jack (no `Headphones Jack` control is
-   present in `amixer -c0 contents`, and it's a Boox-style e-reader tablet,
-   not obviously headphone-equipped). This profile deliberately leaves the
-   `Headphones` device out rather than guess; upstream will likely ask the
-   same question, and it's better resolved by someone who can look at the
-   physical unit than invented here.
+1. **`alsa-info.sh` output.** Captured on the device (`--no-upload`) and
+   sitting at `/tmp/alsa-info.txt` there. It becomes
+   `configs/Rockchip/PineNote.txt` in the alsa-tests PR.
+
+2. **A run through the actual UCM validator.** Still outstanding, and it cannot
+   be done from a mac: `ucm.py` loads `libasound.so` through ctypes, so it only
+   runs where ALSA does. `validate.sh` (next to this file) clones both repos on the
+   tablet, drops this profile into the tree, and runs both passes -- `all`
+   (parses every profile, syntax) and `configs` (replays the dump to emulate
+   the card, which is the pass that would catch a `cset` naming a control this
+   board does not have; the real risk in a profile borrowed from a sibling).
+
+3. ~~**A decision on the `Headphones` device.**~~ **Settled 2026-08-31, from
+   mainline's own device tree rather than by guessing at the case.** The board
+   does have a headphone path -- the wiki says the codec's headphone output is
+   routed to the USB-C audio/USB switch, and `rk3566-pinenote.dtsi` declares
+   the widget for it (`widgets = "Headphone", "Headphones"`, `routing =
+   "Headphones", "HPOL"` / `"HPOR"`). What it does not have is any way to reach
+   it: the same file's `usb-c-connector` node carries only a USB2 HS endpoint,
+   with no audio mode and no mode-switch or mux binding, and there is no jack
+   detection anywhere in the tree. A `Headphones` device would therefore be
+   selectable, silent, and with no control for `JackControl` to name. It stays
+   out, and `HiFi.conf` now records that reasoning where the next reader will
+   look. Worth revisiting if the connector gains an audio-mode binding.
+
+   The same file also settles two things that were previously taken on trust:
+   `simple-audio-card,name = "PineNote"` confirms the CardLongName the conf.d
+   symlink depends on, and the HPOL/HPOR -> Speaker Amp -> "Internal Speakers"
+   routing explains why the borrowed `If.1` branch -- which reads as inverted --
+   is the right one for this board.
+
 4. **Someone who can answer maintainer follow-up.** alsa-ucm-conf's
    maintainers are known to ask clarifying questions about hardware they
    don't have; whoever posts the PR should own the device or be able to
