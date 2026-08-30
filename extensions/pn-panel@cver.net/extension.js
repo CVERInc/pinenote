@@ -258,6 +258,28 @@ function readPanelConfig() {
     }
 }
 
+// ── Rotation: resyncing after unlock ────────────────────────────────────
+// net.hadess.SensorProxy's AccelerometerOrientation, mapped onto the same
+// transform values _pnRotate already uses (0=normal 1=left 2=inverted
+// 3=right). Matches mutter's own mapping (meta-orientation-manager.c,
+// meta_orientation_to_transform): normal→NORMAL, left-up→90 ("left"),
+// bottom-up→180 ("inverted"), right-up→270 ("right"). Confirmed live via
+// `gdbus call --system --dest net.hadess.SensorProxy … GetAll` — the
+// property is readable without Claim*, which is the only part polkit gates
+// over ssh.
+//
+// This device's accelerometer only reports all four values because of two
+// things this repository itself installs (setup.sh step [14]): the
+// iio-sensor-proxy package, and setup/udev/61-sensor-pinenote.rules, which
+// overrides a udev hwdb entry that otherwise mislabels this chip's mount
+// matrix as the PineTab2's and collapses the four orientations to two.
+const PN_ORIENTATION_TRANSFORM = {
+    "normal": 0,
+    "left-up": 1,
+    "bottom-up": 2,
+    "right-up": 3,
+};
+
 function box(actor) {
     if (!actor)
         return null;
@@ -742,7 +764,13 @@ export default class PineNotePanelExtension extends Extension {
             });
     }
 
-    _pnRotate() {
+    // targetTransform, when given, is applied directly instead of bouncing
+    // portrait/landscape — the sensor resync path (_pnApplySensorOrientation)
+    // uses this to land on the orientation the accelerometer actually
+    // reports. cancellable lets that same caller abort an in-flight call on
+    // extension teardown, which a bare tap or the D-Bus Rotate() method never
+    // need to.
+    _pnRotate(targetTransform, cancellable = null) {
         // 🔴 Must be asynchronous. DisplayConfig is provided by mutter, and
         //    mutter is this process — call_sync blocks the main loop waiting
         //    for a reply that only the main loop can produce, freezing the
@@ -762,12 +790,17 @@ export default class PineNotePanelExtension extends Extension {
         bus.call(
             "org.gnome.Mutter.DisplayConfig", "/org/gnome/Mutter/DisplayConfig",
             "org.gnome.Mutter.DisplayConfig", "GetCurrentState", null, null,
-            Gio.DBusCallFlags.NONE, -1, null,
+            Gio.DBusCallFlags.NONE, -1, cancellable,
             (conn, res) => {
                 let state;
                 try {
                     state = conn.call_finish(res);
                 } catch (e) {
+                    // Teardown cancelled us mid-flight — not a failure, say nothing.
+                    if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) {
+                        this._pnRotating = false;
+                        return;
+                    }
                     done(`GetCurrentState failed: ${e.message}`);
                     return;
                 }
@@ -787,11 +820,19 @@ export default class PineNotePanelExtension extends Extension {
                 }
 
                 const out = [];
+                let changed = false;
                 for (const [x, y, scale, transform, primary, mons] of logicalMonitors) {
-                    // 0=normal 1=left 2=inverted 3=right. We only bounce
-                    // between portrait and landscape — this panel only has two
-                    // ways to be held.
-                    const next = transform === 0 || transform === 2 ? 1 : 0;
+                    // 0=normal 1=left 2=inverted 3=right. A bare tap only
+                    // bounces between portrait and landscape — this panel
+                    // only has two ways to be held. A sensor resync instead
+                    // passes targetTransform: the orientation the
+                    // accelerometer actually reports, which may be any of
+                    // the four.
+                    const next = targetTransform !== undefined
+                        ? targetTransform
+                        : (transform === 0 || transform === 2 ? 1 : 0);
+                    if (next !== transform)
+                        changed = true;
                     const specs = [];
                     for (const m of mons) {
                         const mode = currentMode.get(m[0]);
@@ -804,21 +845,69 @@ export default class PineNotePanelExtension extends Extension {
                     out.push([x, y, scale, next, primary, specs]);
                 }
 
+                // A sensor resync landing on the transform already in effect
+                // has nothing to apply — skip the round trip rather than
+                // reconfigure the display for a visible no-op.
+                if (targetTransform !== undefined && !changed) {
+                    done(null);
+                    return;
+                }
+
                 bus.call(
                     "org.gnome.Mutter.DisplayConfig",
                     "/org/gnome/Mutter/DisplayConfig",
                     "org.gnome.Mutter.DisplayConfig", "ApplyMonitorsConfig",
                     new GLib.Variant("(uua(iiduba(ssa{sv}))a{sv})",
                         [serial, 2 /* persistent */, out, {}]),
-                    null, Gio.DBusCallFlags.NONE, -1, null,
+                    null, Gio.DBusCallFlags.NONE, -1, cancellable,
                     (c2, r2) => {
                         try {
                             c2.call_finish(r2);
                             done(null);
                         } catch (e) {
+                            if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED)) {
+                                this._pnRotating = false;
+                                return;
+                            }
                             done(`apply failed: ${e.message}`);
                         }
                     });
+            });
+    }
+
+    // Unlocking orientation-lock does not, by itself, restore rotation:
+    // mutter reacts to the sensor's orientation *change* signals, not its
+    // resting value, so the screen sits at whatever transform was persisted
+    // until the tablet is physically tilted through a fresh transition. This
+    // reads the sensor's current value once and applies it directly, so
+    // clearing the lock takes effect immediately. Called only from the
+    // orientation-lock changed handler, on the true→false edge.
+    _pnApplySensorOrientation() {
+        Gio.DBus.system.call(
+            "net.hadess.SensorProxy", "/net/hadess/SensorProxy",
+            "org.freedesktop.DBus.Properties", "GetAll",
+            new GLib.Variant("(s)", ["net.hadess.SensorProxy"]),
+            null, Gio.DBusCallFlags.NONE, -1, this._pnSensorCancellable,
+            (bus, res) => {
+                let props;
+                try {
+                    props = bus.call_finish(res).deepUnpack()[0];
+                } catch (e) {
+                    if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                        return; // teardown raced us, say nothing
+                    console.log(`[pn-osk] rotate: SensorProxy GetAll failed: ${e.message}`);
+                    return;
+                }
+
+                // Same deepUnpack?.() guard as GetCurrentState's is-current
+                // above: a{sv} values arrive as GLib.Variant, not plain JS.
+                const orientation = props["AccelerometerOrientation"]?.deepUnpack?.();
+                const transform = PN_ORIENTATION_TRANSFORM[orientation];
+                if (transform === undefined) {
+                    console.log(`[pn-osk] rotate: sensor reports "${orientation}", not one of the four mapped orientations — leaving the screen as-is`);
+                    return;
+                }
+                this._pnRotate(transform, this._pnSensorCancellable);
             });
     }
 
@@ -937,6 +1026,29 @@ export default class PineNotePanelExtension extends Extension {
             : "rotation-allowed-symbolic";
     }
 
+    // The maintainer's own words: auto-rotate "很常默默失效" — very often
+    // silently stops working — without ever connecting it back to this
+    // button. Locking on every tap is deliberate (see the comment where the
+    // button is built), so the fix is not to lock less, it is to stop being
+    // silent about it and to make unlocking actually take effect.
+    //
+    // GSettings only emits "changed" when the value actually flips, so this
+    // fires once per real lock/unlock transition — not on every tap of a
+    // button that keeps a locked screen locked (that would be tap-chatty),
+    // and not on every call to _pnRotate(). Quick Settings' Auto Rotate
+    // toggle writes the same key, so this also covers unlocking from there.
+    _pnOnRotationLockChanged() {
+        this._pnSyncRotateIcon();
+        if (this._pnRotationLocked()) {
+            console.log("[pn-osk] rotate: orientation-lock set, auto-rotate is now off");
+            Main.notify("Auto-rotate is off",
+                "Rotation is locked to the panel button now. Quick Settings > Auto Rotate turns it back on.");
+        } else {
+            console.log("[pn-osk] rotate: orientation-lock cleared, resyncing to the sensor");
+            this._pnApplySensorOrientation();
+        }
+    }
+
     // Hide the container, not the actor: that is the layer the panel actually layouts.
     _pnHidePanelItems() {
         for (const role of PN_HIDDEN_PANEL_ROLES) {
@@ -954,6 +1066,10 @@ export default class PineNotePanelExtension extends Extension {
         this._pnPanelButtons = [];
         this._pnPanelHidden = [];
         this._pnToneTimers = new Set();
+        // Cancels the SensorProxy read (and, transitively, the _pnRotate()
+        // call it may trigger) if disable() lands mid-flight — same intent as
+        // _pnToneTimers above, for an async D-Bus call instead of a timer.
+        this._pnSensorCancellable = new Gio.Cancellable();
 
         this._pnHidePanelItems();
         // 🔴 Hiding once is not enough. pnhelper disabled then enabled —
@@ -1076,9 +1192,12 @@ export default class PineNotePanelExtension extends Extension {
         this._pnSyncRotateIcon();
         this._pnPanelMonitorSignal = Main.layoutManager.connect(
             "monitors-changed", () => this._pnSyncRotateIcon());
-        // Quick settings also contains this toggle, the icon must follow when changed from there
+        // Quick settings also contains this toggle, the icon must follow when
+        // changed from there — and so must the notify/resync in
+        // _pnOnRotationLockChanged, unlocking from Quick Settings hits the
+        // same "mutter needs a nudge" problem as unlocking from this button.
         this._pnLockSignal = this._pnTouchSettings.connect(
-            "changed::orientation-lock", () => this._pnSyncRotateIcon());
+            "changed::orientation-lock", () => this._pnOnRotationLockChanged());
     }
 
     _pnRemovePanel() {
@@ -1096,6 +1215,10 @@ export default class PineNotePanelExtension extends Extension {
             this._pnLockSignal = 0;
         }
         this._pnTouchSettings = null;
+        // Signal is disconnected above, so no new call starts after this
+        // point; cancel aborts one already in flight.
+        this._pnSensorCancellable?.cancel();
+        this._pnSensorCancellable = null;
         for (const id of this._pnToneTimers ?? [])
             GLib.Source.remove(id);
         this._pnToneTimers = null;
