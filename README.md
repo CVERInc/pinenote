@@ -1063,6 +1063,35 @@ Two of those are readings a person actually chooses between:
 
 One button, two states, the same shape as the rotation button beside it.
 
+**If the ink looks faint, you are in greyscale.** Drawing in Xournal++ with
+greyscale selected puts down strokes that barely show, and pressing refresh
+reveals a line that was dark all along. The line was always there; it had not
+been driven all the way to black. Greyscale pairs with GC16, a DC-balanced pulse
+train that needs something like 450ms to finish, and a moving pen issues a new
+partial update every few tens of milliseconds — so each stroke interrupts the
+one before it and the pigment stops partway. A refresh runs uninterrupted and
+the stroke arrives.
+
+The symptom reads like pressure sensitivity failing or a setting inside
+Xournal++, which is what makes it worth writing down: it is neither, and the fix
+is the tone button. Black-and-white pairs with A2, which is a fast one-bit
+waveform and exactly what every e-ink device means by handwriting mode. Ink
+keeps up with the pen there.
+
+Between them sits DU, full-swing but far quicker than GC16, which makes greyscale
+usable for writing without leaving it:
+
+```sh
+gdbus call --system --dest org.pinenote.ebc --object-path /ebc \
+  --method org.pinenote.ebc.SetDefaultWaveform 2      # 4 puts GC16 back
+```
+
+Deliberately a command rather than a wiring change. Upstream hardcodes greyscale
+to GC16 with no setting for it, so making the pairing stick would mean watching
+`WaveformChanged` and writing the value back after upstream sets it — a third
+writer on a value that has already produced two races here. The button already
+reaches the better answer for drawing, and one press is cheaper than that.
+
 **Which one this device starts in, said out loud.** `setup.sh` writes the
 `bw-mode` gsetting on a first run and never again, defaulting to greyscale;
 `PINENOTE_TONE=bw` picks the other. The value it wrote before this was upstream
