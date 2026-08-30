@@ -1176,6 +1176,96 @@ under `org.gnome.shell.extensions.pnhelper`, the waveform picker is
 `org.pinenote.usb`. Both interfaces are on the system bus. None of them is a
 daily decision.
 
+## The microphones nobody uses
+
+Four holes sit above the screen. They are a PDM microphone array, ALSA
+enumerates them as `hw:0,1` alongside the rk817 codec on `hw:0,0`, and as far
+as anything published goes that is where the knowledge stops. Nobody has said
+how many of them work, how far apart they are, or whether they resolve
+direction — which are the first three things anyone writing beamforming needs.
+
+**They are invisible to the audio stack, and the reason is dull.** This card
+ships no UCM profile, so WirePlumber falls back to a generic stereo
+configuration that describes device 0 and nothing else. Every application sees
+one stereo source. The array is not hidden or broken; nothing ever told the
+stack it was there. `setup.sh` [17] installs a PipeWire drop-in that says so,
+and the array appears as a normal 4-channel source that any application can
+select. A UCM2 profile upstream would fix it for every PineNote instead of
+this one, and that is the version worth writing.
+
+### What they actually are
+
+Measured, not read off a datasheet — there isn't one.
+
+| | |
+|---|---|
+| Channels | 4, all live. `hw:0,1` accepts 2–6 |
+| Noise floor | about −54 dBFS in a quiet room |
+| Pairwise correlation | 0.33–0.50 |
+| Spacing | ~21 mm, ~21 mm, ~25 mm |
+| Aperture | ~68 mm |
+| Arrangement | one line, horizontal |
+
+Correlation between channels is the interesting number. At 1.0 they would be
+copies of one microphone; near 0 they would be hearing noise rather than a
+room. Between those, the part that does not correlate is the spatial
+information — the reason there are four of them.
+
+The geometry comes from claps. Ambient noise cannot give it: room noise is
+diffuse, arrives from everywhere at once, and the time-of-arrival differences
+collapse to zero — which is exactly what a first attempt with ambient noise
+produced, and it looks like a failed measurement rather than a wrong question.
+A clap is transient and comes from one place. At 48 kHz one sample of delay is
+7.1 mm of path difference.
+
+Clapping to the left and then to the right inverts the entire set of six
+inter-channel delays, repeatably, three claps a side:
+
+```
+              left    right
+  ch0-ch1      -3      +3
+  ch0-ch2   +2..+5     -3
+  ch0-ch3   -5..-8   +6..+7
+  ch2-ch3   -4..-8  +9..+10
+```
+
+Solving those for arrival order puts the microphones at −3, 0, +3 and +6.5
+samples across, and all six pairs agree with that layout rather than only the
+three it was fitted to. The check that matters is the one that was not used to
+fit anything: claps from directly above and below collapse to ±1 sample. A line
+of microphones is equidistant from those directions, so a straight line is what
+the sideways claps and the vertical ones agree on independently.
+
+### What follows for speech
+
+A 68 mm aperture with 21 mm spacing puts spatial aliasing near 8 kHz, and
+speech lives below 4 kHz, so the useful band is entirely inside the clean one.
+Four microphones summed with the right delays are worth about 6 dB of signal to
+noise against diffuse room noise. The array cannot separate up from down — it
+is a line — but a person talking to a tablet is in front of it, and that is the
+axis that carries nothing anyway.
+
+That fits this device better than it first sounds. Everything else in this
+repository is about typing on a panel that takes 450 ms to change its mind.
+Speech is the one input where the panel's weakness does not apply: nothing has
+to redraw while you talk.
+
+### Tools
+
+```sh
+setup/mic/clap-survey            # prompts on the tablet, records, reports
+setup/mic/tdoa.py --selftest     # prove the correlator against known delays
+setup/mic/tdoa.py <wav>          # or measure a recording you already have
+```
+
+Two things this cost, written down so they cost nothing next time. The first
+0.3 s after opening a PDM device is a settling transient that pins several
+channels to full scale; left in, it reads as four broken microphones. And the
+correlator indexed past its window on negative lags — which surfaced only on a
+recording that contained a clap arriving in that order, after someone had
+clapped twelve times for nothing. `--selftest` builds channels with delays we
+chose and checks they come back, which is cheaper than a person's hands.
+
 ## A rotation glitch we could not reproduce
 
 The panel is native landscape and GNOME rotates it to portrait. Turning the

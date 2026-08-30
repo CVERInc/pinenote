@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Record a clap survey and read the array's geometry out of it.
+#
+# The prompts go to the tablet's own screen rather than the terminal, because
+# whoever is clapping is holding the tablet -- quite possibly driving the shell
+# over ssh from it, where the terminal is the thing their hands are not on.
+#
+# Clap on one side, then the other, then above, then below. Sideways claps give
+# the spacing; the vertical ones are the check, since a line of microphones is
+# equidistant from directly above and should report almost no delay at all.
+set -u
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+HERE="$(cd "$(dirname "$0")" && pwd)"
+WAV=${TMPDIR:-/tmp}/clap-survey.wav
+
+TARGET=$(wpctl status 2>/dev/null | grep -o '[0-9]\+\. Microphone Array' | cut -d. -f1)
+if [ -z "$TARGET" ]; then
+  echo "No 'Microphone Array' source in PipeWire." >&2
+  echo "Install setup/mic/50-pdm-mic-array.conf first -- without it the array" >&2
+  echo "is invisible to the audio stack; see the README." >&2
+  exit 1
+fi
+
+say() { notify-send -u critical -t 3500 "$1" "$2"; }
+
+say "Microphone array survey" "Starting in 3 seconds, 14 seconds total"
+sleep 3
+( timeout 14 pw-record --target "$TARGET" --channels 4 --rate 48000 "$WAV" \
+    >/dev/null 2>&1 ) &
+rec=$!
+say "1 of 4 — LEFT"  "Clap three times to the LEFT of the tablet"; sleep 4
+say "2 of 4 — RIGHT" "Now three times to the RIGHT"; sleep 4
+say "3 of 4 — ABOVE" "Now three times directly ABOVE"; sleep 4
+say "4 of 4 — BELOW" "Last three, directly BELOW"; sleep 2
+wait $rec 2>/dev/null
+
+say "Recorded" "Analysing"
+# Delete only once the analysis has succeeded. An earlier version removed the
+# recording on the next line regardless, so a crash in the analyser cost twelve
+# more claps from a person rather than one more run of a script.
+if python3 "$HERE/tdoa.py" "$WAV"; then
+  rm -f "$WAV"
+else
+  echo
+  echo "Analysis failed. The recording is at $WAV -- rerun against it rather"
+  echo "than clapping again:  python3 $HERE/tdoa.py $WAV"
+  exit 1
+fi
