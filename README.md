@@ -1306,6 +1306,11 @@ they separate the client from the compositor:
 
 ## Upstream
 
+Three of the fixes here are workarounds for things that belong in someone else's tree, and
+[`UPSTREAM.md`](UPSTREAM.md) records which have been raised, where, and what came back. Read
+it before filing anything: we once reported the accelerometer collision twice from the same
+account, weeks apart, because the second search came back empty and that was trusted.
+
 [PR #25](https://github.com/PNDeb/pinenote-gnome-extension/pull/25) uncomments
 `_add_waveform_buttons()`, which is what puts A2 in Pinenote Helper's menu at all. It was
 opened against a version where that call and the line pairing *BW+Dither* with A2 were both
