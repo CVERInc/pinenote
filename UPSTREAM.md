@@ -48,9 +48,17 @@ Our workaround: `setup/setup.sh` step 14 installs the package.
 
 ## alsa-ucm-conf — the microphone array
 
-- **Status:** not yet filed. `alsa-info.sh` output captured on the device; still
-  needs a run through the UCM validator and a decision about the absent
-  `Headphones` device.
+- **Status:** not yet filed, and it is **two** PRs rather than one — the profile
+  goes to `alsa-project/alsa-ucm-conf`, and the `alsa-info.sh` dump the README
+  asks for is a file in `alsa-project/alsa-tests`
+  (`python/ucm-validator/configs/Rockchip/PineNote.txt`), not an attachment.
+  Commits there need a `Signed-off-by` (DCO.txt is at the repo root; the README
+  does not mention it).
+- **Settled:** the `Headphones` device stays out, for a checkable reason — see
+  `setup/mic/ucm2/UPSTREAM.md`.
+- **Blocked on:** one run of `setup/mic/ucm2/validate.sh` on the tablet. The
+  upstream validator loads `libasound` through ctypes, so it cannot run on a
+  mac.
 
 The four holes above the screen are a PDM microphone array that no shipped UCM
 profile describes, so the audio stack does not present it as a usable source.
