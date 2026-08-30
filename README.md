@@ -1185,13 +1185,24 @@ how many of them work, how far apart they are, or whether they resolve
 direction — which are the first three things anyone writing beamforming needs.
 
 **They are invisible to the audio stack, and the reason is dull.** This card
-ships no UCM profile, so WirePlumber falls back to a generic stereo
-configuration that describes device 0 and nothing else. Every application sees
-one stereo source. The array is not hidden or broken; nothing ever told the
-stack it was there. `setup.sh` [17] installs a PipeWire drop-in that says so,
-and the array appears as a normal 4-channel source that any application can
-select. A UCM2 profile upstream would fix it for every PineNote instead of
-this one, and that is the version worth writing.
+ships no UCM profile, so ALSA falls back to a generic stereo configuration that
+describes device 0 and nothing else. Every application sees one stereo source.
+The array is not hidden or broken; nothing ever told the stack it was there —
+and neither was the codec's own capture input, which the fallback drops too.
+
+`setup.sh` [17] installs a UCM2 profile for the card, in `setup/mic/ucm2/`. A
+PipeWire drop-in can paper over this per machine, and one did while the array
+was being measured, but the profile is the layer that owns the question: it
+describes the card once, for every application and session manager, and it is
+the same file that would fix this for every PineNote if upstream took it. See
+`setup/mic/ucm2/UPSTREAM.md`.
+
+It was checked by removal rather than by appearance. Anything can be made to
+show up by adding another mechanism; the test that means something is taking
+the old one away. With the drop-in moved aside and PipeWire restarted, the
+array still arrives as a 4-channel source, the codec's microphone arrives
+beside it, and the default source stays the codec rather than being taken over
+by four channels nobody asked for.
 
 ### What they actually are
 

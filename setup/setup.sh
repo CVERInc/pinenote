@@ -516,25 +516,35 @@ install -m 0644 "$D/../extensions/pn-wave@cver.net/extension.js" \
                 "$D/../extensions/pn-wave@cver.net/metadata.json" "$W/"
 pn_enable_extension pn-wave@cver.net
 
-echo "== [17] Microphone array: make it visible to the audio stack =="
+echo "== [17] Microphone array: give the card a UCM profile =="
 # The four holes above the screen are a PDM microphone array on hw:0,1, and the
-# card ships no UCM profile -- so WirePlumber falls back to a generic stereo
+# card ships no UCM profile -- so ALSA falls back to a generic stereo
 # configuration describing only device 0, the rk817 codec, and every application
 # sees one stereo source. The array is not hidden; nothing ever told the stack it
-# was there. This drop-in says so.
+# was there. Neither was the codec's own capture input, which the fallback also
+# drops.
 #
-# Measured before writing it: hw:0,1 accepts 2-6 channels, all four carry signal,
-# and claps from opposite sides invert the whole set of inter-channel delays --
-# see setup/mic/ and the README. A UCM2 profile would be the version that fixes
-# this for every PineNote rather than this one; this is the local shim.
-install -d "$HOME/.config/pipewire/pipewire.conf.d"
-install -m 0644 "$D/mic/50-pdm-mic-array.conf" \
-                "$HOME/.config/pipewire/pipewire.conf.d/50-pdm-mic-array.conf"
+# A PipeWire drop-in can paper over this per machine, and one did while the array
+# was being measured. A UCM profile is the layer that actually owns the question:
+# it describes the card once, for every application and every session manager,
+# and it is the same file that would fix this for every PineNote if upstream took
+# it -- see setup/mic/ucm2/UPSTREAM.md.
+#
+# Verified by removal rather than by appearance: with the drop-in moved aside and
+# pipewire restarted, the array still shows up as a 4-channel source, and the
+# default source stays the codec rather than being taken over.
+sudo apt-get install -y alsa-ucm-conf
+sudo install -d /usr/share/alsa/ucm2/Rockchip/PineNote /usr/share/alsa/ucm2/conf.d/simple-card
+sudo install -m 0644 "$D/mic/ucm2/Rockchip/PineNote/PineNote.conf" \
+                     "$D/mic/ucm2/Rockchip/PineNote/HiFi.conf" \
+                     /usr/share/alsa/ucm2/Rockchip/PineNote/
+sudo ln -sf ../../Rockchip/PineNote/PineNote.conf \
+            /usr/share/alsa/ucm2/conf.d/simple-card/PineNote.conf
 if systemctl --user is-active --quiet pipewire; then
   systemctl --user restart pipewire pipewire-pulse wireplumber
-  echo "   -> array exposed as a PipeWire source (restarted pipewire)"
+  echo "   -> UCM profile installed; the array is a PipeWire source (restarted pipewire)"
 else
-  echo "   -> drop-in installed; it appears when pipewire next starts"
+  echo "   -> UCM profile installed; it takes effect when pipewire next starts"
 fi
 
 # 🔴 The kernel's auto_refresh must be off: that path produces the factory full
