@@ -17,8 +17,8 @@ the ruler before you trust the measurement.
 
 - **Issue:** [systemd#43321](https://github.com/systemd/systemd/issues/43321) (open)
 - **Duplicate we filed by mistake:** systemd#43568 (closed)
-- **Status:** the maintainer asked for the entry to be reverted; a revert is
-  prepared against `hwdb.d/60-sensor.hwdb`.
+- **PR:** [systemd#43569](https://github.com/systemd/systemd/pull/43569) — reverts
+  the entry, as the maintainer asked for in the issue.
 
 `60-sensor.hwdb` carries an `ACCEL_MOUNT_MATRIX` labelled for the PineTab2,
 keyed on a modalias that names the chip (`silan,sc7a20`) and not the machine.
@@ -34,8 +34,10 @@ revert lands.
 
 ## PNDeb image — iio-sensor-proxy
 
-- **Status:** change prepared against `07_gnome.yaml`; refs
-  [PNDeb#45](https://github.com/PNDeb/pinenote-debian-image/issues/45).
+- **PR:** [PNDeb#134](https://github.com/PNDeb/pinenote-debian-image/pull/134) —
+  adds the package to `07_gnome.yaml`; refs
+  [PNDeb#45](https://github.com/PNDeb/pinenote-debian-image/issues/45), where
+  auto-rotation was asked for so the sensor could be tested at all.
 
 The image builds with `recommends: false`, and `iio-sensor-proxy` is only a
 Recommends of `gnome-shell` and `gnome-settings-daemon`, so it is dropped and
