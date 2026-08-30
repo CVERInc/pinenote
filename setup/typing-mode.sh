@@ -1,28 +1,36 @@
 #!/usr/bin/env bash
-# PineNote 打字模式：A2 打字不閃 + 兩個正交的清除觸發器
+# PineNote typing mode: flashless A2 typing + two orthogonal clear triggers
 P=/sys/module/rockchip_ebc/parameters
 set_p(){ echo "$2" | sudo tee "$P/$1" >/dev/null; }
-# 🔴 bw_mode 和 default_waveform 刻意**不**在這裡設。
+# 🔴 bw_mode and default_waveform are deliberately **not** set here.
 #
-# 它們的主人是面板上那顆色調按鈕（值記在 pnhelper 的 gsetting，登入時套用）。
-# 這裡再寫一次會變成兩個東西在同一刻搶同兩個參數，誰後跑誰贏——實測過一次
-# 「灰階活過重開機」，但那是競態贏的不是設計贏的，下一次不保證。
-# 開機初值由 /etc/modprobe.d/rockchip_ebc.conf 給；A2 與 GC16 的配對上游的
-# _change_bw_mode 本來就會做。
-set_p refresh_waveform 4       # GC16：清除時用，醜但清得乾淨
-set_p prepare_prev_before_a2 1 # A2 正確翻轉的必要開關
+# They belong to the tone button on the panel (values held in pnhelper's gsettings,
+# applied at login). Writing them here again means two processes race for the same two
+# parameters at boot, and the last write wins. We saw greyscale survive a reboot once,
+# but it won a race rather than winning by design, and the next boot was not
+# guaranteed.
+#
+# Initial boot values are given by /etc/modprobe.d/rockchip_ebc.conf. Upstream's
+# _change_bw_mode pairs A2 and GC16 on its own.
+set_p refresh_waveform 4       # GC16: used for clearing, ugly but thorough
+set_p prepare_prev_before_a2 1 # Required toggle for proper A2 inversion
 
-# 清除有兩個觸發器，管的是兩種不同的情境，缺一不可：
-#   ① 時間軸 — idle-refresh.sh：停手 8 秒清一次。管打字、管讀完一頁停下來。
-#   ② 面積軸 — 核心 auto_refresh：累積滿 threshold 個「整片螢幕」就自己清。
-#      管連續捲動與翻頁——那些每一下都弄髒接近一整片，8 秒的閒置永遠等不到。
+# Clearing has two triggers. They cover two different paths, and both are needed:
+#   1. Time — idle-refresh.sh: clears after 8 seconds of idle. It catches typing,
+#      or a pause at the end of a page.
+#   2. Area — kernel auto_refresh: clears once threshold screen areas accumulate.
+#      It catches continuous scrolling and page turns — updates that redraw most of
+#      the screen and never wait 8 seconds.
 #
-# 🔴 當初 auto_refresh 被設成 0，是因為「打字累積不到門檻」——那個觀察沒錯，
-#    但結論下太寬：打字一個字約 0.0001 片，捲動一次約 1 片，差三個數量級。
-#    同一個門檻對兩者自動成立，關掉它等於把捲動那半也一起丟了。
-# threshold 的單位是「整片螢幕的倍數」，對翻頁式閱讀約等於「幾頁洗一次」。
-# 原廠 20 是給 evince/xournalpp 那種一直重畫的 app 用的，翻頁閱讀要翻二十頁。
-# 4 是維護者實測選的（體感約三頁一次）。
+# 🔴 auto_refresh used to be set to 0 here because "typing never hits the threshold".
+#    That measurement was correct, but the conclusion was too broad: typing a
+#    character repaints 0.0001 screens, and scrolling repaints 1 screen. They are
+#    separated by three orders of magnitude, so the same threshold works for both.
+#    Turning it off threw away the scrolling half.
+#
+# The threshold unit is screen areas, which maps to pages read. The stock 20
+# assumes apps like evince/xournalpp that redraw continuously; reading a book
+# took 20 pages to clear. 4 was chosen after testing (roughly every three pages).
 set_p auto_refresh 0
 set_p refresh_threshold 4
 echo "typing-mode applied"

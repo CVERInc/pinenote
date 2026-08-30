@@ -38,8 +38,9 @@ import Clutter from 'gi://Clutter';
 import Pango from 'gi://Pango';
 import IBus from 'gi://IBus';
 
-// 名字最多兩行。三行的名字（ImageMagick (color depth=q16)）在這台上是異數，
-// 讓它省略，不要讓它去撐高每一格。
+// App names are capped at two lines. A three-line name like "ImageMagick (color
+// depth=q16)" is an outlier on this device. Truncating it prevents those
+// names from stretching the height of every cell in the grid.
 const PN_LABEL_LINES = 2;
 import Cogl from 'gi://Cogl';
 import GObject from 'gi://GObject';
@@ -58,9 +59,11 @@ import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 
 const BUILD = 29;
 
-// 這片面板的物理，是預設狀態不是一個開關。之前它靠我手打 D-Bus，那時候 CSS 還在
-// 撐場面所以只是懶；CSS 覆寫剝掉之後這兩個常數就是承重牆 —— 沒有它們，登入進來
-// 看到的是原廠深色 Adwaita，而不是我們宣稱做出來的那個東西。
+// These represent the panel's physics, as a default state rather than a toggle.
+// They were previously applied manually over D-Bus because CSS overrides were
+// masking the need. With the CSS overrides removed, these two constants are
+// structural — without them, the session boots into stock dark Adwaita instead
+// of the intended e-ink presentation.
 const PN_POSTERISE_LEVELS = 6;
 const PN_POSTERISE_INVERT = true;
 
@@ -266,17 +269,21 @@ function loadStockLayout(groupName) {
 
 const charKeys = str => [...(str ?? '')].map(c => ({label: c, strings: [c]}));
 
-// ── 注音鍵帽 ────────────────────────────────────────────────────────────
-// 大千式（標準）注音鍵盤不是另一套版面 —— 它就是 US 鍵盤，每個鍵多印一個注音
-// 符號。37 個符號＋4 個聲調（一聲＝空白）剛好鋪滿字母區、數字列、和 - ; , . /。
-// chewing 收的是 US keysym、自己映射，所以**鍵盤本身完全不用動**，缺的只有
-// 鍵帽上的印刷。這張表就是印刷：現用引擎是 chewing 時，level 0 的每一格
-// label 換成注音；strings 不碰，送出的鍵完全不變。
+// ── Bopomofo caps ───────────────────────────────────────────────────────────
+// The standard Daqien bopomofo layout is not a separate geometry. It is the US
+// layout with one bopomofo symbol printed on each key. 37 symbols plus 4 tones
+// (first tone is Space) exactly fill the letters, the numbers, and - ; , . /.
+// Chewing receives US keysyms and maps them itself, so the keyboard geometry
+// needs no changes. Only the keycaps need relabelling. This table is that
+// relabelling: when the current engine is chewing, every level 0 key gets a
+// bopomofo label. The `strings` are untouched; the emitted keysyms are unchanged.
 //
-// 只有 level 0：注音沒有 shift 層，shift 層維持大寫字母和符號。
-// 只印注音不印字母：k6 一格 109px（直向 82），1.1em 一個字。iPad 是注音大、
-// 字母小角落 —— 打注音的人看的是注音；而 St.Label 不做雙層排版，兩個字擠一格
-// 會小到都看不清。要字母的人切回 US 就有。
+// Level 0 only: bopomofo has no shift level. Shift remains uppercase latin
+// and symbols.
+// Bopomofo only, no latin: a k6 key is 109px (82px in portrait), with 1.1em text.
+// An iPad shows large bopomofo and small latin corners, because the reader looks
+// for bopomofo. St.Label does not support two-tier layouts, and squeezing two
+// characters into one keycap renders both unreadable. The US layout provides latin.
 const PN_BOPOMOFO = {
     "1": "ㄅ", "q": "ㄆ", "a": "ㄇ", "z": "ㄈ",
     "2": "ㄉ", "w": "ㄊ", "s": "ㄋ", "x": "ㄌ",
@@ -292,7 +299,8 @@ const PN_BOPOMOFO = {
     "6": "ˊ", "3": "ˇ", "4": "ˋ", "7": "˙",
 };
 
-// 現用的 IBus 引擎名。InputSourceManager 是 shell 自己的，不必經過 D-Bus。
+// The active IBus engine name. InputSourceManager is internal to the shell,
+// avoiding a D-Bus round trip.
 function currentEngineId() {
     try {
         const src = InputSourceStatus.getInputSourceManager().currentSource;
@@ -346,29 +354,37 @@ function quantizeRow(row) {
 // does not consult anyway. Stock modes are 3/4/6/8 columns; on this panel the
 // 8-column mode wins and app names ellipsize at about seven characters.
 //
-// 直向是 5 列而不是 6，所以這不是一組轉置。轉置很誘人（兩個方向同樣數量），但
-// 這塊面板做不到：橫向可用區域 936x578、直向 702x807，加上固定高度的搜尋列之後
-// 兩者不是互為倒數，沒有任何一組轉置模式在兩邊都合身。6 列 x 120 = 720 塞進 723，
-// 只剩 3px 可分 —— 行距被壓成 row-spacing 本身（12.6，而橫向是 24.6），同時右邊
-// 空著 148px 而格子是正方形、用不上。5 列之後「兩個方向都塞得下的最大圖示」
-// 不再由直向決定（56 -> 64），橫向每頁仍是 24。代價是兩邊每頁數量不同。
-// 資料夾維持原廠 3x3。試過 4x4：setGridModes 只改畫法，不改容量 —— 分頁是既有的，
-// 於是畫成 4 欄而每頁仍是 9 個，11 個 app 有 2 個留在第二頁，還多一顆換頁箭頭。
-// _updatePages() 只把溢出的往後推；往前拉的 _fillItemVacancies() 叫了也沒有效。
-// 再往下就是自己重寫分頁，而分頁是 shell 用來記住每個 app 位置的東西，不是版面。
+// Portrait is 5 columns instead of 6, so this is not a transpose. A transpose
+// is tempting but physically impossible on this panel: the horizontal usable
+// area is 936x578 and portrait is 702x807. After subtracting the fixed-height
+// search bar, the two orientations are not inverses, and no transposed mode
+// fits both. 6 columns of 120px is 720px squeezed into 723px, leaving 3px to
+// distribute. The row spacing was crushed to 12.6px (compared to 24.6px in
+// landscape), while leaving 148px dead space on the right since cells are
+// square. Dropping to 5 columns means the largest icon size that fits both
+// orientations is no longer constrained by portrait (56 -> 64), while landscape
+// remains at 24 per page. The trade-off is differing capacities per page.
+// Folders remain at the stock 3x3. 4x4 was tested: setGridModes only changes
+// the layout, not the capacity. Pagination is persistent, so a 4-column layout
+// still rendered 9 items per page — a folder of 11 left 2 on the second page
+// and spawned a navigation arrow. _updatePages() only pushes overflows forward;
+// _fillItemVacancies() failed to pull items back. Fixing that requires
+// rewriting pagination entirely, and pagination is state, not geometry.
 
 const PN_GRID_MODES = [
-    {rows: 5, columns: 4},   // 直向
-    {rows: 4, columns: 6},   // 橫向
+    {rows: 5, columns: 4},   // Portrait
+    {rows: 4, columns: 6},   // Landscape
 ];
 
-// ControlsState.APP_GRID。overviewControls.js 沒有 export 這個 enum，而擴充又
-// import 不到模組內的 const，所以這裡寫死 —— 它是 shell 的公開狀態序號
-// (HIDDEN=0, WINDOW_PICKER=1, APP_GRID=2)，不是我們自己編的值。
+// ControlsState.APP_GRID. overviewControls.js does not export this enum, and an
+// extension cannot import a module-scoped const. It is hardcoded here. These
+// are the shell's public state ordinals (HIDDEN=0, WINDOW_PICKER=1,
+// APP_GRID=2), not arbitrary values.
 const PN_STATE_APP_GRID = 2;
 
-// BaseAppViewGridLayout 沒有 export，實例掛在一個內部容器的 layoutManager 上，
-// 沒有穩定的公開路徑 —— 用特徵找它（它是唯一擁有 _getIndicatorsWidth 的 layout）。
+// BaseAppViewGridLayout is not exported. The instance is attached to an
+// internal container's layoutManager without a stable public path. It is found
+// by feature detection, as the only layout with _getIndicatorsWidth.
 function pnFindGridLayout(actor) {
     if (!actor)
         return null;
@@ -411,9 +427,10 @@ function relabel(rows, map) {
         k => (k.label && map[k.label] !== undefined ? {...k, label: map[k.label]} : k)));
 }
 
-// 照鍵**送出的字**查表，不照它顯示的字。stock layout 的字母鍵沒有 label，只有
-// strings；我們自己造的 charKeys 兩者都有。這個版本兩種都認，只設 label ——
-// strings 不碰，送出去的鍵一個都不變。
+// Relabel by what the key emits, not by what it shows. The stock layout's
+// letter keys lack a label and only have strings. The charKeys we build have
+// both. This logic accepts either and only modifies the label. The strings are
+// untouched, leaving the emitted keysyms unchanged.
 function relabelByString(rows, map) {
     if (!map)
         return rows;
@@ -443,15 +460,17 @@ const byIcon = name => {
 };
 const byAction = name => k => k.action === name;
 
-// 🔴 原廠版面 JSON 裡 keyval 是**十六進位字串**（'0xff0d'），不是數字。
+// 🔴 In the stock layout JSON, keyval is a hexadecimal string ('0xff0d'), not a number.
 //
-// 給數字不會報錯，會送錯：parseInt(65307, 16) 在 JS 裡先把數字轉成 "65307"
-// 再當十六進位解，得到 0x65307 = 414983，一顆完全不同的鍵。症狀因此是
-// 「按了沒反應」而不是任何一行錯誤訊息。
+// Providing a number does not throw; it emits the wrong key. parseInt(65307, 16)
+// coerces the number to "65307" before parsing it as hex, resulting in 0x65307
+// = 414983, which is an entirely different keysym. The symptom was a dead key,
+// not an error in the journal.
 //
-// 從原廠撈來重用的鍵（Enter、Backspace、四個方向鍵）自帶字串，所以一直是好的；
-// 壞的正好就是我們自己造的那五種：Esc、Home、End、PgUp、PgDn。壞掉的集合和
-// 「我們自己造的」集合完全重合，那個分割就是診斷本身。
+// Keys salvaged from the stock layout (Enter, Backspace, arrows) carried their
+// strings and worked correctly. The broken ones were the five we built: Esc,
+// Home, End, PgUp, PgDn. The broken set mapped exactly to the bespoke set,
+// which isolated the cause.
 const hexKeyval = n => {
     if (typeof n !== 'number') {
         console.error(`pn-osk: hexKeyval expects a number, got ${typeof n} (${n})`);
@@ -460,8 +479,8 @@ const hexKeyval = n => {
     return `0x${n.toString(16)}`;
 };
 
-// 出廠前自己看一眼：任何 keyval 不是字串就出聲。這一條就是上面那個缺陷
-// 從裝上那天起沒有被抓到的原因——沒有人問過送出去的是什麼型別。
+// Verify before yielding: log if any keyval is not a string. The failure to
+// check this type was why the bug above survived unnoticed since installation.
 function auditKeyvals(rows, where) {
     for (const row of rows ?? []) {
         for (const k of row ?? []) {
@@ -542,9 +561,11 @@ export default class PineNoteOskExtension extends Extension {
             const monitor = Main.layoutManager.keyboardMonitor;
             const landscape = !monitor || monitor.width > monitor.height;
             this._pnBuiltLandscape = landscape;
-            // 終端機是這個版面的出身，但 Esc／Tab／數字排在一般文字輸入裡一樣要用
-            // —— 資料夾改名沒有 Esc 就只能送出、不能取消。專用用途（密碼、數字、
-            // 電話、Email、URL）留給 GNOME：那些它會給專門的版面，蓋掉只會更糟。
+            // The terminal is this layout's origin, but Esc, Tab, and the number row
+            // remain necessary for standard text input. Renaming a folder without Esc
+            // forces a commit. Specific purposes (password, number, phone, email, URL)
+            // are left to GNOME, which provides specialized layouts for them;
+            // overriding those would be a regression.
             const composeFor = [
                 Clutter.InputContentPurpose.TERMINAL,
                 Clutter.InputContentPurpose.NORMAL,
@@ -593,7 +614,8 @@ export default class PineNoteOskExtension extends Extension {
         this._rebuild();
         console.log(`[pn-osk] enabled, build=${BUILD}`);
 
-        // app grid = 全螢幕啟動器：收回工作區預覽與 dash 佔的垂直空間
+        // App grid as full-screen launcher: reclaim the vertical space reserved
+        // for workspace previews and the dash.
         this._pnLaunchpadTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2000, () => {
             this._pnLaunchpadTimeoutId = 0;
             this._pnInstallLaunchpad();
@@ -612,8 +634,9 @@ export default class PineNoteOskExtension extends Extension {
             return GLib.SOURCE_REMOVE;
         });
 
-        // 量化器。跟上面兩條同一個 2 秒的理由：這些 actor 在 enable() 當下還沒
-        // 全部就位，而 _pnContentActors 要的 _workspacesDisplay 尤其晚。
+        // The posteriser. This shares the 2-second delay with the two above
+        // because these actors are not initialized during enable(), and
+        // _workspacesDisplay arrives particularly late.
         this._pnPosteriseTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 3000, () => {
             this._pnPosteriseTimeoutId = 0;
             try {
@@ -632,8 +655,9 @@ export default class PineNoteOskExtension extends Extension {
         if (!layout || this._pnLaunchpadInstalled)
             return;
 
-        // 1) 工作區預覽在 APP_GRID 下高度歸零。AppDisplay 的位置是從這個 box 的
-        //    高度算出來的，所以歸零之後它會自己往上移，不必碰任何座標。
+        // 1) Set workspace preview height to zero in APP_GRID. AppDisplay
+        //    computes its own position from this box's height, so it moves up
+        //    automatically without requiring explicit coordinate changes.
         this._pnOrigWorkspacesBox = layout._computeWorkspacesBoxForState;
         layout._computeWorkspacesBoxForState = (state, ...args) => {
             const box = this._pnOrigWorkspacesBox.call(layout, state, ...args);
@@ -642,8 +666,8 @@ export default class PineNoteOskExtension extends Extension {
             return box;
         };
 
-        // 2) AppDisplay 在 APP_GRID 下吃到螢幕底部。原本的算式會扣掉 dashHeight，
-        //    而我們正要把那塊還給它。
+        // 2) Expand AppDisplay to the bottom edge in APP_GRID. The stock math
+        //    subtracts dashHeight, which is the space being reclaimed.
         this._pnOrigAppDisplayBox = layout._getAppDisplayBoxForState;
         layout._getAppDisplayBoxForState =
             (state, box, searchHeight, dashHeight, workspacesBox, spacing) => {
@@ -654,9 +678,10 @@ export default class PineNoteOskExtension extends Extension {
                 const [width, height] = box.get_size();
                 const startY = layout._workAreaBox.y1;
                 const appBox = new Clutter.ActorBox();
-                // 從搜尋框那一列開始，而不是從它下面 —— 多出來的這一段是要
-                // 借給換頁箭頭站的地方。grid 自己會在下面的 allocate 裡往下推，
-                // 所以視覺上內容仍從搜尋框之下開始。
+                // Start from the search bar's row rather than below it. This extra
+                // space is borrowed for the pagination arrows. The grid pushes itself
+                // down during its own allocate, leaving the visual content starting
+                // below the search bar.
                 // Reserve a band at the bottom for the page indicators. Handing
                 // the whole screen to the grid pushed them against the edge:
                 // measured, their ink ended 5 device pixels from the bottom in
@@ -670,27 +695,31 @@ export default class PineNoteOskExtension extends Extension {
                     Math.round((width - appWidth) / 2),
                     startY + searchHeight + spacing);
                 appBox.set_size(appWidth, appHeight);
-                // 讓 grid 知道要讓出多少（searchHeight + spacing）
+                // Expose the reserved height (searchHeight + spacing) for the grid.
                 this._pnTopInset = searchHeight + spacing;
                 return appBox;
             };
 
-        // 3) dash 在 APP_GRID 下讓開。佈局仍然會分配它（那段不是獨立函式，硬拆
-        //    風險大於收益），所以用不可見 + 不可點來讓它退場。
+        // 3) Hide the dash in APP_GRID. The layout process still allocates it,
+        //    and extracting that logic is not worth the risk. It is removed by
+        //    making it invisible and unclickable.
         this._pnStateSignal = controls._stateAdjustment.connect('notify::value', () => {
             const v = controls._stateAdjustment.value;
             const inAppGrid = v > 1.5;
             controls.dash.opacity = inAppGrid ? 0 : 255;
             controls.dash.reactive = !inAppGrid;
-            // 零高度的 box 不會讓元件消失 —— 它會改用自己的最小尺寸把自己畫出來，
-            // 於是變成畫面右半邊那塊黑。要讓它真的退場得動 visible。
+            // A zero-height box does not remove an actor; it draws itself at its
+            // minimum size, which manifested as a black rectangle on the right.
+            // Removing it requires setting visible to false.
             const wd = controls._workspacesDisplay;
             if (wd)
                 wd.visible = !inAppGrid;
         });
 
-        // 收回左右給箭頭的走道：那條留白與箭頭的容身處是同一個數字，
-        // 壓到 0 之後 grid 吃滿寬度，箭頭落在邊緣，翻頁另有觸控滑動。
+        // Reclaim the horizontal gutters reserved for arrows. The margin and the
+        // arrow allocation are the same value. Setting it to 0 allows the grid
+        // to fill the width. The arrows rest on the edge, and paging is still
+        // accessible via swipe.
         const gridLayout = pnFindGridLayout(controls._appDisplay);
         if (gridLayout) {
             this._pnGridLayout = gridLayout;
@@ -701,8 +730,9 @@ export default class PineNoteOskExtension extends Extension {
             this._pnFloatArrows();
             this._pnInstallLabelWrap();
 
-            // 量測要等第一次配置，快取不用 —— 先套上去，第一幀就是對的。
-            // 之後 _pnSyncIconSize 照樣量，不一樣就更新。
+            // Measurement requires the first layout pass, but the cache does not.
+            // Applying the cache ensures the first frame is correct.
+            // _pnSyncIconSize will still measure and update if it diverges.
             const cached = this._pnReadCachedIconSize();
             const lm0 = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
             if (cached && lm0 && lm0.fixedIconSize !== cached)
@@ -734,8 +764,9 @@ export default class PineNoteOskExtension extends Extension {
         const origAllocate = proto.vfunc_allocate;
         proto._pnOrigAllocate = origAllocate;
         proto.vfunc_allocate = function (container, box) {
-            // 直接問搜尋框本人，不靠跨物件傳遞的變數 —— 那兩個 allocate
-            // 的時機不保證同步，第一輪必然拿到 0。
+            // Read from the search entry directly instead of relying on variables
+            // passed between objects. The two allocate calls are not guaranteed to
+            // be synchronous, and the first pass reliably returned 0.
             const controls = pnOverviewControls();
             const entry = controls?._searchEntryBin ?? controls?._searchEntry;
             const inset = entry ? entry.height + Math.round(entry.height * 0.15) : 0;
@@ -744,13 +775,13 @@ export default class PineNoteOskExtension extends Extension {
                 return;
             }
 
-            // grid 讓出頂部那一列
+            // The grid yields the top row.
             const gridBox = box.copy();
             gridBox.y1 += inset;
             this._grid.indicatorsPadding = new Clutter.Margin({left: 0, right: 0});
             this._scrollView.allocate(gridBox);
 
-            // 箭頭擺在讓出來的那一列的兩端
+            // The arrows are placed at the ends of the yielded row.
             const ltr = container.get_text_direction() !== Clutter.TextDirection.RTL;
             const [width] = box.get_size();
             const side = Math.round(width * 0.12);
@@ -793,12 +824,15 @@ export default class PineNoteOskExtension extends Extension {
         this._pnArrowsMoved = false;
     }
 
-// 標籤寬度：第一輪先給一個接近現況格子（119 − tile padding）的值，量完
-    // 真正的 childSize 之後第二輪再由畫布反推。不用猜的那一版在下一個 commit。
-    // 🔴 模式（幾欄幾列）必須從螢幕比例決定，不能從頁面尺寸決定。
-    // 頁面寬度現在是我們算出來的，而 _findBestModeForSize 拿它回頭挑模式 ——
-    // 輸出變成輸入，於是轉向之後它讀到的是舊方向那個窄畫布，選了舊方向的模式，
-    // 舊方向的模式又讓畫布繼續窄下去。自我肯定的迴圈，鎖死在直向。
+    // Label width: the first pass provides a value close to the current cell
+    // (119 - tile padding), and the second pass computes it from the canvas
+    // once childSize is known.
+    // 🔴 The mode (column and row counts) must be derived from the screen ratio,
+    // not from the page size. The page width is now computed, and passing it
+    // back into _findBestModeForSize turns the output into the input. After
+    // rotation, it read the narrow canvas from the previous orientation, selected
+    // the mode for that orientation, which kept the canvas narrow. This loop
+    // locked the layout into portrait mode.
     _pnInstallModeChoice() {
         const grid = pnOverviewControls()?._appDisplay?._grid;
         if (!grid || grid._pnOrigFindBestMode)
@@ -819,9 +853,11 @@ export default class PineNoteOskExtension extends Extension {
                     best = i;
                 }
             }
-            // 🔴 原版不是「回傳索引給呼叫端」—— 它自己就呼叫 _setGridMode，而
-            // vfunc_allocate 對回傳值一個字都沒用。只回傳的版本＝模式從安裝那一刻
-            // 起就凍住（凍在安裝時的方向），而且看起來完全正常，因為安裝時剛好對。
+            // 🔴 The stock function does not merely return the index to the
+            // caller; it calls _setGridMode itself, and vfunc_allocate ignores
+            // the return value completely. A version that only returned the value
+            // froze the mode at the orientation active during installation, which
+            // appeared correct because that orientation was right at the time.
             grid._setGridMode(best);
             return best;
         };
@@ -839,9 +875,11 @@ export default class PineNoteOskExtension extends Extension {
         grid.queue_relayout();
     }
 
-    // 量出來的圖示尺寸留一份。它只能在第一次配置之後才算得出來（要 _pageHeight），
-    // 所以沒有快取的話，開機後第一幀一定是 _findBestIconSize 從梯子上挑的那個
-    // ——實測 96，而正確答案是 64，使用者看到的就是「先大再縮」。
+    // Cache the measured icon size. It can only be computed after the first
+    // allocation pass because it requires _pageHeight. Without a cache, the
+    // first frame after boot uses the fallback from _findBestIconSize. That
+    // returned 96 when the correct value was 64, which manifested as a visible
+    // shrink on screen.
     _pnIconSizeCachePath() {
         return GLib.build_filenamev([GLib.get_user_cache_dir(), "pn-osk-iconsize"]);
     }
@@ -862,13 +900,15 @@ export default class PineNoteOskExtension extends Extension {
         try {
             GLib.file_set_contents(this._pnIconSizeCachePath(), `${size}\n`);
         } catch (e) {
-            // 快取寫不進去只是下次會再閃一下，不值得讓它中斷別的事
+            // A cache write failure means the next boot will shrink again. It is
+            // not worth interrupting other operations.
             console.log(`[pn-osk] icon size cache not written: ${e.name}`);
         }
     }
 
-    // 圖示大小該是常數，不是餘數。兩個方向各算一次「每格容得下多大」，取小的那個 ——
-    // 這樣轉螢幕時圖示不動，動的是間距，跟 iPad 一樣。
+    // Icon size is a constant, not a remainder. Compute the maximum fit for both
+    // orientations and take the smaller one. This ensures icons do not resize
+    // during rotation; only the spacing changes.
     _pnSyncIconSize() {
         const lm = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
         const grid = pnOverviewControls()?._appDisplay?._grid;
@@ -877,14 +917,16 @@ export default class PineNoteOskExtension extends Extension {
         if (!lm || !grid || !mon || !pad || !lm._pageHeight)
             return;
 
-        // 格子 = 圖示 + 固定開銷（兩行標籤 + tile padding）。這個差值跟圖示大小無關，
-        // 所以現在量一次就能拿去推算任何圖示尺寸下的格子大小。
+        // Cell = icon + fixed overhead (two-line label + tile padding). This
+        // difference is independent of icon size, so measuring it once allows
+        // computing the cell size for any icon size.
         const overhead = lm._getChildrenMaxSize() - lm.iconSize;
         if (overhead <= 0)
             return;
 
-        // 面板 + 搜尋列 + grid 自己的邊界。用量的，不要用推的 —— 這一段今天已經
-        // 讓兩軸的縫差了 16px 一次。
+        // Top panel + search bar + grid margins. Measure this rather than
+        // deriving it. Deriving it resulted in a 16px discrepancy between the
+        // two axes.
         const chromeV = mon.height - lm._pageHeight;
 
         const modes = grid._gridModes ?? [];
@@ -903,7 +945,7 @@ export default class PineNoteOskExtension extends Extension {
         };
 
         let fits = Infinity;
-        // 現在這個方向，以及轉過去的那個方向
+        // The current orientation, and the other one.
         for (const [w, h] of [[mon.width, mon.height], [mon.height, mon.width]]) {
             const pageH = h - chromeV;
             const mode = pickMode(w, pageH);
@@ -918,17 +960,21 @@ export default class PineNoteOskExtension extends Extension {
         if (!Number.isFinite(fits))
             return;
 
-        // 上限留在 96：那是主題與圖示主題都預期的最大尺寸，再上去是另一個題目。
-        // 吸附到 4 的倍數。chromeV（面板＋搜尋列）只量得到當下這個方向，兩個方向
-        // 之間差了幾個 px，直接用會讓圖示在轉向時跳 1px —— 正是這整件事要消滅的
-        // 東西。吸附把量測雜訊吃掉，代價最多 3px。
+        // The ceiling remains 96: that is the maximum size expected by the shell
+        // and icon themes. Going larger requires a separate solution.
+        // Snap to a multiple of 4. chromeV (panel + search bar) can only be
+        // measured for the active orientation, and the two differ by a few pixels.
+        // Using the raw value caused icons to jump by 1px during rotation — the
+        // exact behavior this layout prevents. Snapping absorbs the measurement
+        // noise at the cost of 3px at most.
         const raw = Math.max(16, Math.min(96, fits - overhead));
         const size = Math.floor(raw / 4) * 4;
         if (lm.fixedIconSize === size || this._pnIconSizePending === size)
             return;
-        // 這個方法是從配置途中叫到的（那是唯一 _pageHeight 已經有值的時機）。
-        // 在那裡改屬性再 layout_changed 等於在配置中途要求重新配置 —— 排到 idle
-        // 去做，讓這一幀先畫完。
+        // This is called during the allocation pass, which is the only time
+        // _pageHeight has a value. Changing properties and triggering a
+        // layout_changed there requests a layout inside a layout pass. Defers to
+        // idle to let the current frame complete.
         this._pnIconSizePending = size;
         GLib.idle_add(GLib.PRIORITY_DEFAULT, () => {
             this._pnIconSizePending = null;
@@ -942,18 +988,22 @@ export default class PineNoteOskExtension extends Extension {
         });
     }
 
-    // 格子是正方形，邊長由高度決定 —— 那是硬的。所以寬度不該是「螢幕有多寬」，
-    // 而是「要多寬，水平間距才會等於垂直間距」。算得出來就不必靠 max-column-spacing
-    // 去夾，也不會有夾完剩下的死留白。
+    // Cells are square, and edge length is dictated by height. That is a hard
+    // constraint. The width should not be "the screen width", but "the width
+    // required for horizontal spacing to equal vertical spacing". Computing this
+    // directly removes the need to clamp via max-column-spacing, which eliminates
+    // the dead space left behind by the clamp.
     _pnCanvasWidth(fullWidth, height) {
         const lm = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
         if (!lm?._getChildrenMaxSize)
             return fullWidth;
         this._pnSyncIconSize();
 
-        // 每次都重新量：childSize 是快取的，而標籤的高度是在畫布算完之後才
-        // 生效的 —— 用上一幀的邊長算出來的寬度，會讓兩軸的縫差一截（19.4 對 14）。
-        // 26 個 item 重量一次的成本遠低於「版面永遠慢一拍」。
+        // Re-measure every time: childSize is cached, and the label height is
+        // only valid after the canvas is computed. Computing width from the
+        // previous frame's edge length caused the gaps to diverge (19.4 vs 14).
+        // The cost of re-measuring 26 items is cheaper than a layout that is
+        // permanently one frame behind.
         lm._childrenMaxSize = -1;
         const cell = lm._getChildrenMaxSize();
         const rows = lm.rowsPerPage;
@@ -962,20 +1012,22 @@ export default class PineNoteOskExtension extends Extension {
         if (!cell || rows < 2 || cols < 2 || !pad)
             return fullWidth;
 
-        // 🔴 高度要跟 layout 拿，不要用我自己算的那個。我傳進來的 appHeight 是
-        // 「我給 AppDisplay 的框」，而垂直間距是 grid 用 _pageHeight 算的，兩者
-        // 差了 16px（grid 自己的邊界）。用錯的那個，公式再對也對不齊：
-        // 算出 19.3 的縫，而 layout 那邊是 14。同一個量只能有一個來源。
+        // 🔴 Read height from the layout, not from our computed value. The
+        // appHeight passed here is the box given to AppDisplay, while the grid
+        // computes vertical spacing from _pageHeight. The two differ by 16px
+        // (the grid's own margins). Using the wrong one yielded a 19.3px gap when
+        // the layout used 14px. A single value needs a single source of truth.
         const h = lm._pageHeight || height;
         const emptyV = h - pad.top - pad.bottom - cell * rows -
             lm.rowSpacing * (rows - 1);
-        // 上限會夾住實際的縫寬，剩下的由 layout 變成上下置中的留白。畫布要照
-        // **夾過之後**的那個值算，不然水平會比垂直寬一截。
+        // The maximum limits the actual gap, and the layout turns the remainder
+        // into vertical margins. The canvas must be computed using the
+        // **clamped** value; otherwise the horizontal gap will be wider.
         const rawGap = lm.rowSpacing + Math.max(emptyV, 0) / (rows - 1);
         const gap = lm.maxRowSpacing > 0
             ? Math.min(rawGap, lm.maxRowSpacing) : rawGap;
 
-        // 同樣的縫寬套到水平，反推畫布
+        // Apply the same gap to the horizontal axis to compute the canvas.
         const want = cell * cols + gap * (cols - 1) + pad.left + pad.right;
         return Math.round(Math.min(fullWidth, Math.max(want, cell * cols)));
     }
@@ -999,28 +1051,35 @@ export default class PineNoteOskExtension extends Extension {
                 ellipsize: ct.ellipsize,
                 width: label.width,
                 height: label.height,
-                // 折行之前量一次單行高度 —— 折行之後就再也量不到了
+                // Measure the single-line height before wrapping is enabled. It
+                // cannot be measured afterwards.
                 oneLine: label.get_preferred_height(-1)[1],
             };
         }
-        // 先夾寬度再開折行 —— 順序反過來的話中間那一幀的自然寬度是整行文字
+        // Constrain width before enabling line wrap. If reversed, the natural
+        // width during the intermediate frame is the entire string of text.
         label.set_width(this._pnLabelWidth());
-        // 釘死兩行的高度。不釘的話 _getChildrenMaxSize 拿 get_preferred_height(-1)
-        // 量到的是「不限寬」＝一行，第二行不會有人替它出高度，第三行直接掉出畫面。
+        // Pin the height to two lines. Without this, _getChildrenMaxSize calls
+        // get_preferred_height(-1), which measures unbounded width (one line).
+        // The second line receives no allocation, and the third line is pushed
+        // out of bounds.
         label.set_height(item._pnWrapSaved.oneLine * PN_LABEL_LINES);
         ct.set({
-            // BaseIcon 建構時設的是 CENTER —— 單行名字會浮在預留的兩行正中間，
-            // 跟圖示之間空一截。靠上才貼著圖示。
+            // BaseIcon sets CENTER during construction. A single-line name will
+            // float in the middle of the two-line space, leaving a gap above it.
+            // START alignment keeps it flush with the icon.
             y_align: Clutter.ActorAlign.START,
             line_wrap: true,
             line_wrap_mode: Pango.WrapMode.WORD_CHAR,
-            // 折了還是放不下（例如一個長到沒有空白可斷的字）才省略
+            // Ellipsize only if it still overflows after wrapping (e.g., a word
+            // with no breaks).
             ellipsize: Pango.EllipsizeMode.END,
         });
     }
 
-    // 只設 fixedIconSize 不夠：真正在畫的是 _iconSize，而它只在 adaptToSize
-    // 發現頁面尺寸變了、排一個 BEFORE_REDRAW 的 later 時才重算。直接做那件事。
+    // Setting fixedIconSize is insufficient: the renderer reads _iconSize, which
+    // is only updated when adaptToSize observes a page size change and schedules
+    // a BEFORE_REDRAW pass. This applies the update directly.
     _pnApplyIconSize(lm, size) {
         lm.fixedIconSize = size;
         lm._iconSize = size;
@@ -1030,16 +1089,19 @@ export default class PineNoteOskExtension extends Extension {
         lm.layout_changed();
     }
 
-    // 改名的入口從那顆筆換成「點標題」。筆藏起來（toggle 的 checked 照樣設得動），
-    // 熱區加進 Shell.Stack —— 它是疊的不是排的，所以熱區自然就蓋住標題。
+    // The entry point for renaming changes from the pencil button to a title tap.
+    // The button is hidden (its checked state can still be toggled). The tap area
+    // is added to the Shell.Stack, which stacks its children, placing the tap area
+    // over the title.
     _pnInstallTitleTap(dialog) {
         const btn = dialog?._editButton;
         const stack = dialog?._folderNameLabel?.get_parent();
         if (!btn || !stack || dialog._pnTitleTap)
             return;
 
-        // 藏起來而不是塗掉：BoxLayout 不會替隱形的孩子留位置，而 ghostButton 的
-        // 尺寸綁在它身上 ⇒ 佔位一起歸零，標題置中到全寬。
+        // Hide rather than make invisible: BoxLayout allocates no space for hidden
+        // children. The ghostButton's size is bound to it, so its allocation drops
+        // to zero, allowing the title to center across the full width.
         btn.hide();
 
         const tap = new St.Button({
@@ -1054,8 +1116,9 @@ export default class PineNoteOskExtension extends Extension {
 
         tap.connect("clicked", () => (btn.checked = true));
 
-        // 🔴 編輯中一定要讓開。不讓開的話熱區會蓋在 input 上，游標點不進去 ——
-        // 而且症狀是「改名功能壞了」，看不出是熱區造成的。
+        // 🔴 The tap area must yield during editing. Otherwise, it covers the
+        // text input, preventing the cursor from being placed. The symptom was a
+        // broken rename feature, without an obvious link to the tap area.
         const sync = () => (tap.visible = !btn.checked);
         dialog._pnTitleTapSignal = btn.connect("notify::checked", sync);
         sync();
@@ -1073,10 +1136,11 @@ export default class PineNoteOskExtension extends Extension {
         dialog._editButton?.show();
     }
 
-    // 資料夾的圖示跟 Launcher 一樣大。FolderGrid 是獨立的 layout manager，所以
-    // 外層釘的尺寸不會自動套過來；而它的預設是 IconSize.LARGE（96），在原廠
-    // 720 的對話框裡剛好塞得下，於是一旦把對話框縮小就會被擠成 64 —— 那一下
-    // 就是「先大再縮」。在 popup 之前釘好，第一幀就是對的。
+    // Folder icons match the launcher size. FolderGrid uses a separate layout
+    // manager, so the outer icon size does not inherit. Its default is
+    // IconSize.LARGE (96), which fits precisely in the stock 720px dialog.
+    // Shrinking the dialog crushed the icons to 64, which manifested as a visible
+    // shrink. Pinning the size before the popup ensures the first frame is correct.
     _pnSyncFolderIconSize(view) {
         const lm = view?._grid?.layout_manager;
         const outer = pnOverviewControls()?._appDisplay?._grid?.layout_manager;
@@ -1086,7 +1150,8 @@ export default class PineNoteOskExtension extends Extension {
         this._pnApplyIconSize(lm, size);
     }
 
-    // 資料夾裡的項目是 FolderView 自己的一組，不在 appDisplay._orderedItems 裡。
+    // Folder items are managed by the FolderView itself, separate from
+    // appDisplay._orderedItems.
     _pnApplyWrapToView(view) {
         for (const item of view?._orderedItems ?? [])
             this._pnApplyWrap(item);
@@ -1102,8 +1167,9 @@ export default class PineNoteOskExtension extends Extension {
         const apply = () => {
             for (const item of appDisplay._orderedItems ?? []) {
                 this._pnApplyWrap(item);
-                // 資料夾的內容現在就在（FolderIcon.view），不必等對話框建立 ——
-                // 等到那時候才套，第一幀已經用沒折行的尺寸畫過一次了。
+                // Folder content exists now (FolderIcon.view) and does not need
+                // to wait for the dialog. Waiting until the dialog is built means
+                // the first frame is already drawn without wrapping.
                 if (item.view) {
                     this._pnSyncFolderIconSize(item.view);
                     this._pnApplyWrapToView(item.view);
@@ -1112,7 +1178,8 @@ export default class PineNoteOskExtension extends Extension {
             appDisplay._grid?.layout_manager?.layout_changed();
         };
         apply();
-        // 裝了新 app 之後 grid 會重建 —— 沒有這條，新來的那顆會是唯一被截斷的
+        // The grid is rebuilt after an app installation. Without this, the new
+        // icon would be the only one with truncated text.
         this._pnWrapViewSignal = appDisplay.connect('view-loaded', apply);
     }
 
@@ -1152,34 +1219,40 @@ export default class PineNoteOskExtension extends Extension {
         if (!prev || !next)
             return;
 
-        // 記住原本的家：disable 時要還回去，替身也要住進去（見下）
+        // Store the original parent: required for restoration on disable, and
+        // the decoys must reside there (see below).
         this._pnArrowHome = prev.get_parent();
         this._pnArrows = {prev, next};
 
         for (const arrow of [prev, next]) {
             arrow.get_parent()?.remove_child(arrow);
-            // 一顆一顆 addChrome，不是先做一個鋪滿螢幕的層再把它們放進去。
-            // 那個層帶著 affectsInputRegion，等於在畫面上蓋一張透明壓克力板，
-            // 連頂列都點不動 —— 箭頭要能點就得進輸入區，但只有箭頭需要。
+            // Call addChrome for each arrow instead of adding a full-screen layer
+            // to hold them. A full-screen layer carries affectsInputRegion, which
+            // acts as a transparent sheet over the screen, deadening taps even on
+            // the top bar. The arrows need input region, but only the arrows do.
             Main.layoutManager.addChrome(arrow, {
                 trackFullscreen: false,
                 affectsStruts: false,
                 affectsInputRegion: true,
             });
             arrow.reactive = true;
-            // CENTER 對齊要 parent 分配 box 才有尺寸，chrome 不做這件事
+            // CENTER alignment requires a parent box to compute size, which chrome
+            // does not provide.
             arrow.x_align = Clutter.ActorAlign.START;
             arrow.y_align = Clutter.ActorAlign.START;
         }
 
-        // grid 的 allocate 仍會直接對 layout 上那兩個屬性指到的 actor 下
-        // allocate（Clutter 允許對非自己 child 的 actor 這樣做），把它們壓回
-        // 零寬的 indicators box。換成替身，讓它去挨那一下。
+        // The grid's allocate still calls allocate on the actors pointed to by
+        // those two layout properties (Clutter allows this for non-children),
+        // crushing them back into the zero-width indicators box. Providing
+        // decoys redirects that pass.
         //
-        // 🔴 替身必須有父節點：upstream 用 show()/hide() + ease({opacity}) 控制
-        // 顯隱，而 ClutterTransition 的時間軸跟著 stage 走。無父節點 ⇒ 沒有
-        // stage ⇒ 動畫不會跑完 ⇒ onComplete 裡的 hide() 永遠不發生。放回箭頭
-        // 原本的家，它們才收得到完整的週期，而我們鏡射得到正確結果。
+        // 🔴 Decoys must have a parent: upstream uses show()/hide() combined with
+        // ease({opacity}) for visibility, and ClutterTransition timelines are
+        // bound to the stage. No parent means no stage, so the animation never
+        // finishes and the hide() inside onComplete never fires. Putting them in
+        // the arrows' original container ensures they complete their lifecycle and
+        // our state reflects the correct outcome.
         this._pnDecoys = {
             prev: new St.Widget({name: "pn-arrow-decoy-prev"}),
             next: new St.Widget({name: "pn-arrow-decoy-next"}),
@@ -1203,8 +1276,10 @@ export default class PineNoteOskExtension extends Extension {
             "notify::value", () => this._pnPositionArrows());
         this._pnArrowMonitorSignal = Main.layoutManager.connect(
             "monitors-changed", () => this._pnPositionArrows());
-        // 狀態動畫跑完 ≠ 版面安定。箭頭的座標來自搜尋框和 grid 的實際位置，
-        // 所以要等它們真的配置好 —— allocation 每次安定都會發一次，轉向也是。
+        // Animation completion does not equal layout stability. Arrow coordinates
+        // are derived from the physical bounds of the search entry and the grid.
+        // Waiting for the allocation signal ensures they are correctly positioned,
+        // which fires on every layout stabilization and rotation.
         this._pnArrowAllocTarget = controls._appDisplay;
         this._pnArrowAllocSignal = this._pnArrowAllocTarget?.connect(
             "notify::allocation", () => {
@@ -1218,10 +1293,12 @@ export default class PineNoteOskExtension extends Extension {
             });
     }
 
-    // 資料夾對話框打開時，我們的浮動箭頭要退場。它是 addChrome 上去的、浮在整個
-    // shell 之上，而判斷依據只有 _stateAdjustment —— 對話框打開時狀態仍是 APP_GRID，
-    // 所以它不知道有東西蓋上來了。AppDisplay 沒有對外的訊號，但 addFolderDialog 是
-    // 普通方法，包一層就能在每個對話框身上接到 open-state-changed。
+    // The floating arrows must hide when a folder dialog is open. They are
+    // attached via addChrome, floating above the shell, and only read from
+    // _stateAdjustment. The state remains APP_GRID during a dialog, so they
+    // have no awareness of the overlay. AppDisplay lacks a public signal, but
+    // addFolderDialog is a standard method. Wrapping it provides access to the
+    // open-state-changed signal on every dialog.
     _pnInstallDialogWatch() {
         const appDisplay = pnOverviewControls()?._appDisplay;
         if (!appDisplay || appDisplay._pnOrigAddFolderDialog)
@@ -1234,19 +1311,21 @@ export default class PineNoteOskExtension extends Extension {
             ext._pnAdoptDialog(dialog);
         };
 
-        // 🔴 掛 hook 只接得到**未來**出生的對話框，而 FolderIcon 會把它建過的那個
-        // 快取在 `_dialog` 上 —— disable/enable 一輪（每次重載 stylesheet 都是一輪，
-        // GNOME 自己也會做）之後，既有的那些永遠等不到 addFolderDialog 再被呼叫，
-        // 補丁就這樣安靜地不見了：鉛筆鈕回來、點標題改名的熱區消失。
-        // 症狀看起來像「功能被刪掉了」，其實是**認養名單漏掉了已經在場的人**。
+        // 🔴 A hook only catches dialogs instantiated **after** it is applied.
+        // FolderIcon caches its dialog on `_dialog`, so after a disable/enable
+        // cycle (which GNOME does on every stylesheet reload), the existing
+        // dialogs never trigger addFolderDialog again. The patch fails silently:
+        // the pencil button returns and the title tap area drops. The symptom
+        // looked like the feature had been removed, but the cause was **failing
+        // to adopt dialogs that already existed**.
         for (const item of appDisplay._orderedItems ?? []) {
             if (item._dialog)
                 this._pnAdoptDialog(item._dialog);
         }
     }
 
-    // 一個對話框該被做的所有事，建立時和事後認養共用同一份 —— 分成兩份寫，
-    // 遲早會有一邊漏掉一項。
+    // Everything done to a dialog is shared between creation and adoption — split
+    // it in two, and one side eventually misses an item.
     _pnAdoptDialog(dialog) {
         if (!dialog || this._pnDialogs?.has(dialog))
             return;
@@ -1255,13 +1334,16 @@ export default class PineNoteOskExtension extends Extension {
         this._pnInstallTitleTap(dialog);
         this._pnDialogs.add(dialog);
         dialog.connect("destroy", () => ext._pnDialogs.delete(dialog));
-        // dialog._view 是 FolderView，_grid 是 FolderGrid（它自己的 layout
-        // manager，跟外層 grid 無關，所以釘死的圖示尺寸不會套到這裡）
+        // dialog._view is a FolderView, _grid is a FolderGrid (its own layout
+        // manager, independent of the outer grid, so the pinned icon size does
+        // not apply here)
         this._pnApplyWrapToView(dialog._view);
-        // 原版的 handler 先接、先跑，所以我們讀到的 _displayingDialog 已經是新值
+        // The original handler connects and runs first, so the _displayingDialog
+        // we read is already the new value
         dialog.connect('open-state-changed', (o, isOpen) => {
             ext._pnSyncArrowVisibility();
-            // 項目是延遲建立的 —— 包裝當下跑一次會漏掉還沒生出來的那些
+            // Items are created lazily — running this at wrap time misses the ones
+            // not yet built
             if (isOpen) {
                 ext._pnSyncFolderIconSize(dialog._view);
                 ext._pnApplyWrapToView(dialog._view);
@@ -1281,9 +1363,11 @@ export default class PineNoteOskExtension extends Extension {
         delete appDisplay._pnOrigAddFolderDialog;
     }
 
-    // 真箭頭該不該出現 = 「upstream 認為該不該出現」AND「現在在 app grid」。
-    // 前半直接讀替身 —— 第一頁沒有 prev、最後一頁沒有 next 那段數學是
-    // upstream 的 _syncPageIndicators 算的，沒有理由重寫一次。
+    // Whether the real arrow should appear = 'upstream thinks it should appear'
+    // AND 'currently in the app grid'.
+    // The first half is read directly from the decoy — the math for no prev on
+    // the first page and no next on the last page is computed by upstream's
+    // _syncPageIndicators, and there is no reason to rewrite it.
     _pnSyncArrowVisibility() {
         const controls = pnOverviewControls();
         if (!controls || !this._pnArrows || !this._pnDecoys)
@@ -1313,25 +1397,33 @@ export default class PineNoteOskExtension extends Extension {
         this._pnSyncIconSize();
 
         const mon = Main.layoutManager.primaryMonitor;
-        // 先要 _searchEntry：那是畫得出圓角的那個框。_searchEntryBin 是它的
-        // 容器，上下帶著不對稱留白，中心差 3px —— 對齊容器等於對齊一個看不見的東西。
+        // Ask for _searchEntry first: that is the box with drawn rounded corners.
+        // _searchEntryBin is its container, with asymmetrical vertical margins and
+        // a centre off by 3px — aligning to the container means aligning to an
+        // invisible thing.
         const entry = controls._searchEntry ?? controls._searchEntryBin;
         const {prev, next} = this._pnArrows;
         if (!mon || !entry || !prev || !next)
             return;
 
-        // 搜尋框那一列的垂直中心（用它自己的 allocation，不用推算）
+        // The vertical centre of the search box row (using its own allocation, not
+        // computed)
         const [, entryY] = entry.get_transformed_position();
         const centerY = entryY + entry.height / 2;
         const margin = Math.round(mon.width * 0.03);
 
-        // 只管位置，尺寸交給 stylesheet。先前這裡 set_size(arrow.width || 48)
-        // 等於拿一個猜來的數字蓋掉樣式算出的值 —— 讀到 0 就把 0 寫回去。
-        // 寬度問 actor 自己要（natural width），不要拿 css 的 px 乘 scale_factor
-        // 去推 —— 那等於在兩個座標系之間猜換算，而它本人知道答案。
-        // 箭頭對齊第一／最後一欄的欄心。畫布現在是算出來的、比螢幕窄，所以
-        // 「貼螢幕邊緣」跟「跟 app 同一條垂直線」已經不是同一件事了。欄心跟 grid
-        // 要（_calculateSpacing 回的 leftEmpty 和 hSpacing），不要自己推。
+        // Position only, size belongs to the stylesheet. An earlier
+        // set_size(arrow.width || 48) here overwrote the stylesheet's computed
+        // value with a guess — reading 0 wrote 0 straight back.
+        // Ask the actor itself for its width (natural width), rather than
+        // multiplying CSS px by scale_factor to guess it — that is guessing
+        // conversions between two coordinate systems when the actor already knows
+        // the answer.
+        // Arrows align to the centre of the first/last column. The canvas is
+        // computed now and narrower than the screen, so 'flush with the screen
+        // edge' and 'on the same vertical line as the apps' are no longer the
+        // same thing. Ask the grid for the column centre (leftEmpty and hSpacing
+        // from _calculateSpacing), do not compute it.
         const columnCentres = (() => {
             const grid = controls._appDisplay?._grid;
             const lm = grid?.layout_manager;
@@ -1342,17 +1434,21 @@ export default class PineNoteOskExtension extends Extension {
             const cols = lm.columnsPerPage;
             if (!cell || !cols)
                 return null;
-            // 不用 get_transformed_position：它在 actor 還沒配置好時會回無效值，
-            // 而 NaN 會一路傳到 set_position，箭頭就從畫面上消失。畫布是我們自己
-            // 置中的、寬度 layout 也記著，左緣直接算得出來。
+            // Do not use get_transformed_position: it returns invalid values
+            // before the actor is allocated, and NaN propagates all the way to
+            // set_position, causing the arrow to vanish from the screen. We centre
+            // the canvas ourselves and the layout holds the width, so the left
+            // edge is directly computed.
             const gridX = mon.x + (mon.width - lm._pageWidth) / 2;
             const first = gridX + leftEmpty + cell / 2;
             const last = first + (cols - 1) * (cell + hSpacing);
             return [first, last];
         })();
 
-        // 🔴 尺寸只問一顆：隱藏的那顆保留著舊的偏好尺寸（實測 52 對 40），
-        // 各問各的會讓兩顆用不同的 h 算中心，落點差 6px。優先問還映射著的那顆。
+        // 🔴 Ask only one for its size: the hidden one retains its old preferred
+        //    size (measured 52 against 40), and asking them separately causes the
+        //    two to compute their centres with different h, missing the mark by
+        //    6px. Prefer the one still mapped.
         const sizeFrom = [prev, next].find(a => a.mapped) ?? prev;
         const [, arrowW] = sizeFrom.get_preferred_width(-1);
         const [, arrowH] = sizeFrom.get_preferred_height(-1);
@@ -1361,7 +1457,8 @@ export default class PineNoteOskExtension extends Extension {
             const w = arrowW;
             const h = arrowH;
             const centre = columnCentres?.[alignRight ? 1 : 0];
-            // 任何一項算壞就退回貼邊。箭頭放錯位置還看得見，NaN 是直接消失。
+            // Fall back to the edge if any part computes badly. An arrow placed
+            // wrongly is still visible, NaN vanishes entirely.
             const x = Number.isFinite(centre)
                 ? centre - w / 2
                 : mon.x + (alignRight ? mon.width - margin - w : margin);
@@ -1472,13 +1569,14 @@ export default class PineNoteOskExtension extends Extension {
         }
         const grid = pnAppGrid();
         if (grid)
-            grid.setGridModes(null);   // null 讓它回到 shell 的預設
+            grid.setGridModes(null);   // null returns it to shell default
 
         if (this._pnPosteriseTimeoutId) {
             GLib.source_remove(this._pnPosteriseTimeoutId);
             this._pnPosteriseTimeoutId = 0;
         }
-        // 走整棵樹拆，不是走當初掛上去的那份清單 —— actor 會被重建，清單會留孤兒。
+        // Walk the whole tree to tear down, do not walk the list it was attached
+        // with — actors get rebuilt, the list leaves orphans.
         this._pnPosteriseClearAll("pn-posterise");
 
         const proto = Keyboard.prototype;
@@ -1556,17 +1654,23 @@ export default class PineNoteOskExtension extends Extension {
                     ? {...DEFAULTS.portrait.labels, ...this._config.portrait?.labels}
                     : {}),
             });
-            // 注音鍵帽。_updateLayout 在每次引擎切換時都會重跑（journal 裡那串
-            // "composing from us" 就是），所以切到 chewing 鍵帽變、切走就恢復，
-            // 不必多接任何訊號。
-            // 🔴 用 relabelByString 不是 relabel：字母鍵是從 stock layout 拿的，
-            //    那些 key 物件沒有 label 欄位、靠 strings[0] 顯示。relabel 查
-            //    k.label 查不到它們 —— 實測第一版只換到了數字列和標點（那些是
-            //    我們自己 charKeys 造的、有 label），26 個字母全部漏掉。
-            // 「臉」由 pn-panel 推過來（SetInputFace）：它是 rime 源上 TW/BP
-            //    的真值持有者，我們只被告知。chewing 也印注音，給還在用它的人。
-            // 字母表層是從輸入法層推出來的：bopomofo 這張臉印注音；chewing 也是
-            // 注音（給還在用它的人）。pinyin / romaji 維持拉丁 —— 那是原本的鍵帽。
+            // Bopomofo caps. _updateLayout runs again on every engine switch
+            // (that string of "composing from us" in the journal is it), so
+            // switching to chewing changes the caps, switching away restores
+            // them, with no extra signals needed.
+            // 🔴 Use relabelByString, not relabel: letter keys are taken from the
+            //    stock layout, those key objects have no label field and display
+            //    via strings[0]. relabel looking for k.label misses them — the
+            //    first version measured only swapped the digit row and
+            //    punctuation (those are built by our own charKeys and have a
+            //    label), missing all 26 letters.
+            // The 'face' is pushed by pn-panel (SetInputFace): it is the source
+            //    of truth for TW/BP on the rime source, and we are only told.
+            //    chewing also prints bopomofo, for anyone still using it.
+            // The alphabet layer is derived from the input method layer: the
+            // bopomofo face prints bopomofo; chewing is also bopomofo (for
+            // anyone still using it). pinyin / romaji keep latin — which is the
+            // original caps.
             if (level === 0 && (this._pnInputFace === "bopomofo" || currentEngineId() === "chewing"))
                 built = relabelByString(built, PN_BOPOMOFO);
             composed[level] = built;
@@ -1644,8 +1748,9 @@ export default class PineNoteOskExtension extends Extension {
         const letterChars = letterRow.slice(1, -3);
 
         if (!backspace || !enter || !hide || !space || qwertyChars.length !== 10) {
-            // 哪一個不見了要講出來 —— 「找不到某個鍵」和「字母數不對」是完全
-            // 不同的兩件事，而它們原本共用一個沉默的 return
+            // State which one went missing — 'cannot find a certain key' and
+            // 'wrong number of letters' are entirely different things, and they
+            // originally shared one silent return
             console.warn("[pn-osk] compose bail:" +
                 ` backspace=${!!backspace} enter=${!!enter}` +
                 ` hide=${!!hide} space=${!!space} chars=${qwertyChars.length}`);
@@ -1769,41 +1874,56 @@ export default class PineNoteOskExtension extends Extension {
         ac.setRatio(keyboard.width, keyboard.height);
     }
 
-    // ── 候選字窗貼底 ──────────────────────────────────────────────────
-    // 候選字有兩條路，而它們的容器是不同的東西：
+    // ── Candidate window docked at bottom ──────────────────────────────────────
+    // Candidates take two paths, and their containers are different things:
     //
-    //   OSK 開著   ibusCandidatePopup 的 _updateVisibility() 裡有
-    //              `!Main.keyboard.visible`，浮動窗自己關掉，候選改由
-    //              Main.keyboard.addSuggestion() 推進 OSK 上緣那條 strip。
-    //              那條 strip 本來就貼在按鍵正上方 —— 要的位置它天生就有，
-    //              缺的只是高度（見 _forceFullWidth）。
+    //   OSK is open   ibusCandidatePopup's _updateVisibility() has
+    //                 `!Main.keyboard.visible`, so the floating window closes
+    //                 itself, and candidates are instead pushed into the strip at
+    //                 the OSK's top edge via Main.keyboard.addSuggestion().
+    //                 That strip is already pinned exactly above the keys — it
+    //                 inherently has the position it needs, it only lacks height
+    //                 (see _forceFullWidth).
     //
-    //   OSK 沒開   走這個 BoxPointer，預設釘在游標上跟著字跑。
+    //   OSK is closed Uses this BoxPointer, pinned to the cursor by default and
+    //                 following the text.
     //
-    // 貼底要改的只有後者。把假游標挪到螢幕底緣、寬度給滿、高度給 0：
-    // BoxPointer 是 St.Side.TOP（箭頭在上、盒子在下），底下沒有空間時它自己
-    // 會翻到上方，於是盒子落在底緣、水平置中 —— 兩條路的候選字就都在同一個
-    // 地方出現，眼睛不必在螢幕上找它。
+    // Docking at the bottom only needs to change the latter. Move the dummy
+    // cursor to the screen's bottom edge, give it full width, zero height:
+    // BoxPointer is St.Side.TOP (arrow above, box below), and when it has no
+    // room below it flips to the top on its own, so the box lands on the bottom
+    // edge, horizontally centred — the candidates for both paths then appear in
+    // the same place, and the eye does not have to hunt for them on the screen.
     //
-    // 🔴 覆寫的是**實例**的方法不是原型。這顆 popup 由 ibusManager 建立且只有
-    //    一個，而原型上還有別人；跟 _forceFullWidth 覆寫 ac.setRatio 同一個理由。
+    // 🔴 The override is on the **instance** method, not the prototype. This
+    //    popup is created by ibusManager and is the only one, while the
+    //    prototype has others; the same reason _forceFullWidth overrides
+    //    ac.setRatio.
     _pnDockCandidatePopup() {
         const popup = IBusManager.getIBusManager()?._candidatePopup;
         if (!popup || popup._pnOrigReposition)
             return;
 
-        // 停靠線：OSK 開著就是鍵盤上緣，沒開就是螢幕底緣。
+        // Dock line: the OSK's top edge when open, the screen's bottom edge when
+        // closed.
         //
-        // 🔴 鍵盤上緣要用「螢幕底緣減鍵盤高度」算，**不要**去讀 keyboardBox 的
-        //    座標。_animateShowComplete() 做的是 `this.translation_y = -this.height`
-        //    —— 平移掛在 Keyboard 自己身上，keyboardBox 其實坐在螢幕底緣之下，
-        //    鍵盤是往上平移進來的。讀 keyboardBox.get_transformed_position() 會
-        //    拿到底緣，於是候選窗整條蓋在鍵盤上（2026-08-18 實測就是這樣）。
-        //    反推還有一個好處：動畫途中它算的是最終停靠位置，候選窗不會跟著滑。
+        // 🔴 The keyboard's top edge must be computed as 'screen bottom edge minus
+        //    keyboard height', do **not** read keyboardBox's coordinates.
+        //    _animateShowComplete() does `this.translation_y = -this.height`
+        //    — the translation is attached to the Keyboard itself, keyboardBox
+        //    actually sits below the screen's bottom edge, and the keyboard
+        //    translates in upwards. Reading
+        //    keyboardBox.get_transformed_position() returns the bottom edge, so
+        //    the candidate window covers the keyboard entirely (measured as such
+        //    on 2026-08-18).
+        //    Computing it backward has another benefit: during the animation it
+        //    computes the final dock position, so the candidate window does not
+        //    slide with it.
         //
-        // 假游標給滿寬、零高，
-        // BoxPointer 是 St.Side.TOP（箭頭在上、盒子在下），下方沒有空間時它自己
-        // 翻上去 —— 於是盒子貼著那條線的上方、水平置中。
+        // Dummy cursor gets full width, zero height,
+        // BoxPointer is St.Side.TOP (arrow above, box below), and when it has no
+        // room below it flips up on its own — so the box docks to the top of
+        // that line, horizontally centred.
         const dockLine = () => {
             const mon = Main.layoutManager.primaryMonitor;
             if (!mon)
@@ -1815,65 +1935,83 @@ export default class PineNoteOskExtension extends Extension {
             return y;
         };
 
-        // 🔴 定位不再交給 BoxPointer，我們自己算。
+        // 🔴 Positioning is no longer left to BoxPointer, we compute it ourselves.
         //
-        //    它是為「指向某個東西的氣泡」設計的，不是為「貼邊的工具列」，而這個
-        //    差別在三個地方咬過人：
-        //      · St.Side.TOP 的意思是盒子在錨點**下方**，不是「箭頭朝上所以在上」
-        //      · 改方向要寫 _userArrowSide，updateArrowSide() 會被 _updateFlip 蓋掉
-        //      · vfunc_allocate 只在 `this._sourceActor.mapped` 時才重新定位 ——
-        //        假游標是個 opacity:0、高度 0 的 actor，那個條件不是我們能保證的
-        //        東西。它沒成立的時候盒子就停在 0,0，量到的就是 {x:0,y:0}。
+        //    It is designed for a 'bubble pointing at something', not a 'toolbar
+        //    docked to an edge', and that difference bit in three places:
+        //      · St.Side.TOP means the box is **below** the anchor point, not
+        //        'arrow faces up so it is on top'
+        //      · Changing direction requires writing _userArrowSide,
+        //        updateArrowSide() is overwritten by _updateFlip
+        //      · vfunc_allocate only repositions when `this._sourceActor.mapped`
+        //        — the dummy cursor is an opacity:0, zero-height actor, and that
+        //        condition is not something we can guarantee. When it failed the
+        //        box stopped at 0,0, and {x:0,y:0} was measured.
         //
-        //    再加上 resX 是從 natWidth 算出來的，所以候選字一換寬度、位置就跳
-        //    —— 那就是「一下飄到右邊再飄回來」。CSS 把寬度釘死解掉了半邊，另外
-        //    半邊是這裡：把 _reposition 換成「用我們設好的座標」，兩條路（有沒有
-        //    跑到 _reposition）就都落在同一個答案上。
-        // place() 只管 x 和寬。y 由 _reposition 在配置時算 —— 見下面那段的
-        // 理由（簡單說：只有配置那一刻的高度是這批候選字的真值）。
+        //    Add that resX is computed from natWidth, so the position jumps
+        //    whenever the candidates change width — that was the 'drifting right
+        //    and drifting back'. Pinning the width in CSS fixed one half, the
+        //    other half is here: replacing _reposition with 'use our preset
+        //    coordinates' so both paths (whether it reached _reposition or not)
+        //    land on the same answer.
+        // place() only handles x and width. y is computed by _reposition during
+        // allocation — see the reason in the block below (in short: only the
+        // height at the moment of allocation is the true value for this batch of
+        // candidates).
         const place = () => {
             const mon = Main.layoutManager.primaryMonitor;
             if (!mon)
                 return;
-            // 滿版：跟鍵盤同一個左右緣。寬度從螢幕讀，不寫進 CSS ——
-            // 橫向 936、直向 702，寫死哪個轉個方向都會破。
+            // Full width: the same left and right edges as the keyboard. Width is
+            // read from the screen, not written into CSS — landscape 936,
+            // portrait 702, hardcoding either breaks when rotated.
             popup.set_width(mon.width);
             popup.set_x(mon.x);
-            // 🔴 _sourceActor 一定要有東西，不然 vfunc_allocate 根本不叫
-            //    _reposition：
+            // 🔴 _sourceActor must have something, or vfunc_allocate never calls
+            //    _reposition:
             //        if (this._sourceActor && this._sourceActor.mapped)
             //            this._reposition(box);
-            //    上一版拆掉假游標那條路之後它是 null，_reposition 從此不跑，
-            //    盒子就停在 0,0 —— 你看到的「飄到上面去」不是有意的，是沒人
-            //    擺它。這裡把它設回上游自己那個 _dummyCursor（在 uiGroup 裡，
-            //    永遠 mapped）；我們的 _reposition 不讀它的位置，只借它讓那個
-            //    if 成立。alignment 傳什麼都無所謂，同一個理由。
+            //    After taking away the dummy cursor path in the last version it
+            //    was null, _reposition stopped running, and the box stayed at
+            //    0,0 — the 'drifting up' seen was not intentional, it was placed
+            //    by nobody. Here it is set back to upstream's own _dummyCursor
+            //    (in uiGroup, always mapped); our _reposition does not read its
+            //    position, it only borrows it to make that if succeed. alignment
+            //    can be passed anything, for the same reason.
             popup.setPosition(popup._dummyCursor, 0);
             popup.queue_relayout();
         };
 
-        // 翻頁鈕釘在右緣。它們是 _candidateArea（HORIZONTAL BoxLayout）的最後
-        // 一個孩子，原本跟在最後一個候選字後面 —— 關掉 ellipsize 之後長候選會
-        // 把它們一路推出 936 被 clip 掉。x_expand 讓它們吃掉剩下的空間、
-        // x_align END 讓它們貼在那個空間的右邊；候選字塞不下的部分被 clip，
-        // 按鈕永遠看得到 —— 而看得到翻頁鈕，正是候選字被 clip 時唯一的出路。
+        // Page buttons are pinned to the right edge. They are the last child of
+        // _candidateArea (HORIZONTAL BoxLayout), originally following the last
+        // candidate — after turning off ellipsize, long candidates push them all
+        // the way past 936 where they are clipped. x_expand lets them consume
+        // the remaining space, x_align END pins them to the right of that space;
+        // the part of the candidates that does not fit is clipped, and the
+        // buttons are always visible — and seeing the page buttons is exactly
+        // the only way out when candidates are clipped.
         const buttons = popup._candidateArea?._buttonBox;
         if (buttons) {
             popup._pnOrigButtonLayout = [buttons.x_expand, buttons.x_align];
             buttons.x_expand = true;
             buttons.x_align = Clutter.ActorAlign.END;
         }
-        // 🔴 「...」不是寬度問題，是 St.Label 預設 ellipsize=END 加上 BoxLayout
-        //    的分配規則：孩子的最小寬度就是「...」，總自然寬一超過可用寬，它就
-        //    按比例把**每一格**縮到最小 —— 所以不管 page_size 是 9 還是 5，
-        //    只要有一個候選是整句，全部都會變「1 ...」「2 ...」。
+        // 🔴 '...' was never a width problem, it is St.Label defaulting to
+        //    ellipsize=END plus BoxLayout's allocation rules: a child's minimum
+        //    width is exactly '...', and once total natural width exceeds
+        //    available width, it shrinks **every cell** toward its minimum
+        //    proportionally — so whether page_size is 9 or 5, if one candidate
+        //    is a full sentence, all of them turn into '1 ...' '2 ...'.
         //
-        //    關掉 ellipsize，label 的最小寬＝自然寬，BoxLayout 沒得縮。塞不下的
-        //    候選超出容器邊界，被 clip 掉 —— 那就是 macOS 的行為：第一個要多長
-        //    給多長，後面塞幾個算幾個，剩的靠翻頁鈕。
+        //    Turn off ellipsize, and the label's minimum width = natural width,
+        //    leaving BoxLayout nothing to shrink. Candidates that do not fit
+        //    exceed the container bounds and are clipped — which is macOS's
+        //    behaviour: give the first one whatever it needs, pack however many
+        //    fit after it, and leave the rest to the page buttons.
         //
-        //    這幾個 label 是 _candidateArea 建構時就造好的，一共
-        //    MAX_CANDIDATES_PER_PAGE 個，之後只換 text，所以設一次就穩。
+        //    These labels are built once when _candidateArea is constructed,
+        //    exactly MAX_CANDIDATES_PER_PAGE of them, and only their text
+        //    changes afterwards, so setting them once is stable.
         const area = popup._candidateArea;
         popup._pnOrigEllipsize = [];
         for (const box of area?._candidateBoxes ?? []) {
@@ -1886,43 +2024,58 @@ export default class PineNoteOskExtension extends Extension {
         }
 
         popup._pnOrigReposition = popup._reposition.bind(popup);
-        // 🔴 y 在**這裡**算，用這次配置框的高度。
-        //    _reposition 是 vfunc_allocate 呼叫的，那一刻 allocationBox 的高度是
-        //    這批候選字排好之後的真值。之前放在 place() 裡算，跑在 open() 之後、
-        //    內容排好之前，問到的是上一批的高度 —— 量到 h=42 卻擺在 460，底緣
-        //    502 蓋到 Esc 那列。接 notify::height 也補不到：高度變化發生在
-        //    allocate 裡面，訊號在它之後才發，配置已經用舊的 y 定案了。
-        //    x 沒這個問題，寬度是 set_width 釘死的。
-        //    _updateFlip 也會呼叫這個，對它無害：只會再算出同一個答案。
+        // 🔴 y is computed **here**, using this allocation box's height.
+        //    _reposition is called by vfunc_allocate, and at that moment the
+        //    allocationBox's height is the true value for this batch of
+        //    candidates after layout. Computed previously in place(), running
+        //    after open() and before content was laid out, it asked for the
+        //    previous batch's height — measuring h=42 but placing it at 460, its
+        //    bottom edge 502 covered the Esc row. Catching notify::height did
+        //    not compensate: the height change happens inside allocate, the
+        //    signal fires after it, and the allocation is already settled using
+        //    the old y.
+        //    x does not have this problem, width is pinned by set_width.
+        //    _updateFlip calls this too, harmlessly: it only computes the same
+        //    answer again.
         //
-        // 🔴 一定要**先叫原廠的** _reposition，再蓋原點。vfunc_allocate 是
+        // 🔴 Upstream's _reposition must be called **first**, then overwrite the
+        //    origin. vfunc_allocate is
         //        this._reposition(box); this._updateFlip(box);
-        //    而 _updateFlip → _calculateArrowSide 會讀 this._sourceExtents 和
-        //    this._workArea —— 那兩個欄位是原廠 _reposition 才會填的。整個換掉的
-        //    版本從沒填過它們，_updateFlip 一跑就丟 undefined，配置在 vfunc 裡
-        //    中止、GJS 把例外吞掉，日誌一個字都沒有。症狀是 Geometry 量到
-        //    visible/mapped/sourceMapped 全 true、五個候選都在、opacity 255，
-        //    但 box 是 None —— 一切都在，就是沒有 allocation（2026-08-18）。
+        //    and _updateFlip → _calculateArrowSide reads this._sourceExtents and
+        //    this._workArea — those two fields are only filled by upstream's
+        //    _reposition. The wholesale replacement version never filled them,
+        //    _updateFlip threw undefined as soon as it ran, allocation aborted
+        //    inside the vfunc, GJS swallowed the exception, and the journal
+        //    logged not a single word. The symptom was Geometry measuring
+        //    visible/mapped/sourceMapped all true, all five candidates present,
+        //    opacity 255, but box was None — everything was there, it just
+        //    lacked an allocation (2026-08-18).
         popup._reposition = allocationBox => {
             try {
                 popup._pnOrigReposition(allocationBox);
             } catch (e) {
-                // 原廠算不出來也無所謂：我們反正要蓋掉原點。它算的那份只是
-                // 為了把 _sourceExtents / _workArea 填好給 _updateFlip 用。
+                // It does not matter if upstream fails to compute it: we overwrite
+                // the origin anyway. Its computation is only to fill
+                // _sourceExtents / _workArea for _updateFlip to use.
             }
             const h = allocationBox.get_height();
             allocationBox.set_origin(popup.x, Math.floor(dockLine() - h));
         };
 
-        // 🔴 方向一律橫排，不聽引擎的。這條列是貼底的工具列，橫是它的形狀，不該
-        //    由每個引擎各自決定：RIME 要在 ibus_rime.yaml 設 style/horizontal 才會
-        //    送 HORIZONTAL；Mozc 寫死送 VERTICAL（實測 orientation=1、page=3），
-        //    沒有使用者設定能改，日文輸入法的候選窗傳統就是直的。所以在接收端
-        //    統一：setOrientation 不管收到什麼都當 HORIZONTAL。覆寫實例方法，
-        //    跟 _reposition 同一個理由。
-        // 三個孩子（preedit / aux / candidateArea）都置中。滿版的 VERTICAL box
-        // 裡孩子預設 FILL：candidateArea 從左緣排起、aux 那行也是 —— 拼音沒有
-        // aux 所以看不出來，Mozc 的「Tabキーで選択」一來，整組就靠左了。
+        // 🔴 Direction is always horizontal, ignoring the engine. This row is a
+        //    bottom-docked toolbar, horizontal is its shape, and it should not
+        //    be decided by each engine: RIME only sends HORIZONTAL if
+        //    style/horizontal is set in ibus_rime.yaml; Mozc hardcodes VERTICAL
+        //    (measured orientation=1, page=3), with no user setting to change
+        //    it, as Japanese input methods traditionally have vertical candidate
+        //    windows. So unify it at the receiving end: setOrientation treats
+        //    whatever it receives as HORIZONTAL. Override the instance method,
+        //    for the same reason as _reposition.
+        // All three children (preedit / aux / candidateArea) are centred. In a
+        // full-width VERTICAL box children default to FILL: candidateArea is
+        // laid out from the left edge, and the aux row too — pinyin has no aux
+        // so it is not visible, but when Mozc's 'Tabキーで選択' arrives, the whole
+        // group leans left.
         for (const child of [popup._preeditText, popup._auxText, popup._candidateArea]) {
             if (child && child._pnOrigXAlign === undefined) {
                 child._pnOrigXAlign = child.x_align;
@@ -1936,11 +2089,14 @@ export default class PineNoteOskExtension extends Extension {
             carea.setOrientation(IBus.Orientation.HORIZONTAL);
         }
 
-        // 🔴 候選格只接了 button-release-event（上游），而純觸控**根本不送**
-        //    button 事件 —— pn-panel 的檔案裡早寫著同一課：「觸控要自己接」。
-        //    所以「手指戳選字」三個引擎全死、翻頁能動只因 ‹ › 是 St.Button
-        //    （內建吃觸控）。每一格補上 touch-event，TOUCH_END 時發出跟上游
-        //    一模一樣的 candidate-clicked，餵進 panelService 那條路。
+        // 🔴 Candidate cells only connected button-release-event (upstream), and
+        //    pure touch **does not send** button events at all — pn-panel's files
+        //    already documented the same lesson: 'touch must be connected
+        //    yourself'. So 'tapping candidates with a finger' was dead across
+        //    all three engines, and paging only worked because ‹ › are St.Button
+        //    (which consume touch natively). Add touch-event to every cell,
+        //    emitting the exact same candidate-clicked as upstream on TOUCH_END,
+        //    feeding into the panelService path.
         if (popup._candidateArea && !popup._pnTouchIds) {
             popup._pnTouchIds = popup._candidateArea._candidateBoxes.map((box, j) =>
                 box.connect("touch-event", (actor, event) => {
@@ -1951,14 +2107,19 @@ export default class PineNoteOskExtension extends Extension {
                 }));
         }
 
-        // 🔴 rime 的點擊**不需要**我們合成選字鍵 —— 這裡曾經有一段合成
-        //    Shift+A / 1-9 的 hook，前提是「ibus-rime 沒實作 candidate_clicked」，
-        //    而那個前提是用 strings/nm 查的：librime 的呼叫全走 rime_get_api()
-        //    的函式表，符號表看不到，**查無不等於沒有**。真機的判決：戳「今天」
-        //    變「今天A」—— 上游 panelService.candidate_clicked 正常選了字，我們
-        //    的 Shift+A 在送出之後才到、落成字面 A。防抖（250ms）和 hasPreedit
-        //    gate 都擋不住：同一次發射、兩個消費者、同一個 tick。合成整段拆除；
-        //    點擊缺的只是 touch 事件（上面補的），不缺引擎支援。
+        // 🔴 rime clicks do **not** need us to synthesise selection keys — there
+        //    used to be a hook here synthesising Shift+A / 1-9, on the premise
+        //    that 'ibus-rime did not implement candidate_clicked', and that
+        //    premise was checked via strings/nm: librime calls all go through
+        //    rime_get_api()'s function table, invisible to the symbol table, and
+        //    **finding nothing does not mean it is absent**. The real machine's
+        //    verdict: tapping '今天' became '今天A' — upstream
+        //    panelService.candidate_clicked selected the word normally, our
+        //    Shift+A arrived after it was submitted, landing as a literal A.
+        //    Neither a debounce (250ms) nor a hasPreedit gate could stop it: same
+        //    emission, two consumers, same tick. The entire synthesis block was
+        //    removed; clicks only lack the touch event (added above), not engine
+        //    support.
         popup._pnOrigUpdateVisibility = popup._updateVisibility.bind(popup);
         popup._updateVisibility = () => {
             const isVisible = popup._preeditText.visible ||
@@ -1967,22 +2128,29 @@ export default class PineNoteOskExtension extends Extension {
 
             if (isVisible) {
                 popup.open(BoxPointer.PopupAnimation.NONE);
-                // 切方案期間按住不畫（見 SuppressCandidates）。要在 open() **之後**
-                // 設 —— BoxPointer.open() 自己會把 opacity 寫成 255，寫在前面就被
-                // 蓋掉（真機：選單照樣整條畫出來）。opacity 0 而不是不 open：
-                // popup 的內部狀態（_candidateArea 的文字、_cursorPosition）還是
-                // 要更新，pn-panel 靠它們找選單裡的目標和算要按幾次 Down。
-                // 旗標從 global 讀，不是從 this：pn-panel 跟我們在同一個 shell 行程，
-                // 它切方案前**同步**設 global._pnSuppressCandidates 再送 F4，我們這裡
-                // 就一定看得到。走 D-Bus 的話 call 是非同步的，F4 先到、選單先畫，
-                // suppress 後到 —— 真機上選單就整條露出來了。
+                // Hold back drawing while switching schemas (see
+                // SuppressCandidates). Must be set **after** open() —
+                // BoxPointer.open() writes opacity to 255 itself, setting it
+                // earlier gets overwritten (real machine: the menu draws entirely
+                // anyway). opacity 0 rather than not opening: the popup's
+                // internal state (the text in _candidateArea, _cursorPosition)
+                // still needs to update, as pn-panel relies on them to find the
+                // target in the menu and compute how many Downs to press.
+                // The flag is read from global, not from this: pn-panel is in
+                // the same shell process as we are, it **synchronously** sets
+                // global._pnSuppressCandidates before sending F4, and we are
+                // guaranteed to see it here. A D-Bus call would be asynchronous,
+                // F4 arrives first, the menu draws first, suppress arrives later
+                // — and the menu is exposed entirely on the real machine.
                 if (globalThis._pnSuppressCandidates)
                     popup.opacity = 0;
-                // 🔴 每次顯示都重擺，而且是在 open() 之後。
-                //    重擺：停靠線跟著 OSK 走，而 OSK 升起的時機不受我們控制 ——
-                //    只有「要顯示了」這一刻，鍵盤在不在已成定局。
-                //    在 open() 之後：要等內容進去，get_preferred_* 才是這一批
-                //    候選字的真尺寸。
+                // 🔴 Place anew on every display, and after open().
+                //    Place anew: the dock line follows the OSK, and the OSK's
+                //    rise timing is not under our control — only at the moment
+                //    of 'about to display' is the keyboard's presence settled.
+                //    After open(): it needs to wait for content to enter, so
+                //    get_preferred_* is the true size for this batch of
+                //    candidates.
                 place();
                 const {keyboardBox} = Main.layoutManager;
                 popup.get_parent().set_child_above_sibling(popup, keyboardBox);
@@ -1999,7 +2167,7 @@ export default class PineNoteOskExtension extends Extension {
                 try {
                     box.disconnect(popup._pnTouchIds[j]);
                 } catch (e) {
-                    // 已拆
+                    // Removed
                 }
             });
             delete popup._pnTouchIds;
@@ -2029,7 +2197,7 @@ export default class PineNoteOskExtension extends Extension {
             try {
                 label.clutter_text.ellipsize = mode;
             } catch (e) {
-                // 已拆
+                // Removed
             }
         }
         if (popup)
@@ -2113,13 +2281,17 @@ export default class PineNoteOskExtension extends Extension {
             keyboard: box(kb),
             keyboardVisible: kb?.visible ?? null,
             aspectContainer: box(kb?._aspectContainer),
-            // 候選字列。它跟 aspectContainer 是同一個垂直配置裡的兄弟，兩個搶
-            // 同一份高度，所以少了它這份 dump 讀不出「按鍵區為什麼是這個高度」。
-            // children 是關鍵欄位：strip 永遠 visible（見 _forceFullWidth 的註解），
-            // 有沒有候選字要看它有沒有孩子。
-            // 候選字窗。它不是鍵盤的一部分，但它的位置**由**鍵盤決定
-            // （見 _pnDockCandidatePopup 的停靠線），所以量鍵盤的時候要一起看
-            // 得到它 —— 不然「有沒有貼在鍵盤上緣」只能靠拍照。
+            // Candidate strip. It is a sibling of aspectContainer in the same
+            // vertical layout, the two fight for the same height, so without it
+            // this dump cannot explain 'why the key area is this height'.
+            // children is the critical field: the strip is always visible (see
+            // notes in _forceFullWidth), whether there are candidates depends on
+            // whether it has children.
+            // Candidate window. It is not part of the keyboard, but its position
+            // is **determined by** the keyboard (see the dock line in
+            // _pnDockCandidatePopup), so it needs to be seen together when
+            // measuring the keyboard — otherwise 'whether it docks to the
+            // keyboard's top edge' can only be verified by photographing.
             candidates: (() => {
                 const p = IBusManager.getIBusManager()?._candidatePopup;
                 if (!p)
@@ -2129,9 +2301,10 @@ export default class PineNoteOskExtension extends Extension {
                     visible: p.visible,
                     mapped: p.mapped,
                     opacity: p.opacity,
-                    // 這三個是「visible=true 卻量不到 box」時要看的：sourceActor
-                    // 沒 mapped 的話 vfunc_allocate 根本不會呼叫 _reposition；
-                    // 沒有 parent 就是還沒進 stage。
+                    // These three are checked when 'visible=true but box cannot
+                    // be measured': if sourceActor is not mapped vfunc_allocate
+                    // will not call _reposition at all; having no parent means
+                    // it has not entered the stage yet.
                     hasSourceActor: !!p._sourceActor,
                     sourceMapped: p._sourceActor?.mapped ?? null,
                     parent: p.get_parent()?.constructor?.name ?? null,
@@ -2156,7 +2329,8 @@ export default class PineNoteOskExtension extends Extension {
         }, null, 2);
     }
     OpenFolder() {
-        // FolderIcon.open() 就是 vfunc_clicked 呼叫的那個，不必模擬點擊
+        // FolderIcon.open() is exactly what vfunc_clicked calls, no need to
+        // simulate a click
         const appDisplay = pnOverviewControls()?._appDisplay;
         for (const item of appDisplay?._orderedItems ?? []) {
             if (item.style_class?.includes("app-folder") && item.open) {
@@ -2167,8 +2341,9 @@ export default class PineNoteOskExtension extends Extension {
     }
 
     RenameFolder() {
-        // 開資料夾並直接進改名狀態。這個狀態要人點兩下才到得了，而它是接下來
-        // 每一輪都要看的東西。
+        // Open the folder and enter rename state directly. This state requires a
+        // human to double-tap to reach, and it is what must be seen on every
+        // subsequent round.
         this.OpenFolder();
         const appDisplay = pnOverviewControls()?._appDisplay;
         const item = (appDisplay?._orderedItems ?? [])
@@ -2180,31 +2355,44 @@ export default class PineNoteOskExtension extends Extension {
         });
     }
 
-    // 這片面板有 16 階（0,17,…,255），所以介面的灰只要落在少數幾根分得很開的
-    // 梯級上就不會被再量化，也不會在黑白模式下互相糊掉。敵人從來不是灰，是**彼此
-    // 靠太近的灰**。梯級取 0/85/170/255 —— 全是 17 的整數倍，正好是面板的第
-    // 0、5、10、15 階。
+    // This panel has 16 levels (0, 17, ... 255), so as long as the interface's
+    // greys land on a few widely separated rungs they are not quantised again,
+    // nor do they bleed into each other in black-and-white mode. The enemy was
+    // never grey, it is **greys too close to each other**. Rungs are taken at
+    // 0/85/170/255 — all integer multiples of 17, exactly the panel's 0th, 5th,
+    // 10th, and 15th levels.
     //
-    // 🔑 這支不寫任何 CSS，它**讀畫出來的結果**。對著選擇器寫規則的東西會安靜地
-    // 爛掉（PNEink 的 `#keyboard` 就是：規則還在、主題有載入、GNOME 48 上指不到
-    // 任何東西，鍵盤因此一直是原廠灰而沒有人發現）。走 actor 樹讀 theme node 不會
-    // 有這個問題 —— 名字改了它就是不再出現在清單上，而不是變成一條沉默的死規則。
-    // 調色要看玻璃，而看玻璃要鍵盤在畫面上。這台是從 SSH 開的，所以給它一條
-    // 不必動用手指的路 —— 跟 Capture／Tone／Rotate 同一個理由。
-    // ── 量化器 ───────────────────────────────────────────────────────────
-    // Palette() 只回報；這支動手。一個選擇器都不出現 —— 它讀的是每個元件**算出來
-    // 的**顏色，所以名字改了它就是量到別的東西，而不是變成一條沉默的死規則。
+    // 🔑 This script writes no CSS, it **reads the drawn result**. Things writing
+    // rules against selectors rot silently (the `#keyboard` selector did exactly
+    // that: the rule remained, the theme was loaded, it pointed to nothing on
+    // GNOME 48, so the keyboard stayed stock grey and nobody noticed). Walking
+    // the actor tree to read the theme node does not have this problem — if a
+    // name changes it simply stops appearing in the list, rather than becoming a
+    // silent dead rule.
+    // Tuning colour requires looking at the glass, and looking at the glass
+    // requires the keyboard on screen. This machine is operated over SSH, so it
+    // is given a path that does not require using a finger — for the same reason
+    // as Capture/Tone/Rotate.
+    // ── Quantiser ────────────────────────────────────────────────────────────
+    // Palette() only reports; this one modifies. Not a single selector appears —
+    // it reads the **computed** colour of each component, so if a name changes
+    // it just measures something else, rather than becoming a silent dead rule.
     //
-    // 決定每個值的方式：
-    //   彩色     取亮度轉灰再吸附。顏色在這片玻璃上本來就會變成某個灰，吸附只是
-    //            讓那個灰可預測。
-    //   半透明   用父層算出來的背景壓平再吸附 —— 這是要走「樹」而不是走清單的
-    //            原因：alpha 的意義取決於它底下是什麼。
-    //   全透明   不碰。alpha 0 是「不畫」，不是一個顏色。
-    //   陰影     移除。它是連續漸層，十六格裡沒有一格放得下它。
+    // How each value is decided:
+    //   Colour      Take luminance to convert to grey, then snap. Colours turn
+    //               into some grey on this glass anyway, snapping just makes
+    //               that grey predictable.
+    //   Translucent Flatten against the parent's computed background, then snap
+    //               — this is the reason to walk a 'tree' rather than a list:
+    //               alpha's meaning depends on what lies beneath it.
+    //   Transparent Untouched. alpha 0 is 'do not draw', not a colour.
+    //   Shadow      Removed. It is a continuous gradient, and not a single slot
+    //               in the sixteen levels can hold it.
     //
-    // 🔴 這是「物理」不是「設計」：它只把值搬到最近的格子，不換排法。想換排法
-    // （例如鍵盤的白鍵配灰床）就得寫 CSS，那不是搬得近能變出來的。
+    // 🔴 This is 'physics', not 'design': it only moves values to the nearest
+    // grid slot, it does not change the layout. Changing the layout (like the
+    // keyboard's white keys on a grey bed) requires writing CSS, which is not
+    // something moving closer can produce.
     _pnQuantise(apply) {
         const STEP = 17;
         const snap = v => Math.max(0, Math.min(255, Math.round(v / STEP) * STEP));
@@ -2214,11 +2402,12 @@ export default class PineNoteOskExtension extends Extension {
             const v = [c.red ?? c.r, c.green ?? c.g, c.blue ?? c.b, c.alpha ?? c.a];
             return v.some(x => x === undefined) ? null : v;
         };
-        // 把一個顏色壓平到不透明的格子值。under = 它底下那一層已經算好的灰。
+        // Flatten a colour into an opaque grid value. under = the already-computed
+        // grey of the layer beneath it.
         const flatten = (c, under) => {
             const v = rgba(c);
             if (!v || v[3] === 0)
-                return null;                  // 不畫就別畫
+                return null;                  // Skip drawing if not needed
             const [r, g, b, a] = v;
             const grey = lum(r, g, b);
             const mixed = a === 255 ? grey : (a / 255) * grey + (1 - a / 255) * under;
@@ -2263,7 +2452,7 @@ export default class PineNoteOskExtension extends Extension {
                             const orig = rgba(n.get_border_color(side));
                             if (bc !== null && (orig[0] !== bc || orig[3] !== 255)) {
                                 bits.push(`border-color: rgb(${bc},${bc},${bc})`);
-                                break;        // St 的 border-color 是四邊一起設
+                                break;        // St border-color sets all four sides at once
                             }
                         }
                         if (n.get_box_shadow?.())
@@ -2297,31 +2486,45 @@ export default class PineNoteOskExtension extends Extension {
         return JSON.stringify(out, null, 1);
     }
 
-    // ── 量化 shader ──────────────────────────────────────────────────────
-    // 逐元件那條路（下面的 _pnQuantise）讀的是語意屬性，所以碰得到背景色卻碰不到
-    // 圖示；這條路相反 —— 它是後製濾鏡，看到的只有像素，所以什麼都涵蓋（包括新
-    // 開的選單、hover 狀態），代價是它也分不出圖示。
+    // ── Quantising shader ────────────────────────────────────────────────────
+    // The per-component path (_pnQuantise below) reads semantic properties, so it
+    // can touch background colours but not icons; this path is the opposite — it
+    // is a post-processing filter, seeing only pixels, so it covers everything
+    // (including newly opened menus, hover states), at the cost of also not
+    // being able to distinguish icons.
     //
-    // 「只動介面不動內容」＝ 只掛在 chrome 的 actor 上，不掛 global.window_group。
-    // 那正是 Apple 智慧型反轉的語意。（今天測 a11y 反相時看到的貓變負片，就是因為
-    // 那是全螢幕的，沒有這條分界。）
-    // 掛在哪，就是「物理」與「內容」的分界線 —— effect 作用在整棵子樹上，沒辦法
-    // 排除某個子孫，所以唯一的槓桿是**掛低一點**。
+    // 'Touch interface only, not content' = attach only to chrome actors, not
+    // global.window_group. That is exactly the semantics of macOS Smart Invert.
+    // (The cat seen as a negative when testing a11y invert today was because
+    // that was fullscreen, lacking this boundary.)
+    // Where it attaches is the boundary between 'physics' and 'content' — the
+    // effect applies to the entire subtree, with no way to exclude a specific
+    // descendant, so the only lever is to **attach it lower**.
     //
-    // 🐈 工作區預覽裡是桌布和視窗縮圖，那是內容不是介面（反相過的貓就是證據）。
-    // 它剛好是總覽 controls 底下的獨立分支，所以列舉兄弟、跳過它就好。
-    // 用物件比對而不是名字比對：名字會改，而改了之後名字比對會安靜地失效。
-    // 掛在哪，就是「物理」與「內容」的分界線 —— effect 作用在整棵子樹上，沒辦法
-    // 排除某個子孫。
+    // 🐈 The workspace preview holds the wallpaper and window thumbnails, which is
+    // content, not interface (the inverted cat is the proof). It happens to be an
+    // independent branch under the overview controls, so enumerating siblings and
+    // skipping it works.
+    // Compare by object rather than by name: names change, and name comparisons
+    // fail silently when they do.
+    // Where it attaches is the boundary between 'physics' and 'content' — the
+    // effect applies to the entire subtree, with no way to exclude a specific
+    // descendant.
     //
-    // 🩸 試過「掛低一點」：不掛整個總覽、只掛 controls 的孩子、跳過工作區那一支。
-    // 結果更糟 —— 總覽的深色底**不是** controls 的孩子，於是底沒反相、內容反相了，
-    // app 名字又一次變成黑字黑底。⇒ **反相只有在底和內容一起反的時候才成立。**
+    // 🩸 Tried 'attaching lower': do not attach to the entire overview, attach
+    // only to controls' children, skipping the workspace branch. The result was
+    // worse — the overview's dark background is **not** a child of controls, so
+    // the background did not invert, the content did, and app names once again
+    // became black text on a black background. ⇒ **Inversion only holds when the
+    // background and content invert together.**
     //
-    // 🐈 正解用的是「反相是自身反元素」：整個總覽照常掛，然後在工作區那一支掛一個
-    // **只反相、不量化**的子效果，父層再反一次就抵銷。貓因此不是負片。
-    // ⚠️ 但它仍然會被量化 —— 量化不可逆，子效果救不回來。完全排除在這個架構下
-    // 做不到，這是 shader 便宜的代價。
+    // 🐈 The correct answer uses 'inversion is its own inverse': attach to the
+    // entire overview as usual, then attach a sub-effect that **only inverts,
+    // not quantises** on the workspace branch, and the parent inverting again
+    // cancels it out. The cat is therefore not a negative.
+    // ⚠️ But it still gets quantised — quantisation is irreversible, the
+    // sub-effect cannot rescue it. Complete exclusion is impossible under this
+    // architecture, which is the price of the shader being cheap.
     _pnPosteriseActors() {
         const list = [];
         if (Main.panel)
@@ -2330,37 +2533,47 @@ export default class PineNoteOskExtension extends Extension {
             list.push(["modals", Main.layoutManager.modalDialogGroup]);
         if (Main.layoutManager?.overviewGroup)
             list.push(["overview", Main.layoutManager.overviewGroup]);
-        // 翻頁箭頭走 addChrome，那是 overviewGroup **外面** —— 我們只想搬它的位置，
-        // 卻順手把它搬出了量化器的射程，於是顏色變成我們得自己決定的事。掛回來。
+        // Page arrows go through addChrome, which is **outside** overviewGroup —
+        // we only wanted to move their position, but incidentally moved them out
+        // of the quantiser's range, so colour became something we had to decide
+        // ourselves. Attach them back.
         for (const [which, arrow] of Object.entries(this._pnArrows ?? {})) {
             if (arrow)
                 list.push([`arrow:${which}`, arrow]);
         }
-        // 🔴 候選字窗**不在**這份清單裡，而它曾經在。
+        // 🔴 The candidate window is **not** in this list, and it used to be.
         //
-        // 掛進來是對的第一步：它走 addTopChrome() 落在 uiGroup 底下，跟翻頁箭頭
-        // 一樣在射程外，所以原廠 Adwaita 深色和那格藍色選取直接打在臉上。量化器
-        // 一掛就解決了。
+        // Attaching it was the right first step: it goes through addTopChrome()
+        // and lands under uiGroup, outside the range just like the page arrows,
+        // so the stock Adwaita dark and that blue selection hit it directly. The
+        // quantiser fixed it the moment it was attached.
         //
-        // 拿出來是對的第二步。維護者要的是「選中那格的底色跟下一列一樣」——
-        // 下一列是鍵盤，而鍵盤的底是 CSS 寫死的 #aaa，**而且鍵盤不在這份清單裡**
-        // （它在 keyboardBox，不在 panel/modals/overview 底下）。兩個表面一個被
-        // 反相一個沒有，就沒有任何一個 CSS 值能同時對：寫 #aaa 會被反相成 #555。
+        // Taking it out was the right second step. The maintainer wanted 'the
+        // selected cell's background to match the row below' — the row below is
+        // the keyboard, and the keyboard's background is hardcoded as #aaa in
+        // CSS, **and the keyboard is not in this list** (it is in keyboardBox,
+        // not under panel/modals/overview). With two surfaces where one is
+        // inverted and the other is not, no single CSS value can be right for
+        // both: writing #aaa gets inverted to #555.
         //
-        // 所以照這個 repo 自己的分工辦：**物理歸量化器，設計永遠是 CSS**。候選窗
-        // 現在是打字介面的一部分，跟鍵盤同一類，不是鄰居的表面。顏色見 stylesheet。
+        // So follow this repo's own division of labour: **physics to the
+        // quantiser, design is always CSS**. The candidate window is now part of
+        // the typing interface, in the same class as the keyboard, not a
+        // neighbour's surface. See stylesheet for colours.
         return list;
     }
 
-    // 內容分支：掛反向效果去抵銷父層的反相。用物件比對拿到它，不比對名字。
+    // Content branch: attach an inverse effect to cancel the parent's inversion.
+    // Get it by object comparison, do not compare names.
     _pnContentActors() {
         const controls = Main.overview?._overview?.controls;
         const wd = controls?._workspacesDisplay;
         return wd ? [["workspaces", wd]] : [];
     }
 
-    // 拆的時候走全樹，不依賴上面那份清單 —— 清單會隨 GNOME 版本和狀態變動，
-    // 而依清單拆會留下拆不掉的孤兒。
+    // Tear down by walking the full tree, not relying on the list above — the
+    // list changes with GNOME versions and state, and tearing down by list
+    // leaves orphans that cannot be removed.
     _pnPosteriseClearAll(name) {
         let n = 0;
         const walk = a => {
@@ -2374,7 +2587,7 @@ export default class PineNoteOskExtension extends Extension {
         try {
             walk(global.stage);
         } catch (e) {
-            // 走到一半失敗也要把已經拆掉的算進去
+            // Count the already-removed ones even if it fails halfway
         }
         return n;
     }
@@ -2386,16 +2599,22 @@ export default class PineNoteOskExtension extends Extension {
         const key = `${levels}${invert ? "i" : ""}`;
 
         if (levels > 1 && !this._pnPosteriseClasses.has(key)) {
-            // 🔴 這些不是均分。均分的四階是 0/85/170/255，而正典是 0/51/170/255 ——
-            // 維護者特別要求「不要線性」，沉在 #333 不在 #555。均分會把 #333 悄悄
-            // 推成 #555，於是 CSS 裡寫的值和玻璃上出現的值對不起來。
+            // 🔴 These are not evenly distributed. An even four levels is
+            //    0/85/170/255, while the canon is 0/51/170/255 — the maintainer
+            //    specifically requested 'no linearity', sinking at #333 not
+            //    #555. Even distribution would quietly push #333 into #555, so
+            //    the value written in CSS would not match the value appearing on
+            //    the glass.
             //
-            // 加階有兩種，風險不同：
-            //   填空隙（#777，第 7 階）—— 最大的洞在 #333→#aaa 之間（7 階），
-            //     補進去之後間距變 3/4/3/5，兩個模式下都安全。
-            //   加鄰居（#ddd，第 13 階）—— 貼著紙，給「弱強調」（淡邊框、細分隔）
-            //     用。⚠️ 在黑白模式下 #fff 是實白、#ddd 是 13% 黑點，1px 的線會
-            //     變成斷續的點。好不好看只有玻璃判得了。
+            // Adding levels takes two forms, with different risks:
+            //   Filling gaps (#777, the 7th level) — the largest hole is between
+            //     #333→#aaa (7 levels), filling it makes the intervals 3/4/3/5,
+            //     safe in both modes.
+            //   Adding neighbours (#ddd, the 13th level) — adjacent to paper,
+            //     used for 'weak emphasis' (faint borders, fine dividers).
+            //     ⚠️ In black-and-white mode #fff is solid white, #ddd is a 13%
+            //     black dot pattern, and a 1px line will turn into broken dots.
+            //     Whether it looks good can only be judged on the glass.
             const PALETTES = {
                 4: [0, 51, 170, 255],
                 5: [0, 51, 119, 170, 255],
@@ -2412,7 +2631,8 @@ export default class PineNoteOskExtension extends Extension {
             const PALETTE = PALETTES[levels] ? buildSnap(PALETTES[levels]) : null;
             const div = (levels - 1).toFixed(1);
             const EVEN = `float q = floor(l * ${div} + 0.5) / ${div};`;
-            // cogl_color_out 是 premultiplied，要先解開再算亮度，最後乘回去。
+            // cogl_color_out is premultiplied, it must be unmultiplied before
+            // computing luminance, then multiplied back at the end.
             const CODE = `
                 float a = cogl_color_out.a;
                 vec3 rgb = a > 0.0 ? cogl_color_out.rgb / a : cogl_color_out.rgb;
@@ -2451,7 +2671,8 @@ export default class PineNoteOskExtension extends Extension {
                 out.errors.push(`${label}: ${e.message}`);
             }
         }
-        // 內容分支：只在有反相時才需要抵銷（沒反相就沒有東西要抵銷）
+        // Content branch: only needs cancelling if there is inversion (no
+        // inversion means nothing to cancel)
         if (levels > 1 && invert) {
             this._pnInvertClass ??= GObject.registerClass(
                 {GTypeName: "PnInvertOnly"},
@@ -2484,9 +2705,11 @@ export default class PineNoteOskExtension extends Extension {
         return this._pnQuantise(false);
     }
 
-    // pn-panel 切輸入源的臉時推過來。同一個 rime 引擎有 TW（拼音）和 BP（注音）
-    // 兩張臉，IBus 層看不出差別，鍵帽要印哪套只有 pn-panel 知道。推不拉：
-    // shell 裡同步 D-Bus 會卡主迴圈（README 記過），而 _composeLayout 是同步的。
+    // Pushed by pn-panel when switching the input source's face. The same rime
+    // engine has TW (pinyin) and BP (bopomofo) faces, the IBus layer cannot tell
+    // the difference, and only pn-panel knows which set to print on the caps.
+    // Push, not pull: synchronous D-Bus in the shell blocks the main loop (noted
+    // in README), and _composeLayout is synchronous.
     SetInputFace(face) {
         if (this._pnInputFace === face)
             return;
@@ -2494,9 +2717,12 @@ export default class PineNoteOskExtension extends Extension {
         this._rebuild();
     }
 
-    // pn-panel 切 RIME 方案時叫的：那幾百毫秒裡候選列裝的是〔方案選單〕，不是候
-    // 選字，畫出來對使用者是「壞掉了」而不是「在切」。這裡把它按住；切完放開。
-    // 只按顯示，不動 popup 的狀態機 —— 選單照樣開、鍵照樣送、RIME 照樣切。
+    // Called when pn-panel switches RIME schemas: for those few hundred
+    // milliseconds the candidate strip holds a [schema menu], not candidates,
+    // and drawing it reads as 'broken' to the user rather than 'switching'. It
+    // is held down here; released when done.
+    // Only display is held down, the popup's state machine is untouched — the
+    // menu still opens, keys are still sent, RIME still switches.
     SuppressCandidates(suppress) {
         globalThis._pnSuppressCandidates = !!suppress;
         const popup = IBusManager.getIBusManager()?._candidatePopup;
@@ -2521,11 +2747,15 @@ export default class PineNoteOskExtension extends Extension {
     }
 
     Palette() {
-        // 🩸 第一版把這裡寫死成 [0,85,170,255]（等距四階）。後來調色盤改成不等距
-        // 的 0/51/170/255，而檢查器沒跟著改，於是 #333 被報成違規 —— 梯級變了，
-        // 尺沒變，量到的就是別的東西。真正的規則不是「哪四個值」，是**落在面板的
-        // 16 階原生格子上**：0x11 = 17，所以格子剛好等於三位簡寫的灰 #000…#fff。
-        // 寫得成 #NNN 就合規，寫不成就不合規。
+        // 🩸 The first version hardcoded this as [0,85,170,255] (four evenly
+        //    distributed levels). The palette was later changed to the non-linear
+        //    0/51/170/255, and the inspector did not follow, so #333 was
+        //    reported as a violation — the rungs changed, the ruler did not, and
+        //    what was measured was something else. The true rule is not 'which
+        //    four values', it is **landing on the panel's 16 native grid
+        //    levels**: 0x11 = 17, so the grid slots equal exactly the
+        //    three-digit shorthand greys #000...#fff.
+        //    If it can be written as #NNN it complies, if not it violates.
         const STEP = 17;
         const onGrid = v => v % STEP === 0;
         const out = {
@@ -2543,7 +2773,7 @@ export default class PineNoteOskExtension extends Extension {
             const name = actor.get_name?.() || "";
             return `${actor.constructor?.$gtype?.name ?? "?"}${name ? "#" + name : ""}${cls ? "." + cls.split(/\s+/).join(".") : ""}`;
         };
-        // Clutter.Color 的成員在不同版本間換過名字，兩種都認
+        // Clutter.Color members changed names between versions, recognise both
         const rgba = c => c && [c.red ?? c.r, c.green ?? c.g, c.blue ?? c.b, c.alpha ?? c.a];
 
         const classify = (who, prop, c) => {
@@ -2553,7 +2783,7 @@ export default class PineNoteOskExtension extends Extension {
             const [r, g, b, a] = v;
             const key = `${who} {${prop}} rgba(${r},${g},${b},${a})`;
             if (a === 0)
-                return;                      // 完全透明＝沒畫，不算違規
+                return;                      // Fully transparent = not drawn, does not count as violation
             if (a < 255) {
                 out.counts.translucent++; bump("translucent", key); return;
             }
@@ -2570,7 +2800,7 @@ export default class PineNoteOskExtension extends Extension {
         const walk = actor => {
             out.actorsVisited++;
             if (actor.visible === false)
-                return;                      // 看不見的不算
+                return;                      // Invisible does not count
             if (actor instanceof St.Widget) {
                 try {
                     const n = actor.get_theme_node();
@@ -2585,10 +2815,12 @@ export default class PineNoteOskExtension extends Extension {
                     }
                     if (n.get_box_shadow?.())
                         bump("shadows", who);
-                    // 🩸 `get_background_gradient()` 在 GJS 裡永遠回傳一個陣列，
-                    // 拿它當真假值用會把每個 StBin 都報成漸層（第一版就是這樣，
-                    // 而 StBin 18 次那個數字就是指紋：容器不可能有漸層）。
-                    // 要讀的是 type，NONE 才代表沒有。
+                    // 🩸 `get_background_gradient()` always returns an array in
+                    //    GJS, using it as a truthy value reported every StBin as
+                    //    having a gradient (the first version did exactly this,
+                    //    and the 'StBin 18 times' number was the fingerprint:
+                    //    containers cannot have gradients).
+                    //    The type must be read, NONE means none.
                     const grad = n.get_background_gradient?.();
                     const gtype = Array.isArray(grad) ? grad[0] : grad;
                     if (gtype && gtype !== St.GradientType.NONE)
@@ -2608,7 +2840,8 @@ export default class PineNoteOskExtension extends Extension {
         } catch (e) {
             out.fatal = e.message;
         }
-        // 只留最常出現的，不然清單沒人看得完
+        // Keep only the most frequent, otherwise the list is too long for anyone
+        // to finish reading
         const top = obj => Object.entries(obj).sort((a, b) => b[1] - a[1]).slice(0, 25);
         for (const k of ["offRung", "chromatic", "translucent", "shadows", "gradients"])
             out[k] = top(out[k]);
@@ -2623,14 +2856,17 @@ export default class PineNoteOskExtension extends Extension {
             return JSON.stringify({error: "grid layout not found"}, null, 2);
 
         const pad = lm.pagePadding;
-        // childSize 是私有計算，但方法是普通方法（不是 vfunc），叫得動。
-        // 它就是每個格子的邊長 —— 而且寬高共用同一個數字，格子必為正方形。
+        // childSize is a private computation, but the method is an ordinary
+        // method (not a vfunc), it can be called.
+        // It is exactly the side length of each cell — and width and height
+        // share the same number, so cells must be squares.
         const childSize = lm._getChildrenMaxSize
             ? lm._getChildrenMaxSize() : null;
         const spacing = childSize !== null && lm._calculateSpacing
             ? lm._calculateSpacing(childSize) : null;
 
-        // 一個 tile 的最小寬/高各是多少 —— 決定 childSize 的就是這兩個的較大者
+        // What the minimum width/height of a tile is — it is the larger of these
+        // two that determines childSize
         const sample = (() => {
             const page = lm._pages?.[0];
             const item = page?.visibleChildren?.[0];
@@ -2659,11 +2895,13 @@ export default class PineNoteOskExtension extends Extension {
             iconSize: lm.iconSize,
             fixedIconSize: lm.fixedIconSize,
             childSize,
-            // [左側留白, 上側留白, 實際水平間距, 實際垂直間距]
+            // [left margin, top margin, actual horizontal spacing, actual
+            // vertical spacing]
             computed: spacing,
             nPages: lm.nPages,
-            // 資料夾內部是另一個 layout manager（FolderGrid），釘死的圖示尺寸
-            // 不會套到它身上 —— 所以它的 iconSize 是獨立收斂的。
+            // Inside a folder is another layout manager (FolderGrid), and the
+            // pinned icon size does not apply to it — so its iconSize converges
+            // independently.
             folder: (() => {
                 const fIcon = (pnOverviewControls()?._appDisplay?._orderedItems ?? [])
                     .find(i => i.style_class?.includes("app-folder"));
@@ -2681,8 +2919,10 @@ export default class PineNoteOskExtension extends Extension {
                 };
             })(),
             sample,
-            // 第二輪要的：折行之後最高／最寬的 tile。畫布寬度得從這裡反推，
-            // 因為 childSize 是「所有 tile 的最小尺寸取最大」，不是平均。
+            // What the second round needs: the tallest/widest tile after line
+            // wrapping. Canvas width must be deduced from here, because
+            // childSize is 'the maximum of the minimum sizes across all tiles',
+            // not an average.
             extremes: (() => {
                 const items = [];
                 for (const page of lm._pages ?? []) {
@@ -2698,7 +2938,8 @@ export default class PineNoteOskExtension extends Extension {
                 const by = k => [...items].sort((a, b) => b[k] - a[k]).slice(0, 4);
                 return {tallest: by("minH"), widest: by("minW")};
             })(),
-            // 每格還能長多少：把行數/欄數塞滿頁面的上限
+            // How much more each cell can grow: the ceiling to pack the
+            // rows/columns onto the page
             headroom: childSize !== null && pad ? {
                 byHeight: Math.floor((lm._pageHeight - pad.top - pad.bottom -
                     lm.rowSpacing * (lm.rowsPerPage - 1)) / lm.rowsPerPage),
@@ -2740,7 +2981,8 @@ export default class PineNoteOskExtension extends Extension {
                 prev: dump(this._pnDecoys.prev),
                 next: dump(this._pnDecoys.next),
             } : null,
-            // 兩顆走同一段程式碼卻不同結果 —— 把它們的實際差異印出來
+            // The two go through the same code path but get different results —
+            // print their actual differences
             diff: (() => {
                 const a = this._pnArrows?.prev ?? null;
                 const b = this._pnArrows?.next ?? null;
@@ -2762,10 +3004,12 @@ export default class PineNoteOskExtension extends Extension {
     }
 
     ShowAppGrid() {
-        // Main.overview.showApps() 一步到位：開 overview 並切到 app grid 那一頁，
-        // 正好對應「頂列左上角 → dock 最右邊」那兩下。
-        // showApps() 只保證打開 overview，不保證停在 app grid（實測會留在
-        // window picker）。直接把狀態推到 APP_GRID，那是這個切換的真實依據。
+        // Main.overview.showApps() gets there in one step: opens overview and
+        // switches to the app grid page, exactly corresponding to those two taps
+        // on 'top-bar top-left → dock far-right'.
+        // showApps() only guarantees opening the overview, not stopping at the
+        // app grid (measured to stay in the window picker). Push the state to
+        // APP_GRID directly, that is the true basis of this switch.
         Main.overview.show();
         const controls = pnOverviewControls();
         if (controls) {
@@ -2776,8 +3020,9 @@ export default class PineNoteOskExtension extends Extension {
         }
     }
 
-    // 拍某一頁的照片時要用。沒有它就只能靠滑動，而滑動是拍不準的：想量的東西
-    // 在第幾頁是使用者排的，不是我排的。
+    // Used when photographing a specific page. Without it one can only rely on
+    // swiping, and swiping cannot be timed precisely: what is to be measured is
+    // on whichever page the user put it on, not where I put it.
     GoToPage(index) {
         pnOverviewControls()?._appDisplay?.goToPage?.(index);
     }

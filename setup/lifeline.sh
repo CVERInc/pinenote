@@ -95,16 +95,18 @@ else
 fi
 
 echo "== [5] Wi-Fi powersave off (the tablet says 'connected' and answers nothing) =="
-# 症狀長這樣：平板上 Wi-Fi 顯示連線中、IP 也還是原本那個，但另一台機器 ping
-# 不到，連 ARP 都拿不到回應。ARP 是二層的 —— 拿不到回應就代表這不是路由、
-# 不是防火牆、也不是 IP 跑掉，而是無線晶片睡著了：關聯還在，但它不回應未經
-# 請求的訊框。它自己送出任何一個封包就會醒（在平板上載一頁網頁就夠）。
+# The tablet says it is connected and answers nothing. It shows the same IP, but
+# another machine cannot even get an ARP reply — and ARP is layer two, so that
+# rules out routing, firewalls and a changed address in one go. The Wi-Fi chip
+# is asleep: the association is still there, it does not respond to unsolicited
+# frames, and any packet it sends itself wakes it (loading a web page on the
+# glass is enough).
 #
-# 對一台「主要用途是被 SSH 進來維護」的裝置，這個預設是錯的：省下來的電，
-# 換到的是一台隨機失聯的機器。
+# On a device whose main use is being maintained over SSH the default is wrong:
+# the power saved is traded for a machine that randomly drops offline.
 #
-# NetworkManager 的 wifi.powersave：0=用預設 1=不要動 2=關閉 3=開啟。
-# 這顆模組的驅動預設是開著，所以要明確寫 2。
+# NetworkManager's wifi.powersave: 0=default, 1=ignore, 2=disable, 3=enable.
+# The driver defaults to enabled, so this must explicitly write 2.
 NM_PS=/etc/NetworkManager/conf.d/10-no-wifi-powersave.conf
 if [ -f "$NM_PS" ] && grep -q 'wifi.powersave *= *2' "$NM_PS"; then
   echo "   already configured"
@@ -113,20 +115,23 @@ else
   echo "   wrote $NM_PS"
 fi
 sudo systemctl reload NetworkManager || true
-# 現況要用問的，不要用猜的 —— 設定檔寫下去不等於現在這條連線已經套用，
-# 已經建立的關聯要重連才會換。
+# Measure the state rather than assuming it — writing the config file does not
+# mean the current connection has applied it. An association that already
+# exists takes a reconnect to change.
 if command -v iw >/dev/null 2>&1; then
   echo "   current: $(iw dev wlan0 get power_save 2>/dev/null || echo 'unknown')"
-  echo "   還是 on 的話，重連一次才會套用。🔴 不要直接在 SSH 裡下 nmcli device"
-  echo "   disconnect —— 那會把你自己的連線一起砍掉、然後沒有人再跑後半段。"
-  echo "   要嘛在平板上做，要嘛丟給 systemd 讓它活過 SSH 斷線："
+  echo "   If still on, reconnect to apply. 🔴 Do not run nmcli device directly in SSH"
+  echo "   disconnect —— it will terminate your own connection, and no one will run the rest."
+  echo "   Either execute on the tablet, or hand it to systemd to survive SSH disconnection:"
   echo "     sudo systemd-run --on-active=2 nmcli device reapply wlan0"
 else
-  echo "   iw 未安裝，無法回報現況（sudo apt-get install -y iw）"
+  echo "   iw not installed, cannot report current status (sudo apt-get install -y iw)"
 fi
-# ⚠️ 位址本身沒有在這裡固定。這台是 DHCP，而它到目前為止一直拿到同一個
-#    位址，所以問題是「睡著」不是「換號碼」。真的要釘死，在路由器上做 DHCP
-#    reservation，不要在裝置上設靜態 —— 設錯的話你就得抱著平板打字了。
+# ⚠️ The address itself is not pinned here. This machine uses DHCP, and so far
+#    it has always been assigned the same address, so the failure was the chip
+#    sleeping, not the address changing. If it must be pinned, use a DHCP
+#    reservation on the router rather than a static IP on the device — getting
+#    it wrong means you are left typing on the tablet itself.
 
 echo
 if [ "$skipped" -gt 0 ]; then

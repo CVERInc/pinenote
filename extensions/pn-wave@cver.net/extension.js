@@ -1,35 +1,40 @@
-/* pn-wave@cver.net — 把「全螢幕閃一次」拆成一條一條非同步執行的完整清除。
+/* pn-wave@cver.net — Breaks a full-screen flash into asynchronous band sweeps.
  *
- * ── 排程用「格」不用「毫秒」（2026-08-12 第三版，前兩版都死在這）──
- * 面板一格要 ~450ms（黑↔白全擺盪），而且**每一格的成本等於那一格裡最慢的
- * 那個轉換**——我們的條紋永遠有黑↔白在裡面，所以每格都吃最壞情況。
- * 用毫秒排程時，每條的階段邊界會落在畫格之間 ⇒ 那個階段被整個吃掉，
- * 而不同的條被吃掉的階段不同 ⇒ **殘留的形狀就是條紋**（維護者看到的正是這個）。
- * 改成整數格排程之後，第 k 格時第 g 條顯示第 (k-g) 階，
- * ⇒ 每一條都證明得了「四個階段各被畫出來一次」，跟面板快慢無關。
+ * ── Scheduling by frames, not milliseconds (2026-08-12 v3, prior two died here) ──
+ * The panel takes ~450ms per frame (a full black<->white swing), and **the cost
+ * of each frame equals the slowest transition in it** — our bands always contain
+ * a black<->white swing, so every frame pays the worst-case time.
+ * Scheduled by ms, a stage boundary lands between frames => that stage is swallowed.
+ * Different bands lose different stages => **what remains are stripes** (which
+ * is exactly what the maintainer saw).
+ * Scheduled by integer frames, at frame k band g shows stage (k-g),
+ * => every band proves it drew all four stages, regardless of panel speed.
  *
- * ── 已經量掉的東西（別再重測）──
- * ‧ 內容路徑「有」清除能力：全螢幕黑→白 ×2 輪走 default_waveform=GC16，
- *   清得跟 TriggerGlobalRefresh 一樣乾淨；bw_mode 0/1 都一樣 ⇒ BW 模式沒偷換波形。
- * ‧ 一格 ~450ms，且**跟作用面積無關**（44%/14%/7% 全是 2.0–2.3 格/秒）。
- * ‧ 先前量到的「6–8 格/秒」是淺轉換的速度，不適用於全擺盪。
- * ‧ delay_a/b/c 三個旋鈕對速度完全無效。
+ * ── What was already measured (do not re-test) ──
+ * - The content path *does* clear: a full-screen black->white x2 using
+ *   default_waveform=GC16 clears as cleanly as TriggerGlobalRefresh; bw_mode
+ *   0/1 are identical => BW mode does not swap the waveform.
+ * - One frame is ~450ms, and **does not depend on painted area** (44%/14%/7%
+ *   all measured at 2.0-2.3 frames/sec).
+ * - The 6-8 frames/sec measured earlier was for shallow transitions, not swings.
+ * - The delay_a/b/c knobs have no effect on speed.
  *
- * ── 幾何的代價（直接由 450ms 乘出來，沒有繞路空間）──
- * N 條可見帶 ⇒ 總格數 = N + 階段數 − 1，總長 = 那個 × ~450ms。
- *   N=9(11% 帶) ≈ 5.9s ／ N=20(5%) ≈ 10.8s ／ N=100(1%) ≈ 47s
+ * ── The cost of geometry (derived from 450ms, no way around it) ──
+ * N visible bands => total frames = N + stages - 1, total duration = that x ~450ms.
+ *   N=9 (11% band) ≈ 5.9s / N=20 (5%) ≈ 10.8s / N=100 (1%) ≈ 47s
  *
- * ── 前幾版的坑（三個都長得像「參數沒調好」）──
- * 1. 漸層鋒面總寬佔螢幕 68% ⇒ 連續兩格幾乎一樣 ⇒ 又發明了一次閃。
- * 2. 單鋒面在 diff_mode=Y 下**永遠碰不到原本就是黑的像素**（黑蓋黑＝沒變化
- *    ＝不套波形）⇒ 不可能等價於全閃。要黑白兩瓣。
- * 3. stageMs 設 220 但面板一格 450ms ⇒ 每條四階被吃掉一半，
- *    它從來沒真的跑完一套全閃。
+ * ── Traps in earlier versions (all three looked like wrong parameters) ──
+ * 1. A gradient front spanning 68% of the screen => consecutive frames are almost
+ *    identical => we reinvented the flash.
+ * 2. Under diff_mode=Y, a single front **never touches already-black pixels**
+ *    (black over black = no change) => it never clears. It needs two halves.
+ * 3. stageMs set to 220 but panel takes 450ms/frame => half the stages were
+ *    swallowed, so it never completed a full flash.
  *
- * ── restoreAuto 預設 false 的理由（量測用）──
- * 掃描會弄髒好幾整片螢幕的量，auto_refresh 一開回來就立刻超過 threshold、
- * 立刻全洗 ⇒ 「乾淨」是全閃給的不是波給的，波的效果無法判斷。
- * 要判斷波本身，就得讓它掃完之後**不要**有人來補刀。
+ * ── Why restoreAuto defaults to false (for measurement) ──
+ * A sweep dirties multiple screenfuls. If auto_refresh returns, it exceeds the
+ * threshold and triggers a full flash => the "clean" result came from the flash.
+ * To judge the wave itself, it must finish without intervention.
  */
 
 import St from 'gi://St';
@@ -65,19 +70,22 @@ const IFACE = `
   </interface>
 </node>`;
 
-/* Clear() ＝ 日常用的清除：用互補抖動取代全閃。
+/* Clear() = The everyday clear: replaces the flash with a complementary dither.
  *
- * 為什麼不是波：波要 6–20 格（5–12 秒），而維護者的判斷是**慢會讀成硬體虛弱**。
- * 抖動只要 2 格：一半像素翻黑、另一半翻白，下一格對調 ⇒ 每個像素都拿到一次
- * 完整的黑↔白擺盪，但**畫面平均亮度全程停在中灰，從來沒有整片翻轉**。
- * 不舒服來自整個視野一起改變亮度，不是來自清除本身——這兩件事可以拆開。
+ * Why not a sweep: a sweep takes 6-20 frames (5-12 seconds), and the conclusion
+ * was that **slowness reads as weak hardware**.
+ * A dither takes 2 frames: half the pixels to black, half to white, swapped on
+ * the next frame => every pixel receives a full black-to-white swing, but **the
+ * screen's mean luminance stays at mid-grey, never flipping as a whole**.
+ * Discomfort comes from the entire visual field changing brightness at once, not
+ * from the clear itself — the two are separable.
  *
- * 🔴 holdMs 不能低於 ~500ms：GC16 是 DC 平衡的脈衝列，中途被下一個目標打斷
- *    就會留下殘餘電荷（那正是先前所有條紋殘影的成因）。700–900ms 安全。
+ * 🔴 holdMs must not fall below ~500ms: GC16 is a DC-balanced pulse train;
+ *    interrupting it leaves residual charge (the cause of banding). 700-900ms is safe.
  */
 const CLEAR_DEFAULTS = {
-    grain: 8,        // 抖動格點（2 的冪）
-    cycles: 1,       // 幾輪（一輪＝A 與其補集，每個像素各碰兩端一次）
+    grain: 8,        // Dither grain (power of 2)
+    cycles: 1,       // Cycles (one cycle = A and its complement, touching both extremes for each pixel once)
     holdMs: 700,
     waveform: 4,     // GC16
 };
@@ -105,13 +113,13 @@ function bayer(n) {
 const EBC = {name: 'org.pinenote.ebc', path: '/ebc', iface: 'org.pinenote.ebc'};
 
 const DEFAULTS = {
-    bands: 9,        // 幾條可見帶（帶寬＝螢幕寬÷bands）
-    cycles: 2,       // 每條跑幾輪黑白（會清乾淨的那個對照組是 2）
-    stepMs: 500,     // 每格停留 ms。面板一格 ~450ms，別低於它
+    bands: 9,        // Number of visible bands (band width = screen width / bands)
+    cycles: 2,       // Cycles of black and white per band (the control group that clears completely is 2)
+    stepMs: 500,     // Milliseconds per step. Panel step is ~450ms, do not set lower
     dir: 'lr',
-    waveform: 4,     // 1=A2 2=DU 4=GC16 7=DU4，0=不動
-    holdAutoRefresh: true,   // 掃描期間關掉核心 auto_refresh
-    restoreAuto: false,      // 掃完是否開回去。false＝看得到波真正的結果
+    waveform: 4,     // 1=A2 2=DU 4=GC16 7=DU4, 0=idle
+    holdAutoRefresh: true,   // Disable kernel auto_refresh during scan
+    restoreAuto: false,      // Restore after scan. false = shows the true result of the wave
 };
 
 export default class PnWaveExtension extends Extension {
@@ -126,7 +134,7 @@ export default class PnWaveExtension extends Extension {
 
     disable() {
         this._teardown();
-        this._mark?.destroy();   // 留在畫面上的標籤會活過 disable，變成撿不回來的殘留
+        this._mark?.destroy();   // Labels left on screen survive disable, becoming uncollectable leftovers
         this._mark = null;
         if (this._nameId) {
             Gio.bus_unown_name(this._nameId);
@@ -142,8 +150,8 @@ export default class PnWaveExtension extends Extension {
                 EBC.name, EBC.path, EBC.iface, method, param, null,
                 Gio.DBusCallFlags.NONE, 800, null);
         } catch (e) {
-            // 🔴 別吞掉。當年 idle-refresh 的 dbus 那行掛著 2>/dev/null，
-            //    服務死掉之後它對空氣喊了三天、每次都「成功」。
+            // 🔴 Do not swallow this. The idle-refresh dbus call had 2>/dev/null
+            //    appended; it shouted into the void for 3 days, succeeding every time.
             console.error(`pn-wave: ${method} failed: ${e.message}`);
             return null;
         }
@@ -178,13 +186,13 @@ export default class PnWaveExtension extends Extension {
         cr.paint();
 
         for (let i = 0; i < p.bands; i++) {
-            const g = ascending ? i : p.bands - 1 - i;   // 起跑順序
+            const g = ascending ? i : p.bands - 1 - i;   // Start order
             const stage = k - g;
             if (stage < 0 || stage >= this._stages.length)
-                continue;                    // 還沒輪到、或已經做完＝透明＝露出內容
+                continue;                    // Not yet queued or already done = transparent = reveals content
             const v = this._stages[stage];
             cr.setSourceRGBA(v, v, v, 1);
-            // 多蓋 1px，免得浮點邊界露出一條沒被覆蓋的縫
+            // Cover an extra 1px so a floating-point boundary does not leave a gap
             if (alongX)
                 cr.rectangle(Math.floor(i * bandPx), 0, Math.ceil(bandPx) + 1, h);
             else
@@ -192,12 +200,12 @@ export default class PnWaveExtension extends Extension {
             cr.fill();
         }
         cr.$dispose();
-        // 🔑 只在「真的畫了一格」之後才前進。這樣每一帶都證明得了四個階段
-        //    各被畫出來一次，不管面板多慢——毫秒排程做不到這件事。
+        // 🔑 Advance only after a frame was actually drawn. This proves every band
+        //    drew all four stages, regardless of panel speed -- ms scheduling cannot.
         this._painted++;
     }
 
-    // 互補抖動磚（快取兩張：A 與補集）
+    // Complementary dither tiles (caches two: A and its complement)
     _ditherTile(grain, invert) {
         const key = `${grain}:${invert ? 1 : 0}`;
         this._tiles ??= new Map();
@@ -242,13 +250,15 @@ export default class PnWaveExtension extends Extension {
         this._painted++;
     }
 
-    /* 察覺門檻用的探針：把 density% 的黑點**疊在現有畫面上**（其餘透明，
-     * 不是換成白底），停 holdMs 後收掉。density=0 是假試驗——一樣建立/銷毀
-     * actor、一樣等同樣久，只是不畫東西，好讓盲測沒有時序線索。
+    /* Probe for the perception threshold: overlays density% of black dots **on top
+     * of the existing screen** (the rest transparent, not white), holds for holdMs,
+     * then removes them. density=0 is a sham trial -- it creates/destroys the actor
+     * and waits just as long, but draws nothing, leaving no timing clues.
      *
-     * 為什麼要量這個：讓清除看不見的條件是「每格的亮度變化低於察覺門檻」，
-     * 而亮度變化 ≈ 覆蓋率 × (頁面亮度 − 黑)。覆蓋率的上限是**他的**門檻決定的，
-     * 不是我算得出來的，所以只能量。
+     * Why measure this: an invisible clear requires 'brightness change per frame <
+     * perception threshold'. Brightness change ≈ coverage * (page brightness - black).
+     * The coverage ceiling is dictated by the observer's threshold, which cannot be
+     * computed. It has to be measured.
      */
     _probeTile(grain, level) {
         const key = `p${grain}:${level}`;
@@ -259,7 +269,7 @@ export default class PnWaveExtension extends Extension {
         const surf = new Cairo.ImageSurface(Cairo.Format.ARGB32, grain, grain);
         const cr = new Cairo.Context(surf);
         cr.setOperator(Cairo.Operator.SOURCE);
-        cr.setSourceRGBA(0, 0, 0, 0);          // 透明底＝底下的內容留著
+        cr.setSourceRGBA(0, 0, 0, 0);          // Transparent background = underlying content remains
         cr.paint();
         cr.setSourceRGBA(0, 0, 0, 1);
         for (let y = 0; y < grain; y++) {
@@ -277,13 +287,13 @@ export default class PnWaveExtension extends Extension {
         return pat;
     }
 
-    /* Mark(n) ＝ 螢幕角落的小小試驗編號。
+    /* Mark(n) = A tiny trial number in the corner of the screen.
      *
-     * 🩸 第一版盲測的編號印在 Mac 終端機上，而受試者得盯著 PineNote——
-     *    他因此答得出「12 次裡看到 7 次」，卻答不出是哪 7 次。
-     *    儀器要求受試者同時看兩個螢幕，那是我的設計缺陷，不是他的問題。
-     * 標籤刻意做小且固定在角落：更新面積小、位置遠離判斷區，
-     * 不會跟「整片有沒有變暗」這個判斷互相汙染。
+     * 🩸 The first test printed the number on a remote terminal while the observer
+     *    stared at the tablet; they could report 'saw 7 of 12', but not which 7.
+     *    Requiring them to watch two screens was a flaw in the instrument.
+     * The label is small and pinned in the corner: a tiny footprint, far from the
+     * evaluation zone, ensures it does not contaminate the screen-dimming judgment.
      */
     Mark(params) {
         const p = {n: 0, ...Object.fromEntries(Object.entries(params ?? {})
@@ -326,7 +336,7 @@ export default class PnWaveExtension extends Extension {
         if (this._prevAuto)
             this._ebc('SetAutoRefresh', new GLib.Variant('(b)', [false]));
 
-        // 假試驗也要建 actor、也要等一樣久：時序不能洩漏答案
+        // Sham trials also build the actor and wait: timing must not leak the answer
         if (level > 0) {
             const m = Main.layoutManager.primaryMonitor;
             this._area = new St.DrawingArea({reactive: false, width: m.width, height: m.height});
@@ -355,7 +365,7 @@ export default class PnWaveExtension extends Extension {
             this._teardown();
             return GLib.SOURCE_REMOVE;
         });
-        // 覆蓋率換算成亮度變化：白約 40% 反射率、黑約 5%
+        // Convert coverage to brightness change: white reflects ~40%, black ~5%
         const drop = (level / levels) * (0.40 - 0.05) / 0.40 * 100;
         return JSON.stringify({mode: 'probe', density: p.density, level, levels,
                                holdMs: p.holdMs, sham: level === 0,
@@ -406,7 +416,7 @@ export default class PnWaveExtension extends Extension {
             return GLib.SOURCE_CONTINUE;
         });
 
-        // 閘門：兩張磚必須互補，否則有像素整輪下來沒被翻過＝清不乾淨而且沒人會發現
+        // Gate: tiles must complement, or pixels stay unflipped = silent dirty clear
         this._ditherTile(p.grain, 0);
         this._ditherTile(p.grain, 1);
         const a = this._tileCounts[`${p.grain}:0`];
@@ -429,7 +439,7 @@ export default class PnWaveExtension extends Extension {
             return JSON.stringify({error: 'bands/cycles/stepMs must be >= 1'});
         this._p = p;
 
-        // 每帶的完整序列：黑,白 重複 cycles 次。跟那個會清乾淨的對照組逐字相同。
+        // Full band sequence: black, white * cycles. Identical to the clean control.
         this._stages = [];
         for (let c = 0; c < p.cycles; c++)
             this._stages.push(0, 1);
@@ -487,8 +497,8 @@ export default class PnWaveExtension extends Extension {
             this._ebc('SetDefaultWaveform', new GLib.Variant('(y)', [this._prevWaveform]));
             this._prevWaveform = null;
         }
-        // Sweep 預設不開回去（開回去的瞬間核心會立刻全洗，那個「乾淨」不是波給的）；
-        // Clear 則把它還原成原本的值，因為它是日常在跑的東西，不該改變系統狀態。
+        // Sweep leaves it off (restoring it triggers a kernel flash, which fakes
+        // the 'clean' result); Clear restores it to avoid altering system state.
         if (this._restoreAuto)
             this._ebc('SetAutoRefresh', new GLib.Variant('(b)', [true]));
         this._restoreAuto = false;

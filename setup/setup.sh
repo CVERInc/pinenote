@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# PineNote 調教 setup — dogfood：PineNote 記錄／重放自己的調教。
-# 目標：把乾淨的 PNDeb os1 調教成「護眼 SSH 終端 ＋ 保留手寫 GNOME(Xournal++/Wacom)」
-#       的一機二職，不必另建 os2。
-# 冪等：可重複跑。
+# PineNote setup — dogfood: the PineNote recording and replaying its own tuning.
+# Goal: tune a clean PNDeb os1 into a dual-role device — "legible SSH terminal +
+#       preserved GNOME handwriting (Xournal++/Wacom)" — without a separate os2.
+# Idempotent: safe to rerun.
 set -e
 export DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$(id -u)/bus"
 
@@ -10,26 +10,32 @@ echo "== [1] SSH server =="
 sudo apt-get install -y openssh-server
 sudo systemctl enable --now ssh
 
-echo "== [2] 生命線：接電不休眠（保 SSH 不斷）／電池閒置 10 分鐘 suspend =="
-# 🔴 AC 與電池要分開設。原本兩邊都 nothing ＝ 拔電後不到一天耗盡電池，
-#    而這台沒電關機後只有實體電源鍵能開機（reset 路徑全封，見 vault）。
-# 接電不吃電池 → 維持不睡，保留「插著電遠端長跑」的能力。
-# 電池 → 閒置 10 分鐘 deep suspend。
-# 🔴 耗電要在「拔電」下量，接電時量的全是假象（充電器補電流，charge_now 掉得慢）：
-#   拔電 deep suspend 實測約 32mA ＝ 19.4%/天 ⇒ 滿電約 5 天（2026-07-28，pn 的 hook 記錄）。
-#   接電時同一支 hook 量到 8.5mA／20 天，樂觀了四倍。同理接電量到的「清醒 49.5mA」也偏低，
-#   以維護者實測「不到一天耗盡」回推，真實清醒約 170-200mA。
-#   10 分鐘而非 5：在 e-ink 上讀東西可以很久沒有任何輸入。
-# idle-delay 維持 0（不 blank）：e-ink 上 blank 會洗掉正在看的畫面；
-#   suspend 本身就會關前光又保留畫面，讓它一步到位即可。
-# ✅ suspend/resume 實測可靠：deep 進得去、RTC 與電源鍵都叫得醒、
-#   resume 後 Wi-Fi 自動重連約 14 秒（brcmfmac 韌體重載），SSH 自己回來。
+echo "== [2] Lifeline: disable sleep on AC (keep SSH alive) / suspend after 10m on battery =="
+# 🔴 AC and battery power must be set separately. Both were nothing by default = 
+#    exhausted the battery in under a day off AC, and once dead this device only
+#    boots via the physical power button (reset paths are sealed, see vault).
+# On AC power -> stay awake, preserving the ability to run long remote tasks.
+# On battery -> deep suspend after 10 minutes idle.
+# 🔴 Power consumption must be measured off AC; measuring on AC is an illusion
+#    (the charger supplies current, charge_now drops slowly):
+#    Measured deep suspend off AC is ~32mA = 19.4%/day => ~5 days on full charge
+#    (2026-07-28, pn hook record).
+#    On AC the same hook measured 8.5mA / 20 days, optimistic by 4x. Likewise
+#    the "awake 49.5mA" measured on AC is low; extrapolated from the maintainer's
+#    "exhausted in under a day" observation, true awake is ~170-200mA.
+#    10 minutes rather than 5: reading on e-ink can mean long gaps without input.
+# idle-delay stays 0 (no blank): on e-ink, blanking wipes the screen being read;
+#    suspend already turns off the frontlight while keeping the picture, so just
+#    go straight to suspend.
+# ✅ suspend/resume measured reliable: deep suspend is entered, RTC and power
+#    button both wake it, Wi-Fi reconnects automatically after ~14 seconds
+#    (brcmfmac firmware reload), and SSH recovers on its own.
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type nothing
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-type suspend
 gsettings set org.gnome.settings-daemon.plugins.power sleep-inactive-battery-timeout 600
 gsettings set org.gnome.desktop.session idle-delay 0
 
-echo "== [3] 終端護眼（gnome-terminal，電子紙最佳）=="
+echo "== [3] Terminal readability (gnome-terminal, optimal for e-paper) =="
 P=$(gsettings get org.gnome.Terminal.ProfilesList default | tr -d "'")
 T="org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:$P/"
 gsettings set "$T" cursor-blink-mode off
@@ -42,43 +48,60 @@ gsettings set "$T" background-color "rgb(255,255,255)"
 gsettings set "$T" audible-bell false
 gsettings set "$T" scrollback-lines 100000
 
-# 16 色 ANSI 調色盤：畫線的格子全黑，鋪底的格子留白。
-# 🔴 為什麼不是「調成好看的灰階」：這台跑 bw_mode=1，面板只有兩階，任何中間灰
-#    都會被抖成網點，小字的筆畫因此散掉。GNOME 預設的第 7 格是 #d0cfcc，而很多
-#    TUI（含 Claude Code 的 light 主題）拿第 7 格當「次要文字」——在白底上那等於
-#    看不見。實測：只換這一格以外的顏色沒有用，換了它整個畫面才讀得出來。
-# 🔴 第 7 格必須是黑的：它在白底終端機裡被當前景用。設成白色會讓半個畫面消失
-#    （試過，畫面上只剩標題列）。
-# 🔴 只有 0 號要白，8 號不可以。0 號在 TUI 裡幾乎只當底色用，留黑的話白底上就是
-#    一塊實心黑：字看不見，而且大面積黑正是這個 repo 在消滅的累積來源。設成白＝
-#    「不上底」，跟 diff 的 context 行不上底是同一個判斷。15 一樣留白（深色底上
-#    的白字，例如反白標頭）。
-# 🔴 8 號是文字格不是底色格，在面板上實測過：漂白它，Claude Code 的程式碼註解、
-#    git 的次要輸出、所有 dim 文字會整批消失（測試圖第 [2] 行整行不見）。主題那邊
-#    因此把底色全部指到 0 號，8 號只留給「深色終端機才看得到的那一階」。
-# 🔴 1（紅）和 2（綠）不動。它們在 Claude Code 裡是 diff 的底色，漂白很誘人，
-#    但同兩格也是 git／ls／grep 的紅綠前景——漂白等於那些字從「黑」變成「消失」，
-#    換來的只是這一個程式的 diff 底。代價不對等，所以 diff 底在這台維持黑塊。
-# 代價：編輯器的語法上色在這台上會全部變黑。1-bit 螢幕本來就承載不了那個資訊。
-#      另外 8 格在別的 TUI 是「暗色次要文字」，這台上會跟著消失。
-# 捲軸關掉：它在右邊佔掉約 50px，而左邊沒有對應的留白——畫面因此看起來偏左。
-# 量出來的：文字左緣在第 2px，右緣停在 x≈1819，右邊空著 52px。
-# 電子紙上捲軸既用不到（用鍵盤或觸控捲）又會跟著內容一起留殘影。
+# 16-color ANSI palette: line-drawing slots are pure black, background slots white.
+# 🔴 Why not "tune to nice greys": this runs bw_mode=1, the panel has two levels, 
+#    and any mid-grey is dithered, shattering the strokes of small text. GNOME's 
+#    default slot 7 is #d0cfcc, and many TUIs (including Claude Code's light theme)
+#    use slot 7 for "secondary text" — which on a white background is invisible.
+#    Measured: changing every color except this one did nothing; changing this made
+#    the whole screen readable.
+# 🔴 Slot 7 must be black: it acts as foreground in a white-background terminal.
+#    Setting it to white causes half the screen to vanish (tried it, only the
+#    title bar remained).
+# 🔴 Only slot 0 is white, slot 8 is not. Slot 0 is almost entirely used as a
+#    background in TUIs; leaving it black makes a solid black block on a white
+#    background: text vanishes, and large black areas are exactly the accumulation
+#    source this repo suppresses. White = "unpainted background", the same
+#    reasoning as unpainted context lines in diffs. Slot 15 is also white (white
+#    text on dark backgrounds, e.g. inverted headers).
+# 🔴 Slot 8 is a text slot, not a background slot, measured on the panel: whitening
+#    it makes Claude Code's comments, git's secondary output, and all dim text
+#    vanish entirely (row [2] in the test pattern disappeared). The theme therefore
+#    points all backgrounds to slot 0, reserving 8 for "the shade only visible in
+#    dark terminals".
+# 🔴 Slots 1 (red) and 2 (green) are untouched. They act as diff backgrounds in
+#    Claude Code; whitening them is tempting, but they are also the red/green
+#    foregrounds in git/ls/grep — whitening them turns those words from "black" to
+#    "invisible", buying only one program's diff background. The trade is unequal,
+#    so diff backgrounds remain black blocks on this device.
+# Trade-off: editor syntax highlighting becomes entirely black on this device.
+#            A 1-bit screen never had the bandwidth for that information.
+#            The other 8 slots are "dark secondary text" in other TUIs and will
+#            vanish here.
+# Scrollbar off: it claims ~50px on the right with no matching margin on the left
+# — making the screen look off-center.
+# Measured: text left edge is at 2px, right edge stops at x≈1819, leaving 52px
+# empty on the right.
+# On e-ink a scrollbar is both useless (we scroll by keyboard or touch) and leaves
+# ghosting as it moves with the content.
 gsettings set "$T" scrollbar-policy never
 
-# 左右留白。終端機只顯示整數欄，除不盡的餘數全部空在右邊：這台是 936 邏輯 px
-# ÷ 84 欄、每格 11.14px，84 欄用掉 924，剩 12px（24 實體 px）堆在右緣，於是整個
-# 畫面看起來偏左。量到的是左 2px、右 20px。把餘數分一半到左邊就對稱了，而且不
-# 損失任何一欄——那些像素本來就沒人用。
+# Horizontal padding. The terminal only displays integer columns, and the undivided
+# remainder is left empty on the right: this device is 936 logical px / 84 columns
+# at 11.14px each; 84 columns claim 924px, leaving 12px (24 physical px) stacked
+# on the right edge, making the whole screen look off-center. Measured: left 2px,
+# right 20px. Splitting the remainder puts it in symmetry, without losing a single
+# column — those pixels were unused anyway.
 #
-# 🔴 GTK 只在啟動時讀 gtk.css，而 gnome-terminal 的所有視窗共用一個 server，
-#    所以這一步要等終端機整個重啟才看得到（重開機也算）。
-# 🔴 既有的 gtk.css 絕不覆寫：那是使用者自己的檔案，我們只追加自己那一段，
-#    而且用標記判斷有沒有加過。
+# 🔴 GTK reads gtk.css only at startup, and all gnome-terminal windows share a
+#    single server, so this step needs a full terminal restart to become visible
+#    (a reboot works too).
+# 🔴 An existing gtk.css is never overwritten: it is a user's own file. We only
+#    append our block, and check for a marker to avoid applying it twice.
 GTKCSS="$HOME/.config/gtk-3.0/gtk.css"
 mkdir -p "$(dirname "$GTKCSS")"
 if [ -f "$GTKCSS" ] && grep -q "pinenote:terminal-padding" "$GTKCSS"; then
-  echo "   -> gtk.css 已有終端機留白，保留"
+  echo "   -> gtk.css already has terminal padding, keeping"
 else
   cat >> "$GTKCSS" <<'PNCSS'
 
@@ -88,41 +111,51 @@ vte-terminal {
   padding-right: 6px;
 }
 PNCSS
-  echo "   -> 已加終端機留白（要重啟終端機才生效）"
+  echo "   -> Terminal padding added (requires terminal restart to take effect)"
 fi
 gsettings set "$T" bold-is-bright false
 gsettings set "$T" palette "['#FFFFFF', '#000000', '#000000', '#000000', \
 '#000000', '#000000', '#000000', '#000000', '#000000', '#000000', '#000000', \
 '#000000', '#000000', '#000000', '#000000', '#FFFFFF']"
 
-# 反白（拖選）。🔴 這三個要一起設，只設顏色不設開關等於沒設：highlight-colors-set
-# 是 false 時，VTE 只把底換成「前景色」而保留字本身的顏色——白底黑字的終端機上
-# 那就是黑底黑字，選起來整段變全黑。面板上實測過，值本來就對，差的是那個開關。
+# Selection highlighting. 🔴 These three must be set together; setting the colors
+# without the switch does nothing: when highlight-colors-set is false, VTE just
+# changes the background to the "foreground color" and keeps the text's own color
+# — on a white-background terminal that means black text on a black background, so
+# the selection becomes a solid black block. Measured on the panel: the values were
+# right to begin with, the missing part was the switch.
 gsettings set "$T" highlight-background-color "#000000"
 gsettings set "$T" highlight-foreground-color "#FFFFFF"
 gsettings set "$T" highlight-colors-set true
 
-echo "== [4] apt 地基：hold 住 GNOME shell/mutter（真正的理由是不跑 full-upgrade）=="
-# 🔴 歸因更正（2026-08-01）：這裡以前寫「GNOME 48 有開機災難」，那是錯的。
-#    手上唯一的證據是上游 PNDeb/pinenote-debian-image#89 "Cannot boot after update"，
-#    開於 2024-11，而 GNOME 48 是 2025-03 才發布——時間對不上，它談的是跑 dist-upgrade
-#    之後裝不回 gdm3。⇒「別跑 full-upgrade」成立；「GNOME 48 危險」沒有證據。
-#    hold 有代價：gnome-shell 47.3-1+pn1 已無來源(只剩 dpkg status)＝孤兒、不會再有安全更新。
-# 🔴 不跑 full-upgrade。PNDeb 簽章 key 短命(1-6月過期)，失效時重裝官方 keyring：
-#    wget <release>/pinenote-custom-repo-and-keyring_X_all.deb && sudo dpkg -i ...（先驗指紋）
+echo "== [4] apt foundation: hold GNOME shell/mutter (the actual reason is to prevent full-upgrade) =="
+# 🔴 Attribution correction (2026-08-01): this previously claimed "GNOME 48 causes
+#    boot failures", which was wrong. The only evidence at hand was upstream
+#    PNDeb/pinenote-debian-image#89 "Cannot boot after update", opened in 2024-11,
+#    while GNOME 48 shipped in 2025-03 — the timeline does not fit. It was about
+#    gdm3 failing to reinstall after a dist-upgrade. => "Do not run full-upgrade"
+#    holds; "GNOME 48 is dangerous" had no evidence.
+#    The hold has a cost: gnome-shell 47.3-1+pn1 no longer has a source (only in
+#    dpkg status) = it is an orphan and will not receive security updates.
+# 🔴 Do not run full-upgrade. The PNDeb signing key is short-lived (expires in
+#    1-6 months); when it expires, reinstall the official keyring:
+#    wget <release>/pinenote-custom-repo-and-keyring_X_all.deb && sudo dpkg -i ...
+#    (verify fingerprint first).
 sudo apt-mark hold gnome-shell gnome-shell-common gnome-shell-extension-prefs \
   gnome-shell-extension-user-theme gnome-shell-extensions-common \
   mutter-common mutter-common-bin 2>/dev/null || true
 
-echo "== [5] 常用工具 =="
+echo "== [5] Common tools =="
 sudo apt-get install -y git tmux vim
 
-echo "== [6] Typing Mode：波形 + 兩個 user service + dbus 服務防呆 =="
-# 🔴 這一段以前不存在——README 說「一行就裝好 Typing Mode」，但 setup.sh 根本沒裝，
-#    那些 service 是當初手動放上去的。重刷一次就只剩終端配色，招牌功能不會回來。
+echo "== [6] Typing Mode: waveform + two user services + dbus service fail-safe =="
+# 🔴 This block did not exist before — the README claimed "one line installs
+#    Typing Mode", but setup.sh never installed it; those services were placed by
+#    hand. Reflashing left only the terminal colors, and the marquee feature
+#    did not come back.
 D="$(cd "$(dirname "$0")" && pwd)"
 
-# runtime 的波形設定不持久，開機要靠 modprobe.d
+# Runtime waveform settings do not persist; boot relies on modprobe.d
 sudo tee /etc/modprobe.d/rockchip_ebc.conf >/dev/null <<'EOF'
 options rockchip_ebc refresh_waveform=4 auto_refresh=0 refresh_threshold=4 prepare_prev_before_a2=1
 EOF
@@ -132,88 +165,119 @@ install -m 0644 "$D/pn-typing-mode.service" "$D/pn-idle-refresh.service" "$HOME/
 systemctl --user daemon-reload
 systemctl --user enable --now pn-typing-mode.service pn-idle-refresh.service
 
-# pinenote-dbus-service 會因 gpio-keys 開機競態而 panic，連帶讓「停手才清殘影」
-# 整條鏈安靜地死掉。理由寫在 drop-in 檔頭。
+# pinenote-dbus-service panics from a gpio-keys boot race, which silently takes
+# down the entire "clear ghosting on idle" chain. The reasoning is at the top of
+# the drop-in file.
 sudo mkdir -p /etc/systemd/system/pinenote-dbus-service.service.d
 sudo install -m 0644 "$D/10-ensure-gpio-keys.conf" \
   /etc/systemd/system/pinenote-dbus-service.service.d/10-ensure-gpio-keys.conf
 sudo systemctl daemon-reload
 
-echo "== [7] 生命線（SSH 金鑰／Wi-Fi／持久 journal／免密碼 sudo）=="
-# 免輸入的部分自動套（持久 journal——沒有它，下次崩潰的遺言會跟著崩潰一起消失）；
-# 其餘需要參數或明確 opt-in，lifeline.sh 會印出怎麼開。
+echo "== [7] Lifeline (SSH key / Wi-Fi / persistent journal / passwordless sudo) =="
+# The non-interactive parts are applied automatically (persistent journal — without
+# it, the next crash's final logs vanish with the crash); the rest need arguments
+# or explicit opt-in, and lifeline.sh prints how to enable them.
 "$(dirname "$0")/lifeline.sh"
 
-# ── TODO（要盯螢幕才能調，留待有人看效果時做）──
-#  • e-ink 波形：/sys/module/rockchip_ebc/parameters/*（root:video、user 在 video group→免 sudo 可寫）
-#    治「打字全螢幕刷」。bw_mode=1 純黑白最適文字。runtime 不持久→開機自動套要寫 modprobe.d。
-#  • 藍牙 Keychron K6 卡頓：疑 2.4G Wi-Fi/BT 共存干擾 → Wi-Fi 改走 5GHz（見 [11]）。
-#  • ✅ suspend 已驗（2026-07-28，不再是未知）：deep 進得去、RTC 與掀開蓋子都叫得醒、
-#    resume 後 Wi-Fi 自動重連約 14 秒（brcmfmac 韌體重載）SSH 自己回來。拔電睡眠約 19.4%/天
-#    ⇒ 滿電約 5 天。電池閒置自動 suspend 已在真實條件（拔電＋不碰）下看它開火過。🔴 驗證要走 logind（systemctl suspend），rtcwake -m mem 直寫
-#    /sys/power/state 會繞過 systemd-suspend.service，system-sleep hooks 一個都不會跑。
+# ── TODO (requires looking at the screen, deferred until someone is watching) ──
+#  • e-ink waveforms: /sys/module/rockchip_ebc/parameters/* (root:video, user
+#    is in video group -> writable without sudo)
+#    Fixes "full screen flash on typing". bw_mode=1 pure B/W is best for text.
+#    Runtime changes do not persist -> auto-apply at boot needs modprobe.d.
+#  • Bluetooth Keychron K6 stutters: suspected 2.4G Wi-Fi/BT coexistence
+#    interference -> move Wi-Fi to 5GHz (see [11]).
+#  • ✅ suspend verified (2026-07-28, no longer an unknown): enters deep suspend,
+#    RTC and cover-open both wake it, Wi-Fi reconnects automatically after ~14
+#    seconds (brcmfmac firmware reload), and SSH recovers on its own. Off-AC
+#    sleep draws ~19.4%/day => ~5 days on full charge. Battery idle auto-suspend
+#    has been observed firing under real conditions (off AC + untouched). 🔴
+#    Verification must use logind (systemctl suspend); rtcwake -m mem writes
+#    directly to /sys/power/state, bypassing systemd-suspend.service and skipping
+#    all system-sleep hooks.
 
-echo "== [8] 修 PNDeb 的 suspend 耗電記錄（我們這台的 image 上每次睡眠都 NameError）=="
-# /usr/lib/systemd/system-sleep/pn_record_power_usage.py 用 platform 路徑找電池。
-#   我們的 image：硬編碼 rk817-charger.6.auto，這台是 .7.auto（實例編號會漂移）
-#   → 兩條候選都不存在 → bat_dir 從未賦值 → 每次 suspend 拋 NameError，
-#     這支儀表從第一天就沒運作過（/root/energy_use.dat 一行都沒有）。
-#   上游現版：已改用 glob 找實例目錄，主 bug 修掉了——但仍 assert，一旦沒命中
-#     照樣在每次 suspend 拋例外。
-# 兩種形狀都換成穩定的 /sys/class/power_supply/rk817-battery ＋ 找不到就安靜退出。
-# 已送上游 PNDeb/pinenote-debian-image#129；在它落地前（以及任何舊 image）靠這裡補。
-# dpkg -S 查不到擁有者＝套件管理不管它，重刷後不會自己回來。
+echo "== [8] Fix PNDeb suspend power drain logging (the image on this device threw NameError on every sleep) =="
+# /usr/lib/systemd/system-sleep/pn_record_power_usage.py searches for the battery
+# using a platform path.
+#   Our image: hardcoded rk817-charger.6.auto, while this device is .7.auto
+#   (instance numbers drift) -> both candidates are missing -> bat_dir is never
+#   assigned -> throws a NameError on every suspend; this instrument has never
+#   worked from day one (not a single line in /root/energy_use.dat).
+#   Upstream current: now uses glob to find the instance directory, fixing the
+#   primary bug — but still asserts, so a miss will still throw an exception on
+#   every suspend.
+# Replace both forms with the stable /sys/class/power_supply/rk817-battery + a
+# quiet exit on failure.
+# Submitted upstream as PNDeb/pinenote-debian-image#129; until it lands (and for
+# any older image), we patch it here.
+# dpkg -S finds no owner = unmanaged by the package manager, it will not come
+# back on its own after reflashing.
 sudo python3 "$D/patch-pn-power-usage.py"
 
-echo "== [9] 睡眠畫面（有 ~/offscreen/screen.bin 才裝）=="
-# 蓋上／按鎖定／關機後停在螢幕上的那張圖不是 GNOME 鎖屏，是 kernel EBC driver 的
-# off-screen：面板斷電前，driver 把 /lib/firmware/rockchip/rockchip_ebc_default_screen.bin
-# 直接推給控制器。GNOME 那邊的 org.gnome.desktop.screensaver picture-uri 是死 key
-# （shell 只讀它的 user-switch-enabled），改它什麼都不會發生。
-# 圖是私人照片，不進這個公開 repo；配方在 setup/offscreen/，圖本身放 ~/offscreen/
-# （/home 是獨立分割 p7，重刷 os1 不會跟著消失）。
-# 🔴 不必重開機就能看：SetOfflineScreenFromFileTemporary 立刻套用執行期的圖。
-#    在一台「任何 reset 路徑都終結於掉電、只有實體電源鍵能開機」的裝置上，這不是方便，
-#    是唯一能在固化前先看一眼的辦法——不然每調一次亮度就要維護者到場開機一次。
-# 🔴 但那個「固化」以前是假的（2026-08-04 一次重開機才抓到）：rockchip_ebc 是模組、
-#    住在 initramfs 裡、t+1.3s 就 probe，request_firmware 解析到的是 **initramfs 內的
-#    那份**，不是我們寫進 rootfs 的這份。initramfs 裡包的是出廠圖 → 重開機貓就沒了，
-#    而 driver 一句警告都不會印（對它來說什麼都沒失敗）。
-#    ⇒ 寫檔 + 開機時用同一支 D-Bus 呼叫補回來；真正的固化是 update-initramfs，見下。
+echo "== [9] Sleep screen (installed if ~/offscreen/screen.bin exists) =="
+# The image left on the screen after closing the cover, locking, or shutting down
+# is not the GNOME lock screen, it is the kernel EBC driver's off-screen: before
+# powering down the panel, the driver pushes
+# /lib/firmware/rockchip/rockchip_ebc_default_screen.bin straight to the
+# controller. GNOME's org.gnome.desktop.screensaver picture-uri is a dead key
+# (the shell only reads its user-switch-enabled), changing it does nothing.
+# The picture is a private photo and does not enter this public repo; the recipe
+# is in setup/offscreen/, the picture itself goes in ~/offscreen/ (/home is an
+# independent p7 partition, reflashing os1 does not wipe it).
+# 🔴 You do not have to reboot to look: SetOfflineScreenFromFileTemporary applies
+#    the picture at runtime immediately. On a device where every reset path ends
+#    in losing power and only the physical power button brings it back, this is
+#    not a convenience, it is the only way to check before persisting — otherwise
+#    every brightness adjustment requires a person on-site to reboot.
+# 🔴 But that "persisting" was an illusion (caught during a reboot on 2026-08-04):
+#    rockchip_ebc is a module, lives in the initramfs, and probes at t+1.3s, so
+#    request_firmware resolves to **the copy in the initramfs**, not the one we
+#    wrote to rootfs. The initramfs was packed with the factory picture -> reboot,
+#    and the picture vanishes, while the driver prints exactly zero warnings
+#    (nothing failed from its side).
+#    => Writing the file + re-applying via the same D-Bus call at boot fills the
+#    gap; true persistence is update-initramfs, see below.
 FW=/lib/firmware/rockchip/rockchip_ebc_default_screen.bin
 if [ -f "$HOME/offscreen/screen.bin" ]; then
-  sudo cp -n "$FW" "$FW.bak-pine64"          # 原廠 PINE64 圖，只備份一次（-n 保冪等）
+  sudo cp -n "$FW" "$FW.bak-pine64"          # Factory PINE64 image, backed up once (-n for idempotence)
   sudo install -m 0644 "$HOME/offscreen/screen.bin" "$FW"
 
   sudo install -m 0755 "$D/offscreen/restore-offscreen.sh" /usr/local/sbin/pn-restore-offscreen
   sudo install -m 0644 "$D/offscreen/pn-offscreen.service" /etc/systemd/system/pn-offscreen.service
   sudo systemctl daemon-reload
   sudo systemctl enable --now pn-offscreen.service
-  echo "   已裝；原廠圖備份在 $FW.bak-pine64；開機由 pn-offscreen.service 補回"
+  echo "   Installed; factory image backed up to $FW.bak-pine64; restored on boot by pn-offscreen.service"
 
-  # initramfs 才是 driver 真正讀得到的地方。預設不動它：這台沒有遠端救援，
-  # 壞掉的 initramfs ＝ 只剩磁鐵 maskrom，而且 extlinux 選單目前是隱藏的（挑不到舊 kernel）。
-  # 要固化就明講一聲再開（重生完務必在人在現場時重開機驗一次）：
+  # The initramfs is where the driver actually reads from. Untouched by default:
+  # this device has no remote recovery; a broken initramfs = maskrom only, and
+  # the extlinux menu is currently hidden (cannot pick an older kernel).
+  # To persist it, opt in explicitly (and verify by rebooting while a person is
+  # on-site):
   #   PINENOTE_OFFSCREEN_INITRAMFS=1 setup/setup.sh
   if [ "${PINENOTE_OFFSCREEN_INITRAMFS:-0}" = "1" ]; then
     sudo cp -n "/boot/initrd.img-$(uname -r)" "/boot/initrd.img-$(uname -r).bak-offscreen"
     sudo update-initramfs -u -k "$(uname -r)"
-    echo "   initramfs 已重生（舊的備份在 /boot/initrd.img-$(uname -r).bak-offscreen）"
+    echo "   initramfs regenerated (old backup at /boot/initrd.img-$(uname -r).bak-offscreen)"
   else
-    echo "   initramfs 未重生＝driver 開機時讀到的仍是出廠圖；要固化見上方註解"
+    echo "   initramfs not regenerated = driver reads factory image on boot; see above comments to persist"
   fi
 else
-  echo "   跳過：沒有 ~/offscreen/screen.bin（用 setup/offscreen/make-offscreen.sh 產一張）"
+  echo "   Skipping: missing ~/offscreen/screen.bin (generate one with setup/offscreen/make-offscreen.sh)"
 fi
 
-echo "== [10] 藍牙鍵盤：關掉 BT 控制器的 runtime 休眠 =="
-# ⚠️ **假設，尚未驗證**（2026-07-31）：Keychron K6 打字卡頓的候選根因之一。
-# 實測 BT 控制器 runtime PM 是 auto、autosuspend 5s，44 分鐘 uptime 有 98.4% 在 suspended。
-# 🔴 但那份數字**不是證據**——量的時候鍵盤根本沒連線，98.4% 只證明它閒著。
-#    要證實得在「鍵盤連線期間」看它會不會反覆進出 suspend，那需要真人打字。
-# 另一個候選是 Wi-Fi/BT 共存：BCM43455 是單晶片、共用天線，而 Wi-Fi 在 2.4G(ch6)。
-#    若同一 AP 有 5GHz 可用就切過去，但這台沒有遠端救援，切頻段要維護者在場才做。
-# 代價：只在清醒時多一點點耗電；deep suspend 時整個系統停，不影響「拔電 5-7 天」。
+echo "== [10] Bluetooth keyboard: disable BT controller runtime suspend =="
+# ⚠️ **Hypothesis, not yet verified** (2026-07-31): One candidate root cause for
+# Keychron K6 typing stutters.
+# Measured BT controller runtime PM as auto, autosuspend 5s; over 44 minutes of
+# uptime it spent 98.4% suspended.
+# 🔴 But that number is **not evidence** — the keyboard was disconnected while
+#    measuring; 98.4% only proves it was idle. To verify, it needs measuring
+#    while the keyboard is connected to see if it bounces in and out of suspend,
+#    which requires a human typing.
+# The other candidate is Wi-Fi/BT coexistence: BCM43455 is a single chip sharing
+# an antenna, and Wi-Fi is on 2.4G(ch6). If the same AP offers 5GHz, move to it,
+# but this device has no remote recovery, so switching bands needs a person on-site.
+# Cost: slightly more power draw only while awake; during deep suspend the entire
+# system stops, so the "5-7 days off AC" remains unaffected.
 sudo tee /etc/udev/rules.d/50-bt-no-autosuspend.rules >/dev/null <<'EOF'
 # BT controller runtime PM off — a sparse-input device (keyboard) pays the wake
 # latency on every first keystroke after an idle gap. BCM43455 sits on UART/serdev.
@@ -221,62 +285,80 @@ ACTION=="add", SUBSYSTEM=="serial", KERNEL=="serial0-0", ATTR{power/control}="on
 EOF
 sudo udevadm control --reload
 C=/sys/class/bluetooth/hci0/device/power/control
-[ -e "$C" ] && echo on | sudo tee "$C" >/dev/null   # 立即生效，不必等重開機
-echo "   BT autosuspend 已關（規則已驗證會在 add 時開火）"
+[ -e "$C" ] && echo on | sudo tee "$C" >/dev/null   # Applies immediately, no reboot required
+echo "   BT autosuspend disabled (rule verified to fire on add)"
 
-echo "== [11] 讓 Wi-Fi 優先走 5GHz（給藍牙讓出 2.4GHz）=="
-# BCM43455 是 Wi-Fi + 藍牙的**單晶片、共用天線**。Wi-Fi 待在 2.4GHz 時，藍牙鍵盤會
-# 斷線／掉鍵／連發（掉 key-up 後核心自動重複）。同一支鍵盤在 Mac 上完全穩定，
-# 環境干擾因此排除——爭用的是這台自己的兩個 radio。
-# ⚠️ 證據等級：維護者實測 5GHz 下明顯穩定，客觀面 down/up 事件成對；但這不是對照
-#   嚴謹的實驗（2.4GHz 那組沒能在相同條件下取樣）。長期看 /var/log/bt-band-trial.log
-#   與 `dmesg | grep -c "BLUETOOTH HID"`（重連次數）才是硬指標。
-# 不指名任何網路：讀目前在用的連線、複製一份把 band 釘在 5GHz 的，PSK 也從既有連線
-# 帶過去不落地。對任何人的任何網路都適用。
+echo "== [11] Prefer 5GHz for Wi-Fi (freeing 2.4GHz for Bluetooth) =="
+# BCM43455 is a **single chip, shared antenna** for Wi-Fi + Bluetooth. While
+# Wi-Fi sits on 2.4GHz, the Bluetooth keyboard disconnects, drops strokes, or
+# repeats them (dropping a key-up leaves the kernel auto-repeating). The exact
+# same keyboard is perfectly stable on a Mac, which rules out environmental
+# interference — the contention is between this device's own two radios.
+# ⚠️ Evidence level: measured noticeably stable on 5GHz, and objectively down/up
+#    events pair up; but this was not a rigorous control experiment (the 2.4GHz
+#    set could not be sampled under identical conditions). The hard metrics are
+#    watching /var/log/bt-band-trial.log and `dmesg | grep -c "BLUETOOTH HID"`
+#    (reconnection count) over the long term.
+# Names no specific network: it reads the active connection, clones it while
+# pinning the band to 5GHz, and carries the PSK over from the existing connection
+# without writing it to disk. Works for anyone on any network.
 A=$(nmcli -t -f NAME,TYPE con show --active 2>/dev/null | awk -F: '$2=="802-11-wireless"{print $1; exit}')
-# 已經釘在 5GHz 的連線不必再複製（否則每跑一次就長出一條 -5g 尾巴）
+# Connections already pinned to 5GHz do not need cloning (otherwise each run
+# sprouts another -5g suffix)
 B=""; [ -n "$A" ] && B=$(nmcli -g 802-11-wireless.band con show "$A" 2>/dev/null)
 if [ "$B" = "a" ]; then
-  echo "   目前連線已釘在 5GHz，跳過"
+  echo "   Current connection is already bound to 5GHz, skipping"
 elif [ -n "$A" ] && ! nmcli -g NAME con show 2>/dev/null | grep -qx "${A}-5g"; then
   S=$(nmcli -g 802-11-wireless.ssid con show "$A" 2>/dev/null)
   P=$(sudo nmcli -s -g 802-11-wireless-security.psk con show "$A" 2>/dev/null)
   if [ -n "$S" ] && [ -n "$P" ]; then
-    # 🔴 WPA2/WPA3 transition 網路要明寫 wpa-psk（sae 與簡寫都關聯不上，見 lifeline.sh）
+    # 🔴 WPA2/WPA3 transition networks must explicitly set wpa-psk (both sae and
+    #    shorthand fail to associate, see lifeline.sh)
     sudo nmcli con add type wifi con-name "${A}-5g" ifname wlan0 ssid "$S" \
       wifi.band a wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$P" \
       connection.autoconnect yes connection.autoconnect-priority 10 >/dev/null 2>&1 \
       && sudo nmcli con mod "$A" connection.autoconnect-priority 0 \
-      && echo "   已建 ${A}-5g（5GHz 優先；原連線留著當 fallback）"
+      && echo "   Created ${A}-5g (prefers 5GHz; original connection kept as fallback)"
     unset P
   else
-    echo "   跳過：讀不到現用連線的 SSID/PSK"
+    echo "   Skipping: failed to read SSID/PSK of current connection"
   fi
 else
-  echo "   已存在或無使用中的 Wi-Fi，跳過"
+  echo "   Already exists or no active Wi-Fi, skipping"
 fi
 
-echo "== [12] Mac 模式的藍牙鍵盤：把左 Alt 與左 Super 換回 PC 佈局 =="
-# 三模鍵盤切在 Mac 模式時，對主機自稱是 Apple 鍵盤（vendor 05AC），鍵位對應本身**是正確的**：
+echo "== [12] Mac mode Bluetooth keyboard: remap left Alt and left Super back to PC layout =="
+# A tri-mode keyboard switched to Mac mode presents itself as an Apple keyboard
+# (vendor 05AC), and the mapping itself **is correct**:
 #   control -> Ctrl / option -> Alt / command -> Super
-# 問題出在**實體順序**，兩種佈局的最後兩顆是相反的：
-#   PC 佈局   ... Ctrl  Super  Alt   [space]      <- Alt 貼著空格
-#   Mac 佈局  ... Ctrl  Alt    Super [space]      <- Super 貼著空格
-# 所以手指去按空格旁邊想要 Alt+Tab，送出的是 Super。鍵盤上的實體 Mac/Win 開關做的就是這個
-# 交換——這裡改成由主機端做，就不必為了換機器去撥開關（那是個看不見的裝置狀態，會咬人）。
-# 只換左邊：65% 佈局右下通常沒有右 Alt 可換（實測該鍵盤右側只有第二顆 command）。
-# ⚠️ 這是**全域**設定，會套用到任何接上的鍵盤；要精確到單一裝置得用 keyd 綁 device id。
-# 🔴 **修正只能存在於一個地方**（2026-08-01 實測）：把鍵盤撥到 Windows 模式時，它在韌體層
-#    就把那兩顆的 keycode 換好了（實測 option→Super、command→Alt＝PC 順序），這時這條 XKB
-#    再換一次會**繞回 Mac 佈局＝全錯**。⇒ 用這條就把鍵盤留在 Mac 模式。
-#    順帶一提：撥開關**不會**改變鍵盤宣告的身分（兩種模式都是 vendor 05ac、同一個 HID 實例，
-#    沒有重新枚舉），變的只有送出的 keycode。
-# 🔴 kernel 這邊本來有更對的解：`hid_apple` 驅動帶 `swap_opt_cmd` 參數，但這顆 kernel
-#    `# CONFIG_HID_APPLE is not set`，所以鍵盤只能落到 hid-generic，那些參數不存在。
-#    XKB 這條是使用者空間的繞法，不需要動 kernel。
-# 🔴 用加的，不要整個陣列蓋掉：ime.sh 也會往這個 key 放 caps:menu（Caps→US），
-#    兩支各自寫死陣列的話後跑的蓋前面的（2026-08-18 真的發生：Mac 鍵盤那條被
-#    蓋掉了，沒人發現，因為它只在接 Mac 鍵盤時才看得出來）。
+# The issue is the **physical order**; the last two keys in the layouts differ:
+#   PC layout   ... Ctrl  Super  Alt   [space]      <- Alt hugs the spacebar
+#   Mac layout  ... Ctrl  Alt    Super [space]      <- Super hugs the spacebar
+# So reaching next to the spacebar intending Alt+Tab sends Super instead. The
+# physical Mac/Win switch on the keyboard performs exactly this swap — doing it on
+# the host side instead means no longer toggling switches when moving between
+# machines (a physical toggle is an invisible device state, and it bites).
+# Swap the left side only: 65% layouts usually lack a right Alt to swap (measured:
+# this keyboard's right side only has a second command key).
+# ⚠️ This is a **global** setting and applies to any connected keyboard; targeting a
+#    specific device requires binding the device id with keyd.
+# 🔴 **Corrections must live in exactly one place** (measured 2026-08-01): when the
+#    keyboard is toggled to Windows mode, it swaps the keycodes in firmware
+#    (measured option->Super, command->Alt = PC order); applying this XKB rule on
+#    top of that **reverts it to Mac layout = completely wrong**. => If using this
+#    rule, leave the keyboard in Mac mode.
+#    For the record: the switch **does not** alter the keyboard's declared identity
+#    (both modes are vendor 05ac, the same HID instance, no re-enumeration), it
+#    only alters the keycodes sent.
+# 🔴 The kernel originally had a better answer for this: the `hid_apple` driver has
+#    a `swap_opt_cmd` parameter, but this kernel has `# CONFIG_HID_APPLE is not set`,
+#    so the keyboard falls back to hid-generic and those parameters do not exist.
+#    This XKB rule is the userspace workaround, needing no kernel changes.
+# 🔴 Append, do not overwrite the entire array: ime.sh also places caps:menu
+#    (Caps->US) into this key, and if both scripts hardcode the array, the second
+#    overwrites the first (actually happened on 2026-08-18: the Mac keyboard rule
+#    was erased, and nobody noticed because it only shows when a Mac keyboard is
+#    attached).
 python3 - <<'PY'
 import subprocess, ast
 cur = ast.literal_eval(subprocess.check_output(["gsettings","get","org.gnome.desktop.input-sources","xkb-options"], text=True).strip())
@@ -285,80 +367,98 @@ if "altwin:swap_lalt_lwin" not in cur:
 subprocess.check_call(["gsettings","set","org.gnome.desktop.input-sources","xkb-options", repr(cur)])
 print("   xkb-options =", cur)
 PY
-echo "   已套用（驗證只能靠人：XKB 在 evdev 之上，evdev 層的 keycode 不會變）"
+echo "   Applied (requires manual verification: XKB sits above evdev, evdev keycodes remain unchanged)"
 
-echo "== [18] 輸入法（PINENOTE_NO_IME=1 跳過）=="
-# 拼音、注音、日文。以前是「想要再自己跑」，但重刷之後少了它這台就打不了中日文，
-# 而 pn-input 那顆按鈕會指著不存在的東西 —— 這不是可選的。不要的人設環境變數。
+echo "== [18] Input method (skipped if PINENOTE_NO_IME=1) =="
+# Pinyin, bopomofo, Japanese. This used to be "run it yourself if you want it",
+# but without it this device could not type CJK after a reflash, and the pn-input
+# button pointed at nothing — this is not optional. Opt out with the environment
+# variable instead.
 if [ "${PINENOTE_NO_IME:-0}" = "1" ]; then
-  echo "   跳過（PINENOTE_NO_IME=1）"
+  echo "   Skipping (PINENOTE_NO_IME=1)"
 else
   "$D/ime.sh"
 fi
 
 echo "== done =="
 
-# ── 試過、放棄的（別重踩）──
-#  • lid「蓋上就睡」：試過 logind 的 HandleLidSwitchExternalPower=ignore，想做成
-#    「插電不睡、電池才睡」→ 無效。當時猜「logind 不認為 USB-C 算外部電源」——猜錯了。
-#    🔑 真根因（2026-07-28 查明）：gpio-keys 報的是 SW_MACHINE_COVER(0x10)、不是 SW_LID，
-#    而 logind 的 HandleLidSwitch* 只認 SW_LID → 怎麼設都不會生效。真正在處理蓋子的是
-#    PNDeb 自己的 pinenote_sleep_on_cover_close.sh，聽到 cover close 就叫 logind suspend。
-#    行為結論不變（需要遠端連線時別蓋），但要改行為的對象是那支 daemon，不是 logind。
-#  🔴 別在活著的 session 上跑 systemctl restart systemd-logind — 會弄掉 GNOME session。
-#     救援：從 SSH 跑 sudo systemctl restart gdm3。改 lid 只能「寫檔 + 重開機」。
-#  🔴 電子紙的 TTY 字太小太糊、不堪用 — 若要走「開機直進 SSH 的極簡系統」，
-#     console 字型是必須先解的第一關。
+# ── Tried and abandoned (do not retread) ──
+#  • lid "suspend on cover close": tried logind's HandleLidSwitchExternalPower=ignore
+#    to get "stay awake on AC, suspend on battery" -> did nothing. The guess then
+#    was "logind does not consider USB-C external power" — which was wrong.
+#    🔑 True cause (found 2026-07-28): gpio-keys reports SW_MACHINE_COVER (0x10),
+#    not SW_LID, and logind's HandleLidSwitch* only respects SW_LID -> no setting
+#    there will ever work. What actually handles the cover is PNDeb's own
+#    pinenote_sleep_on_cover_close.sh, which asks logind to suspend on cover close.
+#    The behavioral conclusion stands (do not close the cover when needing remote
+#    access), but the target to change is that daemon, not logind.
+#  🔴 Do not run systemctl restart systemd-logind on a live session — it kills the
+#     GNOME session. Recovery: sudo systemctl restart gdm3 over SSH. Changing lid
+#     behavior requires "write file + reboot".
+#  🔴 The e-ink TTY font is too small and blurred, rendering it unusable — if
+#     building a "minimal system booting straight to SSH", the console font is the
+#     first obstacle to clear.
 
-echo "== [14] 自動旋轉：接通加速度計 =="
-# 這台有加速度計（silan sc7a20），但出廠狀態下自動旋轉是死的，死在兩個地方。
+echo "== [14] Auto-rotate: wire up the accelerometer =="
+# This device has an accelerometer (silan sc7a20), but auto-rotate is dead out of
+# the box, failing in two places.
 #
-# ① iio-sensor-proxy 沒裝 ⇒ GNOME 看不到那顆晶片，快速設定裡的 Auto Rotate
-#    開關雖然在，卻是灰的。
+# ① iio-sensor-proxy is missing => GNOME cannot see the chip; the Auto Rotate
+#    switch is present in Quick Settings, but greyed out.
 sudo apt-get install -y iio-sensor-proxy
 #
-# ② systemd 的 /usr/lib/udev/hwdb.d/60-sensor.hwdb 有一條標著 PineTab2 的
-#    ACCEL_MOUNT_MATRIX，比對鍵是 of:N<節點>T<型別>C<compatible> —— 裡面只有
-#    晶片，沒有機器身分。PineNote 用同一顆 silan,sc7a20、裝的方向不同，於是
-#    PineTab2 的校正被套過來，蓋掉裝置樹裡正確的值。
-#    症狀：四個實體方向被壓成兩個，而且兩個都是橫向（transform 0 與 2）。
+# ② systemd's /usr/lib/udev/hwdb.d/60-sensor.hwdb has an ACCEL_MOUNT_MATRIX labeled
+#    for the PineTab2, using of:N<node>T<type>C<compatible> as the match key —
+#    which only specifies the chip, not the machine identity. The PineNote uses the
+#    same silan,sc7a20 mounted in a different orientation, so the PineTab2's
+#    calibration applies and overwrites the correct value from the device tree.
+#    Symptom: the four physical orientations collapse into two, both of them
+#    landscape (transform 0 and 2).
 sudo install -m 0644 "$D/udev/61-sensor-pinenote.rules" /etc/udev/rules.d/
 sudo udevadm control --reload
-# 🔴 只觸發那一顆裝置。--subsystem-match=iio 會連 saradc 一起重發 ADD，而
-#    電源鍵（adc-keys）掛在那條 ADC 上 —— 實測會把機器弄睡。
+# 🔴 Only trigger that specific device. --subsystem-match=iio reissues ADD for
+#    saradc as well, and the power button (adc-keys) is attached to that ADC —
+#    measured: doing this puts the machine to sleep.
 for d in /sys/bus/iio/devices/iio:device*; do
   [ "$(cat "$d/name" 2>/dev/null)" = "sc7a20" ] && sudo udevadm trigger --action=add "$d"
 done
 sudo systemctl restart iio-sensor-proxy 2>/dev/null || true
 gsettings set org.gnome.settings-daemon.peripherals.touchscreen orientation-lock false
-echo "   已接通；Auto Rotate 在快速設定裡（面板上那顆旋轉鈕也會顯示目前模式）"
+echo "   Wired up; Auto Rotate is in quick settings (the rotate button on the panel also shows the current mode)"
 
-echo "== [13] pn-osk：把虛擬鍵盤換成 65% 版面（GNOME 47 與 48 都吃） =="
-# 🔴 這一步以前不在腳本裡：README 有一整節在講這個鍵盤，而重刷後它不會回來。
-#    跟 Typing Mode 當年同一個形狀的 phantom feature。
-# 冪等：檔案直接覆蓋；設定檔已存在就不動（那是使用者調過的）。
+echo "== [13] pn-osk: replace virtual keyboard with 65% layout (supported by GNOME 47 and 48) =="
+# 🔴 This step was missing from the script before: the README dedicates a whole
+#    section to this keyboard, but reflashing left it gone. A phantom feature,
+#    the exact same shape as Typing Mode was.
+# Idempotent: files are overwritten directly; config files are untouched if they
+# exist (since the user tuned them).
 E="$HOME/.local/share/gnome-shell/extensions/pn-osk@cver.net"
 mkdir -p "$E"
 install -m 0644 "$D/../extensions/pn-osk@cver.net/extension.js" \
                 "$D/../extensions/pn-osk@cver.net/metadata.json" \
                 "$D/../extensions/pn-osk@cver.net/stylesheet.css" "$E/"
-# 自製圖示（面板的刷新鈕）。漏掉的話那顆按鈕會是空白的，而空白按鈕看起來就是壞掉。
+# Custom icons (the panel's refresh button). Missing them leaves the button blank,
+# and a blank button reads as broken.
 mkdir -p "$E/icons"
 install -m 0644 "$D/../extensions/pn-osk@cver.net/icons/"*.svg "$E/icons/"
 if [ ! -f "$HOME/.config/pn-osk.json" ]; then
   install -m 0644 "$D/../extensions/pn-osk@cver.net/pn-osk.example.json" \
                   "$HOME/.config/pn-osk.json"
-  echo "   -> 已放上預設 ~/.config/pn-osk.json"
+  echo "   -> Placed default ~/.config/pn-osk.json"
 else
-  echo "   -> ~/.config/pn-osk.json 已存在，保留"
+  echo "   -> ~/.config/pn-osk.json exists, keeping"
 fi
-# 新裝的擴充目錄要重啟 session 才掃得到，所以 enable 這一步可能先失敗；
-# 直接把 uuid 寫進清單，下次 shell 起來就會載入。用 python 而不是 sed 改這個
-# 陣列：清單為空時是 "@as []"，字串接合會生出 "@as [, 'x']" 這種壞語法。
+# Newly installed extension directories are not scanned until the session restarts,
+# so this enable step might initially fail; writing the uuid directly to the list
+# ensures the shell loads it next time. Use python instead of sed to edit this
+# array: an empty list is "@as []", and string concatenation produces bad syntax
+# like "@as [, 'x']".
 pn_enable_extension() {
-  # 新裝的擴充目錄要重啟 session 才掃得到，所以 enable 這一步可能先失敗；
-  # 直接把 uuid 寫進清單，下次 shell 起來就會載入。用 python 而不是 sed 改這個
-  # 陣列：清單為空時是 "@as []"，字串接合會生出 "@as [, 'x']" 這種壞語法。
+  # Newly installed extension directories are not scanned until the session restarts,
+  # so this enable step might initially fail; writing the uuid directly to the list
+  # ensures the shell loads it next time. Use python instead of sed to edit this
+  # array: an empty list is "@as []", and string concatenation produces bad syntax
+  # like "@as [, 'x']".
   gnome-extensions enable "$1" 2>/dev/null && return 0
   PN_UUID="$1" python3 - <<'PYEOF'
 import os, subprocess
@@ -369,79 +469,90 @@ cur = subprocess.run(["gsettings", "get", "org.gnome.shell", "enabled-extensions
 body = cur[cur.index("[") + 1:cur.rindex("]")]
 items = [s.strip().strip("'") for s in body.split(",") if s.strip()]
 if UUID in items:
-    print("   -> %s 已在 enabled-extensions 內" % UUID)
+    print("   -> %s is already in enabled-extensions" % UUID)
 else:
     items.append(UUID)
     val = "[" + ", ".join("'%s'" % i for i in items) + "]"
     subprocess.run(["gsettings", "set", "org.gnome.shell",
                     "enabled-extensions", val], check=True)
-    print("   -> %s 已加入 enabled-extensions" % UUID)
+    print("   -> %s added to enabled-extensions" % UUID)
 PYEOF
 }
 
 pn_enable_extension pn-osk@cver.net
 
-echo "== [15] pn-panel：頂列三顆 e-ink 控制（刷新／旋轉／色調） =="
-# 這三顆本來住在 pn-osk 裡，跟鍵盤和啟動器共用一個擴充卻不共用任何狀態。
-# 拆出來是為了讓只想要這三顆的人不必連帶接受一副被重造的鍵盤。
+echo "== [15] pn-panel: three top-bar e-ink controls (refresh / rotate / tone) =="
+# These three used to live in pn-osk, sharing an extension with the keyboard and
+# launcher but sharing zero state. They were split out so that anyone wanting
+# only the buttons does not have to accept a rebuilt keyboard along with them.
 P="$HOME/.local/share/gnome-shell/extensions/pn-panel@cver.net"
 mkdir -p "$P/icons"
 install -m 0644 "$D/../extensions/pn-panel@cver.net/extension.js" \
                 "$D/../extensions/pn-panel@cver.net/metadata.json" \
                 "$D/../extensions/pn-panel@cver.net/stylesheet.css" "$P/"
-# 自製圖示。漏掉的話按鈕會是空白的，而空白按鈕看起來就是壞掉。
+# Custom icons. Missing them leaves the button blank, and a blank button reads
+# as broken.
 install -m 0644 "$D/../extensions/pn-panel@cver.net/icons/"*.svg "$P/icons/"
 pn_enable_extension pn-panel@cver.net
 
-echo "== [15b] pn：一個地方看現況、開關功能 =="
-# setup/pn 是統一入口，不擁有狀態 —— 每個功能的真值留在它原本的家，pn 只是
-# 讀寫它們。所以這裡只放一個 symlink：~/.local/bin 在 Debian 的 .profile 裡
-# 本來就在 PATH 上。
+echo "== [15b] pn: single location for status and toggles =="
+# setup/pn is a unified entry point that owns no state — the truth of every feature
+# remains in its original home, pn only reads and writes them. So we just place a
+# symlink here: ~/.local/bin is already on PATH in Debian's .profile.
 mkdir -p "$HOME/.local/bin"
 ln -sf "$D/pn" "$HOME/.local/bin/pn"
 chmod +x "$D/pn"
 
-echo "== [16] pn-wave：把全螢幕閃換成互補抖動清除 =="
-# 清除量沒有變少，變的是分配：原廠讓所有像素同時翻黑再同時翻白；這個讓一半
-# 翻黑、一半翻白，下一格對調。逐像素的待遇一模一樣（同樣的 GC16 全擺盪），
-# 但畫面平均亮度全程停在中灰、一次都沒有整片翻轉——不舒服來自後者，不是前者。
+echo "== [16] pn-wave: replace full-screen flash with complementary dither clear =="
+# The amount of clearing did not decrease, the distribution did: the factory clear
+# drives all pixels to black and then all to white at once; this one drives half
+# to black and half to white, and swaps them in the next frame. Pixel for pixel
+# the treatment is identical (the same full GC16 swing), but the screen's mean
+# luminance stays at mid-grey the entire time, without a single full-screen flip
+# — the discomfort comes from the latter, not the former.
 W="$HOME/.local/share/gnome-shell/extensions/pn-wave@cver.net"
 mkdir -p "$W"
 install -m 0644 "$D/../extensions/pn-wave@cver.net/extension.js" \
                 "$D/../extensions/pn-wave@cver.net/metadata.json" "$W/"
 pn_enable_extension pn-wave@cver.net
 
-# 🔴 核心的 auto_refresh 一定要關：它那條路徑產生的是原廠全閃，我們改不了它的樣子。
-#    而 auto_refresh 的**真正主人是 pnhelper** —— 值記在它自己的 gsetting，每次
-#    session 起來就拿記住的值覆寫驅動。只寫 sysfs 或只寫 modprobe.d 都活不過
-#    一次 shell 重載（實測：改完 D-Bus 值，restart gdm3 之後它就被打開回去）。
+# 🔴 The kernel's auto_refresh must be off: that path produces the factory full
+#    flash, and we cannot change its appearance. The **true owner of auto_refresh
+#    is pnhelper** — the value is recorded in its own gsetting, and every time the
+#    session starts it overwrites the driver with the remembered value. Writing
+#    only to sysfs or modprobe.d will not survive a single shell reload (measured:
+#    changed the D-Bus value, and after restart gdm3 it was turned right back on).
 PNH=/usr/share/gnome-shell/extensions/pnhelper@m-weigand.github.com/schemas
 if [ -d "$PNH" ]; then
   gsettings --schemadir "$PNH" set org.gnome.shell.extensions.pnhelper auto-refresh false
-  echo "   -> pnhelper 的 auto-refresh 已設為 false（否則它會用全閃搶先開火）"
+  echo "   -> pnhelper auto-refresh set to false (otherwise it preempts with a full flash)"
 
-  # 色調模式的預設值。這裡宣告它，而不是繼承上游 schema 的預設——那個目前剛好
-  # 也是 0，所以這台一直是灰階，但那是運氣不是設計：上游哪天改掉預設，這台就
-  # 跟著換模式，而沒有任何一處會提到這件事。
+  # The tone mode default. We declare it here instead of inheriting the upstream
+  # schema's default — that default happens to currently be 0 as well, so this
+  # device has always been in greyscale, but that is luck, not design: if upstream
+  # changes the default tomorrow, this device would switch modes with it, and
+  # nothing would mention it.
   #
-  # 🔴 只在第一次跑的時候寫。這是口味不是正確性：使用者按了面板上那顆按鈕之後
-  #    再跑一次 setup.sh，不該把他的選擇翻回來。標記檔存在就完全不碰。
-  #    （auto-refresh 上面那個沒有標記，因為那條是正確性——核心那條路徑產生的
-  #    是我們改不了樣子的原廠全閃，任何時候都必須關著。）
+  # 🔴 Write this only on the first run. This is preference, not correctness: if
+  #    a user presses the panel button and then reruns setup.sh, it should not
+  #    flip their choice back. The presence of the marker file skips it entirely.
+  #    (The auto-refresh block above has no marker because that is correctness —
+  #    the kernel path produces a factory flash we cannot alter, and must be off
+  #    at all times.)
   TONE_MARK="$HOME/.config/pinenote-tone-default"
   case "${PINENOTE_TONE:-greyscale}" in
     greyscale) TONE_VALUE=0 ;;
     bw)        TONE_VALUE=1 ;;
-    *) echo "   -> PINENOTE_TONE 只吃 greyscale 或 bw，收到 ${PINENOTE_TONE}" >&2; TONE_VALUE=0 ;;
+    *) echo "   -> PINENOTE_TONE only accepts greyscale or bw, received ${PINENOTE_TONE}" >&2; TONE_VALUE=0 ;;
   esac
   if [ -f "$TONE_MARK" ]; then
-    echo "   -> 色調模式先前已設過，保留你目前的選擇"
+    echo "   -> Tone mode previously configured, keeping your current choice"
   else
     gsettings --schemadir "$PNH" set org.gnome.shell.extensions.pnhelper \
       bw-mode "$TONE_VALUE"
     : > "$TONE_MARK"
-    echo "   -> 色調預設 = ${PINENOTE_TONE:-greyscale}（之後用面板那顆按鈕改，這裡不再碰）"
+    echo "   -> Tone default = ${PINENOTE_TONE:-greyscale} (changeable later via panel button, no further modifications here)"
   fi
 else
-  echo "   -> 找不到 pnhelper schemas，跳過；auto_refresh 仍由 modprobe.d 關著" >&2
+  echo "   -> Missing pnhelper schemas, skipping; auto_refresh remains disabled by modprobe.d" >&2
 fi
