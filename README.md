@@ -1,8 +1,8 @@
 # pinenote
 
-> **Everything CVER runs on the Pine64 PineNote.** It starts with the one fix that made the
-> device usable as a terminal: typing on e-ink without the screen flashing every few words —
-> and clearing the ghosting only once you stop typing.
+> **Everything CVER runs on the Pine64 PineNote.** The settings and three GNOME extensions
+> that make a Debian/GNOME image behave on e-ink — and, at more length, what each of them
+> cost to get wrong first.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Device: PineNote](https://img.shields.io/badge/Device-Pine64%20PineNote-brightgreen.svg)
@@ -12,27 +12,31 @@
 
 ## What & why
 
-The PineNote ships a Debian/GNOME image that drives the e-ink panel like an ordinary display.
-Type in a terminal and the whole screen flashes every ~20 characters. That is not a bug in
-your setup: the driver's default *partial* refresh waveform is **GC16**, the one the kernel
-source itself annotates as "flashy" — and it is applied to every single keystroke.
+The PineNote ships a Debian/GNOME image that drives the e-ink panel as though it were an
+ordinary display. Nothing is broken and almost every default is wrong for the panel: the
+partial-refresh waveform is the one the kernel source itself annotates as "flashy", and it
+is applied to every keystroke.
 
-Switching partial refreshes to **A2** (fast binary black/white transitions) removes the flash
-completely. But A2 has a catch: its refresh areas are tiny, so the driver's area-accumulating
-`auto_refresh` never reaches its threshold and ghosting builds up without ever being cleared.
+Most of what follows hangs off one button. The tone control switches between two modes, and
+each carries a waveform, and the waveform decides what happens to ghosting:
 
-The answer is not a gentler cleanup waveform. Clearing ghosting *requires* driving every
-pixel, which is always visible — gentle waveforms simply fail to clean. The answer is
-**timing**: never clear while you are typing, then clear properly the moment you stop. It is
-the same trick a Kindle uses when it hides its flash inside a page turn.
+| Mode | Waveform | Ghosting | Ink | Clearing |
+|---|---|---|---|---|
+| Greyscale — the default | GC16 | never accumulates: every update resets as it draws | faint, because a pen outruns a 450ms waveform | not needed |
+| Black and white | A2 | accumulates | keeps up with the pen | scheduled |
 
-So this is less a set of parameters than a behaviour:
+Neither is the better one. They are two tasks — reading and writing — and the trade only
+resolves once you know which you are doing, which is why this is a button rather than a
+setting somebody picks once.
 
-| When | What | Why |
-|---|---|---|
-| You are typing | A2, no automatic clear | fast, flash-free, never interrupts you |
-| You stop (8s idle) | one GC16 global refresh | ugly, but you are not looking |
-| You want it now | the panel's ↻ button | manual escape hatch |
+Where clearing is needed it does not have to be a flash. Driving every pixel to both rails
+and changing the brightness of the whole field at once are separable, and only the second is
+unpleasant: a complementary dither gives every pixel the same swing the stock flash does
+while the screen's mean luminance never leaves mid grey. Thirty-two of those fired here in
+one evening without being noticed.
+
+The rest of this file is mostly the measurements that got there, including the ones that
+were wrong for a while.
 
 ## setup/
 
