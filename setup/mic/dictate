@@ -29,7 +29,17 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 HERE=$(cd -- "$(dirname -- "$0")" && pwd)
 W=${WHISPER_DIR:-$HOME/whisper.cpp}
 MODEL=${WHISPER_MODEL:-$W/models/ggml-base.bin}
-PROMPT=${WHISPER_PROMPT:-"以下是繁體中文的句子。"}
+# The prompt does two jobs, and the second one was worth more than expected.
+#
+# It fixes the script -- whisper writes Simplified by default, and asking for
+# Traditional in the prompt is cheaper and truer than converting afterwards.
+#
+# It also carries vocabulary, and that is what rescued this from unusable. The
+# words that failed were not scattered: the same handful failed over and over,
+# and the worst of them was the subject itself. Over one recording, base heard
+# "雲蘇如" where the words were "語音輸入"; with those words in the prompt it
+# heard them correctly, at no cost in time. Add the words you actually say.
+PROMPT=${WHISPER_PROMPT:-"以下是繁體中文的句子。語音輸入、刪除資料、錯字、正確、平板、電子紙、終端機。"}
 # Six seconds cut people off mid-sentence in testing, and a truncated clause is
 # not a small error: whisper writes an ending for it. Ten is long enough for a
 # spoken thought, and trailing silence costs nothing -- it lowers the median

@@ -14,6 +14,12 @@ folding 8-24 kHz down on top of the voice would undo the 6 dB we just gained.
 """
 import argparse, array, math, sys, wave
 
+# Silence measured 10.6 here and speech 39.5-40.1, both on a quiet evening. The
+# floor sits nearer the silence, because being wrong in that direction only
+# costs time.
+RMS_FLOOR = 20.0
+
+
 def load(path):
     w = wave.open(path)
     n, fr = w.getnchannels(), w.getframerate()
@@ -161,8 +167,14 @@ def main():
     print(f"{how}: {len(mono)/a.rate:.1f}s @ {a.rate} Hz "
           f"peak={peak:.0f} rms={rms:.1f} modulation={mod:.2f}")
 
-    if a.gate is not None and mod < a.gate:
-        print(f"  nothing said (modulation {mod:.2f} < {a.gate})")
+    # Two cues have to agree before this refuses to transcribe. Modulation alone
+    # came within 0.19 of throwing away a real sentence: silence measured 1.38,
+    # a carefully read sentence 2.75, but ordinary speech at ordinary speed came
+    # in at 1.79 against a gate of 1.6. A gate that silently discards what
+    # someone said is the worst failure this tool has -- they get no text and no
+    # reason -- so the level has to fail as well before anything is dropped.
+    if a.gate is not None and mod < a.gate and rms < RMS_FLOOR:
+        print(f"  nothing said (modulation {mod:.2f} < {a.gate}, rms {rms:.1f} < {RMS_FLOOR})")
         return 3
 
     w = wave.open(a.dst, "wb")
