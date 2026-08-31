@@ -1,0 +1,54 @@
+#!/bin/bash
+# Speak, and get text back.
+#
+# Records the microphone array, sums it to the one channel whisper wants, and
+# transcribes on the device. Nothing leaves the tablet.
+#
+# The settings here are measured, not chosen by taste. On this hardware
+# (4 x Cortex-A55, and the fp16 SIMD the `asimdhp` CPU flag advertises),
+# 11 seconds of speech takes:
+#
+#   tiny   5.4s    but collapses the moment it carries an initial prompt
+#   base  11.7s    correct, and the one this uses
+#   small 48.0s    no better here, and four times the wait
+#
+# Quantised models are slower, not faster: q5_1 cost 7-12% more than f16,
+# because f16 is this CPU's native fast path and dequantising is extra work.
+# Reducing the encoder's audio context (-ac) is a trap worth naming: at 512 the
+# encode time more than halves and the *total* gets worse, because the decoder
+# falls back and re-runs. Measure the number you care about.
+#
+# -l auto with a Traditional Chinese prompt was checked both ways: English audio
+# still transcribes as English, and Chinese comes out Traditional rather than
+# the Simplified whisper otherwise defaults to. That is cheaper and truer than
+# converting afterwards, which mangles the characters that differ by meaning
+# rather than by script.
+set -u
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+HERE=$(cd -- "$(dirname -- "$0")" && pwd)
+W=${WHISPER_DIR:-$HOME/whisper.cpp}
+MODEL=${WHISPER_MODEL:-$W/models/ggml-base.bin}
+PROMPT=${WHISPER_PROMPT:-"以下是繁體中文的句子。"}
+SEC=${1:-8}
+RAW=$(mktemp -t dictate-raw-XXXXXX.wav)
+MONO=$(mktemp -t dictate-mono-XXXXXX.wav)
+trap 'rm -f "$RAW" "$MONO"' EXIT
+
+[ -x "$W/build/bin/whisper-cli" ] || {
+	echo "no whisper-cli under $W -- see the README's speech section" >&2
+	exit 1
+}
+[ -s "$MODEL" ] || { echo "no model at $MODEL" >&2; exit 1; }
+
+arecord -D hw:PineNote,1 -c 4 -r 48000 -f S16_LE -d "$SEC" "$RAW" 2>/dev/null || {
+	echo "recording failed -- is the UCM profile installed? (setup/mic/ucm2)" >&2
+	exit 1
+}
+
+python3 "$HERE/beam.py" "$RAW" "$MONO" >/dev/null || exit 1
+
+"$W/build/bin/whisper-cli" -m "$MODEL" -f "$MONO" -l auto -t 4 -np \
+	--prompt "$PROMPT" 2>/dev/null |
+	sed -E 's/^\[[0-9:.]+ --> [0-9:.]+\][[:space:]]*//' |
+	sed '/^[[:space:]]*$/d'
