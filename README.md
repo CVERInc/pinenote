@@ -1247,6 +1247,60 @@ fit anything: claps from directly above and below collapse to ±1 sample. A line
 of microphones is equidistant from those directions, so a straight line is what
 the sideways claps and the vertical ones agree on independently.
 
+### Steering a null, which works perfectly and then does not
+
+Summing cannot reject a point source, but a *steered* array can: align the four
+channels so the unwanted direction arrives identically in all of them, apply
+weights that sum to zero, and that direction cancels while others survive.
+Placing a null needs no aperture, which is the one thing this array does not
+have -- 68 mm is a fifth of a wavelength at 1 kHz, so there is no beam to point.
+
+The alignment has to be sub-sample. At 21 mm and 16 kHz a source 45° off
+broadside puts 0.7 of a sample between neighbours, so it is done as a phase
+ramp per frequency bin.
+
+On synthetic plane waves it is exact:
+
+```
+built at -45°   deepest null at -44°,  -72.6 dB
+built at   0°   deepest null at   0°,  -inf dB
+built at +30°   deepest null at +30°,  -78.2 dB
+```
+
+In the room, with a phone playing a podcast at 45°, the same code manages
+**-6.4 dB, and puts the null in the wrong place** -- at broadside rather than
+at the source.
+
+The first explanation was reverberation, and it was wrong. Coherence between
+the outer microphones says the field is strongly directional where it matters:
+
+| band | measured | a diffuse field would give |
+|---|---|---|
+| 300--800 Hz | 0.94 | 0.87 |
+| 800--2000 Hz | 0.73 | 0.38 |
+| 2000--5000 Hz | 0.68 | 0.04 |
+
+(That table needed its own correction. Coherence was first read as
+direct-to-diffuse through `c/(1-c)`, which assumes a diffuse field is
+incoherent — false for microphones 63 mm apart, where a diffuse field alone
+gives 0.87 at 500 Hz. The baseline is `sinc²(2πfd/c)` and comparing against it
+is the only thing the number can support.)
+
+So the energy is directional and the null still fails, which points at the
+weights rather than the room: `[1,-1,-1,1]` places exactly **one** null, and a
+room hands you several coherent arrivals — the direct path, the desk, the wall.
+The sweep then finds the angle that minimises the sum of what it cannot cancel,
+which is a compromise and lands nowhere useful. Four microphones have three
+degrees of freedom and could carry three nulls, or adaptive weights that find
+the coherent components themselves. That is the next thing to build, and the
+tools to judge it are already here.
+
+```sh
+setup/mic/nulltest.py       # prove the null lands where it is told
+setup/mic/nullsteer.py f.wav  # sweep it across a real recording
+setup/mic/coherence.py f.wav  # is there anything directional to null?
+```
+
 ### What summing the four channels is worth, and what it is not
 
 `beam.py` sums the four microphones, and against a synthetic signal with
