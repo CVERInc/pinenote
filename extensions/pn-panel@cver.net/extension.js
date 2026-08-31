@@ -413,6 +413,144 @@ export default class PineNotePanelExtension extends Extension {
         });
     }
 
+    // ── Voice input ─────────────────────────────────────────────────────────
+    // Tap to start, tap again to stop. Deliberately not press-and-hold: holding
+    // a panel button down while speaking means pinning a 10" slab with one
+    // thumb, and long-press on this touchscreen has already lost three
+    // implementations to the shell's own gestures (see the note in
+    // _pnBindTaps).
+    //
+    // 🔴 commit() only lands where Main.inputMethod.currentFocus is live. That
+    //    is the same wall _pnRimeFlushPending is built around: with no input
+    //    box listening, the shell accepts the call and nothing happens, with no
+    //    error. Losing a schema switch that way is an annoyance; losing a
+    //    spoken sentence is the tool's worst failure, because the person
+    //    watched it record and got nothing and no reason. So a transcript that
+    //    cannot land is held, and flushed on the next focus-in, exactly as a
+    //    pending RIME schema is.
+    //
+    // 🔴 Stop the recorder with SIGINT, never SIGKILL. arecord finalises the
+    //    WAV header on interrupt; killed outright it leaves a file whose header
+    //    still claims a length it never wrote, and whisper reads whatever that
+    //    implies.
+    _pnVoicePath(name) {
+        const configured = this._pnConfig?.voice?.dir;
+        const dir = configured ||
+            GLib.build_filenamev([GLib.get_home_dir(), "pinenote", "setup", "mic"]);
+        return GLib.build_filenamev([dir, name]);
+    }
+
+    _pnVoiceToggle() {
+        if (this._pnVoiceState === "recording") {
+            this._pnVoiceStop();
+            return;
+        }
+        if (this._pnVoiceState === "working")
+            return;   // transcribing; a second tap has nothing to do
+        this._pnVoiceStart();
+    }
+
+    _pnVoiceStart() {
+        const script = this._pnVoicePath("transcribe");
+        if (!GLib.file_test(script, GLib.FileTest.IS_EXECUTABLE)) {
+            console.error(`pn-panel: no transcribe at ${script} — set voice.dir `
+                        + `in pn-panel.json to the repository's setup/mic`);
+            return;
+        }
+        this._pnVoiceWav = "/tmp/pn-voice.wav";
+        try {
+            this._pnVoiceProc = Gio.Subprocess.new(
+                ["arecord", "-D", "plughw:PineNote,1", "-c", "4", "-r", "16000",
+                 "-f", "S16_LE", this._pnVoiceWav],
+                Gio.SubprocessFlags.STDERR_SILENCE);
+        } catch (e) {
+            console.error(`pn-panel: could not start arecord: ${e}`);
+            return;
+        }
+        // Whether the button steals the text field's focus is the question this
+        // whole design turns on, so record the answer rather than trusting it.
+        const im = Main.inputMethod;
+        console.log(`pn-panel: voice recording, currentFocus=${!!im?.currentFocus}`);
+        this._pnVoiceState = "recording";
+        this._pnVoiceSyncIcon();
+    }
+
+    _pnVoiceStop() {
+        const proc = this._pnVoiceProc;
+        this._pnVoiceProc = null;
+        this._pnVoiceState = "working";
+        this._pnVoiceSyncIcon();
+        if (proc) {
+            proc.send_signal(2);   // SIGINT: let arecord close the file properly
+            proc.wait_async(null, () => this._pnVoiceTranscribe());
+        } else {
+            this._pnVoiceTranscribe();
+        }
+    }
+
+    _pnVoiceTranscribe() {
+        let proc;
+        try {
+            proc = Gio.Subprocess.new(
+                [this._pnVoicePath("transcribe"), this._pnVoiceWav],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
+        } catch (e) {
+            console.error(`pn-panel: could not start transcribe: ${e}`);
+            this._pnVoiceState = "idle";
+            this._pnVoiceSyncIcon();
+            return;
+        }
+        proc.communicate_utf8_async(null, null, (o, res) => {
+            let text = "";
+            try {
+                const [, out] = o.communicate_utf8_finish(res);
+                text = (out ?? "").trim();
+            } catch (e) {
+                console.error(`pn-panel: transcribe failed: ${e}`);
+            }
+            this._pnVoiceState = "idle";
+            this._pnVoiceSyncIcon();
+            if (text)
+                this._pnVoiceDeliver(text);
+        });
+    }
+
+    _pnVoiceDeliver(text) {
+        const im = Main.inputMethod;
+        if (im?.currentFocus) {
+            im.commit(text);
+            return;
+        }
+        // Nowhere to put it yet. Hold rather than drop; see the note above.
+        console.log("pn-panel: voice held, no input focus");
+        this._pnVoicePending = this._pnVoicePending
+            ? `${this._pnVoicePending} ${text}` : text;
+    }
+
+    _pnVoiceFlushPending() {
+        const text = this._pnVoicePending;
+        if (!text)
+            return;
+        const im = Main.inputMethod;
+        if (!im?.currentFocus)
+            return;   // keep holding
+        this._pnVoicePending = null;
+        im.commit(text);
+    }
+
+    _pnVoiceSyncIcon() {
+        const icon = Main.panel.statusArea?.["pn-voice"]?._pnIcon;
+        if (!icon)
+            return;
+        // Three states, three redraws for a whole dictation, and none of them
+        // animated. An indicator that pulses would undo the one advantage
+        // speech has on this panel: nothing needs to redraw while you talk.
+        const name = this._pnVoiceState === "recording" ? "media-record-symbolic"
+                   : this._pnVoiceState === "working" ? "content-loading-symbolic"
+                   : "audio-input-microphone-symbolic";
+        icon.icon_name = name;
+    }
+
     // ── Input source cycle ──────────────────────────────────────────────────
     // 🔴 Walk the sources list in order, **do not** borrow GNOME's
     //    switch-input-source keybinding. That is an MRU cycle: with three
@@ -544,6 +682,8 @@ export default class PineNotePanelExtension extends Extension {
         if (!ibm || this._pnRimeFocusId)
             return;
         const tryLater = () => {
+            // A held transcript waits on the same event for the same reason.
+            this._pnVoiceFlushPending();
             if (!this._pnRimePending)
                 return;
             // The engine attaches after focus-in; give it a beat.
@@ -1122,6 +1262,11 @@ export default class PineNotePanelExtension extends Extension {
         //    other one.
         add("pn-tone", "PN Tone", `${this.path}/icons/pn-tone.svg`,
             () => this._pnToneToggle());
+        // Speech is the one input this panel is good at: it is the only one
+        // where nothing has to redraw while you use it.
+        this._pnVoiceState = "idle";
+        add("pn-voice", "PN Voice", "audio-input-microphone-symbolic",
+            () => this._pnVoiceToggle());
 
         // The fourth button. Text based, see the block above PN_INPUT_LABELS.
         if (wanted("pn-input")) {
@@ -1203,6 +1348,15 @@ export default class PineNotePanelExtension extends Extension {
     _pnRemovePanel() {
         this._pnRemoveKeybindings();
         this._pnRemoveRimeFocusHook();
+        // A recorder outlives the extension that started it: disable during a
+        // dictation and arecord keeps the capture device open, so the next
+        // attempt finds it busy and fails with nothing on screen to explain it.
+        if (this._pnVoiceProc) {
+            this._pnVoiceProc.send_signal(2);
+            this._pnVoiceProc = null;
+        }
+        this._pnVoiceState = "idle";
+        this._pnVoicePending = null;
         for (const id of this._pnInputSignals ?? [])
             Keyboard.getInputSourceManager().disconnect(id);
         this._pnInputSignals = null;
