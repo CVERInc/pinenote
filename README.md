@@ -1277,6 +1277,82 @@ recording that contained a clap arriving in that order, after someone had
 clapped twelve times for nothing. `--selftest` builds channels with delays we
 chose and checks they come back, which is cheaper than a person's hands.
 
+## Speaking to it
+
+The array is now a usable capture source, so `setup/mic/dictate` records a
+sentence, sums the four channels, and transcribes it on the device with
+whisper.cpp. Nothing leaves the tablet.
+
+```sh
+setup/mic/dictate            # ten seconds, then the text
+setup/mic/beam.py --selftest # prove the summing recovers its 6 dB
+```
+
+### What the numbers decided
+
+Eleven seconds of speech, four threads, on the RK3566's four Cortex-A55s:
+
+| model | total | vs realtime |
+|-------|-------|-------------|
+| tiny  | 5.4 s | 0.50x |
+| base  | 11.7 s | 1.06x |
+| small | 48.0 s | 4.36x |
+
+`base` is the one it uses. Three things that look like optimisations are not:
+
+- **Quantised models are slower here**, by 7-12%. This CPU advertises `asimdhp`,
+  so f16 is its native path and dequantising is work added rather than removed.
+- **Shrinking the encoder's audio context is a trap.** At `-ac 512` the encode
+  time drops from 34.9 s to 13.0 s and the *total* rises to 69.8 s, because the
+  decoder falls back and re-runs. The number that is easy to read is not the
+  number that matters.
+- **`tiny` is not a fast `base`.** It transcribed a carefully read sentence
+  correctly, and collapsed the moment it had to carry an initial prompt.
+
+### What the prompt is for
+
+whisper writes Simplified Chinese by default. Asking for Traditional in the
+initial prompt is cheaper than converting afterwards and does not mangle the
+characters that differ by meaning rather than by script. Checked in both
+directions: with `-l auto`, English audio still transcribes as English.
+
+The larger surprise is that the prompt carries **vocabulary**. Dictation
+failures were not scattered across the language; the same few words failed over
+and over, and the worst of them was the subject itself. On one recording:
+
+```
+prompt without the words   我認為雲蘇如其實不用要求字的全部佔據，...
+prompt with the words      我認為語音輸入其實不用要求字的全部占確，...
+small, same prompt         我認為語音輸入其實不用要求字的全部正確，...
+```
+
+Putting the words you actually say into the prompt costs nothing and recovers
+most of the gap to a model three and a half times slower. Set `WHISPER_PROMPT`.
+
+### Three things this cost
+
+**Silence is not a cheap input for whisper, it is a pathological one.** Its
+decoder keeps falling back, hunting for words in noise: a three second empty
+recording took 30 s, longer than eleven seconds of real speech. `dictate` now
+decides whether anything was said first.
+
+**That gate then nearly ate the speech it was protecting.** Modulation --
+loud-to-median frame energy -- measured 1.38 for silence and 2.75 for a
+carefully read sentence, so a gate at 1.6 looked safe. Ordinary speech at
+ordinary speed measured 1.79. A gate that silently discards what someone said
+is the worst failure available here, so it now needs the level to be low as
+well before it drops anything.
+
+**Resampling in Python cost more than the transcription.** Decimating 48k to
+16k with a 63-tap filter in a Python loop took 7 s of CPU for a 3 s clip. ALSA
+does the same conversion in C for no measurable cost: record through `plughw`
+at 16 kHz and sum the four channels, which is the part worth doing here.
+
+And one that was avoidable: `dictate` deleted each recording as it went, so
+fifteen dictated sentences left nothing to compare two models over. That is the
+same mistake as the analyser that deleted its recording on failure, which cost
+someone twelve claps. The last recording now stays.
+
 ## A rotation glitch we could not reproduce
 
 The panel is native landscape and GNOME rotates it to portrait. Turning the
