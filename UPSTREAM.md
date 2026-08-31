@@ -17,8 +17,8 @@ the ruler before you trust the measurement.
 
 - **Issue:** [systemd#43321](https://github.com/systemd/systemd/issues/43321) (open)
 - **Duplicate we filed by mistake:** systemd#43568 (closed)
-- **PR:** [systemd#43569](https://github.com/systemd/systemd/pull/43569) — reverts
-  the entry, as the maintainer asked for in the issue.
+- **PR:** [systemd#43569](https://github.com/systemd/systemd/pull/43569) —
+  **merged** 2026-08-30 by yuwata, which closed #43321 with it.
 
 `60-sensor.hwdb` carries an `ACCEL_MOUNT_MATRIX` labelled for the PineTab2,
 keyed on a modalias that names the chip (`silan,sc7a20`) and not the machine.
@@ -29,8 +29,11 @@ and on a device-tree machine there is no DMI half to the lookup key, so both
 boards present an identical match string.
 
 Our workaround: `setup/udev/61-sensor-pinenote.rules`, filed after the `60-` rule
-that imports hwdb, reasserts the device-tree value. It becomes unnecessary if the
-revert lands.
+that imports hwdb, reasserts the device-tree value. Keep it. The revert has
+landed upstream but this machine runs systemd 257, and the rule stays correct
+either way — with the hwdb entry gone it reasserts a value that already matches.
+Retire it once an installed `/usr/lib/udev/hwdb.d/60-sensor.hwdb` here no longer
+contains `sc7a20`.
 
 ## PNDeb image — iio-sensor-proxy
 
