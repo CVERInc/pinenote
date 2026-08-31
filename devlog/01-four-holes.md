@@ -63,6 +63,19 @@ which is to say, on the first recording where someone had clapped to the *other*
 side. And the script deleted its recording before the analysis, so the crash
 cost twelve fresh claps from a human being rather than one more run.
 
+> **Claude**
+> Clap three times to the left of the tablet, then three to the right, then
+> above, then below.
+
+> **cver**
+> done
+
+> **Claude**
+> …the analyser crashed and the script had already deleted the recording.
+> Could you clap twelve more times.
+
+The recording is kept now.
+
 Both are fixed. What stops them recurring is not the fix but the test:
 `tdoa.py --selftest` builds four channels with delays chosen in advance and
 checks they come back. Synthetic signals with known answers cost nothing and
