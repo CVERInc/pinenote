@@ -104,10 +104,34 @@ def selftest():
     return 0 if ok else 1
 
 
+def modulation(x, fr, ms=30):
+    """How much the energy moves about, as p90 over median frame RMS.
+
+    Speech is syllables: loud and quiet in turn. Room noise is flat. That is a
+    difference in shape rather than in level, so it survives being carried into
+    a quieter or louder room, which a plain RMS threshold does not. Measured
+    here: silence 1.38, a spoken sentence 2.75.
+
+    The gate this feeds is deliberately timid. Refusing to transcribe something
+    that was actually said is a person talking to a tablet that ignores them;
+    transcribing silence only costs time. So it only fires well below anything
+    yet seen from speech.
+    """
+    W = int(fr * ms / 1000)
+    e = sorted(math.sqrt(sum(v * v for v in x[i:i + W]) / W)
+               for i in range(0, len(x) - W, W))
+    if len(e) < 4:
+        return 99.0
+    med = e[len(e) // 2] or 1e-9
+    return e[int(len(e) * 0.9)] / med
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src", nargs="?"); ap.add_argument("dst", nargs="?")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--gate", type=float, default=None,
+                    help="exit 3 without writing if modulation is below this")
     ap.add_argument("--rate", type=int, default=16000)
     ap.add_argument("--channel", type=int, default=None,
                     help="use one microphone instead of the sum, to compare")
@@ -133,7 +157,13 @@ def main():
 
     peak = max(abs(v) for v in mono) or 1.0
     rms = math.sqrt(sum(v * v for v in mono) / len(mono))
-    print(f"{how}: {len(mono)/a.rate:.1f}s @ {a.rate} Hz  peak={peak:.0f} rms={rms:.1f}")
+    mod = modulation(mono, a.rate)
+    print(f"{how}: {len(mono)/a.rate:.1f}s @ {a.rate} Hz "
+          f"peak={peak:.0f} rms={rms:.1f} modulation={mod:.2f}")
+
+    if a.gate is not None and mod < a.gate:
+        print(f"  nothing said (modulation {mod:.2f} < {a.gate})")
+        return 3
 
     w = wave.open(a.dst, "wb")
     w.setnchannels(1); w.setsampwidth(2); w.setframerate(a.rate)

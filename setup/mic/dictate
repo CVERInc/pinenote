@@ -46,7 +46,16 @@ arecord -D hw:PineNote,1 -c 4 -r 48000 -f S16_LE -d "$SEC" "$RAW" 2>/dev/null ||
 	exit 1
 }
 
-python3 "$HERE/beam.py" "$RAW" "$MONO" >/dev/null || exit 1
+# Silence is a pathological input for whisper, not merely a wasted one: its
+# decoder keeps falling back and retrying, hunting for words in noise. A three
+# second empty recording took 30s here, longer than eleven seconds of real
+# speech. So decide whether anything was said before handing it over.
+python3 "$HERE/beam.py" "$RAW" "$MONO" --gate "${DICTATE_GATE:-1.6}" >/dev/null
+case $? in
+	0) ;;
+	3) exit 0 ;;   # nothing said; say nothing back
+	*) exit 1 ;;
+esac
 
 "$W/build/bin/whisper-cli" -m "$MODEL" -f "$MONO" -l auto -t 4 -np \
 	--prompt "$PROMPT" 2>/dev/null |
