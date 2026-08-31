@@ -30,10 +30,18 @@ HERE=$(cd -- "$(dirname -- "$0")" && pwd)
 W=${WHISPER_DIR:-$HOME/whisper.cpp}
 MODEL=${WHISPER_MODEL:-$W/models/ggml-base.bin}
 PROMPT=${WHISPER_PROMPT:-"以下是繁體中文的句子。"}
-SEC=${1:-8}
-RAW=$(mktemp -t dictate-raw-XXXXXX.wav)
-MONO=$(mktemp -t dictate-mono-XXXXXX.wav)
-trap 'rm -f "$RAW" "$MONO"' EXIT
+# Six seconds cut people off mid-sentence in testing, and a truncated clause is
+# not a small error: whisper writes an ending for it. Ten is long enough for a
+# spoken thought, and trailing silence costs nothing -- it lowers the median
+# frame energy, which moves the modulation gate the safe way.
+SEC=${1:-10}
+# Keep the last recording. Comparing two models, or two prompts, means running
+# them over the same speech -- and a tool that deletes its input makes that
+# impossible, so the only way to compare is to ask a person to say it all again.
+# That has already cost this repository one round of twelve claps; it does not
+# need to cost a round of dictation too.
+RAW=${DICTATE_KEEP:-/tmp/dictate-last.wav}
+MONO=${RAW%.wav}-mono.wav
 
 [ -x "$W/build/bin/whisper-cli" ] || {
 	echo "no whisper-cli under $W -- see the README's speech section" >&2
