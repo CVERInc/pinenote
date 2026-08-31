@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # Run the upstream UCM validator against our PineNote profile, on the PineNote.
 #
 # The validator loads libasound, so it only runs on the machine with ALSA --
@@ -46,12 +46,24 @@ echo "dump: $(wc -l < "$DUMP") lines"
 
 cd alsa-tests/python/ucm-validator
 
+# Neither pass aborts the script. Pass 1 is red on an untouched upstream tree
+# (alsa-ucm-conf master carries a USB-Audio/USB-Audio.conf that alsa-tests
+# master's parser rejects), so letting it stop us would hide the pass that
+# actually judges this profile. Run both, report both, judge ours on pass 2.
+set +e
+
 echo
 echo "=== pass 1: parse the whole tree (syntax) ==="
-./ucm.py --level 0 all ../../../alsa-ucm-conf/ucm2
-echo "pass 1 exit: $?"
+echo "    known red upstream, independently of this profile -- see UPSTREAM.md"
+./ucm.py --level 0 all ../../../alsa-ucm-conf/ucm2 2>&1 | tail -3
+p1=${PIPESTATUS[0]}
+echo "pass 1 exit: $p1"
 
 echo
 echo "=== pass 2: emulate this card from the dump (semantics) ==="
+echo "    this is the one that judges the PineNote profile"
 ./ucm.py --level 0 configs ../../../alsa-ucm-conf/ucm2 configs configs/Rockchip/PineNote.txt
-echo "pass 2 exit: $?"
+p2=$?
+echo "pass 2 exit: $p2  (0 and no output above = clean)"
+
+exit $p2

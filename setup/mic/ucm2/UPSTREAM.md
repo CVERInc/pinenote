@@ -51,13 +51,45 @@ for the format.
    sitting at `/tmp/alsa-info.txt` there. It becomes
    `configs/Rockchip/PineNote.txt` in the alsa-tests PR.
 
-2. **A run through the actual UCM validator.** Still outstanding, and it cannot
-   be done from a mac: `ucm.py` loads `libasound.so` through ctypes, so it only
-   runs where ALSA does. `validate.sh` (next to this file) clones both repos on the
-   tablet, drops this profile into the tree, and runs both passes -- `all`
-   (parses every profile, syntax) and `configs` (replays the dump to emulate
-   the card, which is the pass that would catch a `cset` naming a control this
-   board does not have; the real risk in a profile borrowed from a sibling).
+2. ~~**A run through the actual UCM validator.**~~ **Done 2026-08-31 on the
+   tablet** (it loads `libasound` through ctypes, so it cannot run on a mac).
+   `validate.sh` next to this file reproduces it. The profile now validates
+   clean -- exit 0, no errors, no warnings -- and the run paid for itself three
+   times over.
+
+   **What it caught in this profile.** `SectionDevice."Mic Array"` was not a
+   legal name: UCM names are `<Base><index>` with Base from a fixed set, so it
+   became `Mic2`, and the codec input beside it became `Mic1` (a bare `Mic`
+   next to a `Mic2` is what the validator calls mixing indexed with
+   non-indexed; the tree has 49 `Mic1` and 47 `Mic2`). `PlaybackPCM`/
+   `CapturePCM` also dropped their redundant `,0`. All three would have come
+   back as CI failures on the pull request.
+
+   **What it caught in alsa-tests, which are theirs and not ours.** Three, each
+   reproducible without any PineNote file present:
+
+   - `SECTIONS` in `python/lib/alsainfo.py` is missing six section names that
+     the current `alsa-info.sh` emits (`Sysfs card info`, `Sysfs ctl-led info`,
+     `ACPI SoundWire Device Status Information`, `AC97 Codec information`,
+     `USB Descriptors`, `USB Stream information`), and an unknown section is
+     fatal. Their own `configs/USB/ALC4080.txt` already fails on it.
+   - The amixer block regex requires `Card hw:<n>`. Current `alsa-info.sh`
+     addresses the card by id (`amixer -c PineNote info`) and alsa-lib answers
+     `Card sysdefault:0`, which does not match, and the failure is an
+     `AttributeError` on `None`.
+   - `check_device_names` crashes with `TypeError: unsupported operand
+     type(s) for +: 'NoneType' and 'int'` when a non-indexed device precedes an
+     indexed one of the same base (`Mic` then `Mic2`) -- the exact case it
+     means to report as an error two lines further down.
+
+   Also worth knowing: the validator's `all` pass is red on an untouched
+   upstream tree (`USB-Audio/USB-Audio.conf`: `'If'.'opt' If requires condition
+   section`), and 31 of the 39 dumps in `configs/` fail the `configs` pass for
+   reasons that predate us. Do not read either as a verdict on this profile.
+
+   **On real hardware, after the rename:** `alsaucm -c PineNote set _verb HiFi
+   list _devices` reports Speaker/Mic1/Mic2, and a capture through `Mic2` gives
+   four live channels.
 
 3. ~~**A decision on the `Headphones` device.**~~ **Settled 2026-08-31, from
    mainline's own device tree rather than by guessing at the case.** The board
