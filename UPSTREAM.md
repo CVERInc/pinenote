@@ -46,20 +46,26 @@ Recommends line and the image already restores it by hand.
 
 Our workaround: `setup/setup.sh` step 14 installs the package.
 
-## alsa-ucm-conf — the microphone array
+## alsa-ucm-conf / alsa-tests — the microphone array
 
-- **Status:** not yet filed, and it is **two** PRs rather than one — the profile
-  goes to `alsa-project/alsa-ucm-conf`, and the `alsa-info.sh` dump the README
-  asks for is a file in `alsa-project/alsa-tests`
-  (`python/ucm-validator/configs/Rockchip/PineNote.txt`), not an attachment.
-  Commits there need a `Signed-off-by` (DCO.txt is at the repo root; the README
-  does not mention it).
-- **Settled:** the `Headphones` device stays out, for a checkable reason — see
-  `setup/mic/ucm2/UPSTREAM.md`.
-- **Blocked on:** one run of `setup/mic/ucm2/validate.sh` on the tablet. The
-  upstream validator loads `libasound` through ctypes, so it cannot run on a
-  mac.
+- **PR:** [alsa-ucm-conf#844](https://github.com/alsa-project/alsa-ucm-conf/pull/844)
+  — the profile.
+- **PR:** [alsa-tests#27](https://github.com/alsa-project/alsa-tests/pull/27) —
+  the `alsa-info.sh` dump the validator needs, plus two fixes it needs to run at
+  all. Their dump parser had fallen six section names behind `alsa-info.sh` (an
+  unknown section is fatal, and their own `configs/USB/ALC4080.txt` already
+  failed on it), its amixer regex still required `Card hw:N` where current
+  alsa-utils answers `Card sysdefault:N`, and its device-name check raised
+  `TypeError: NoneType + int` in exactly the case it meant to report as an
+  error.
 
 The four holes above the screen are a PDM microphone array that no shipped UCM
 profile describes, so the audio stack does not present it as a usable source.
-Ours is in `setup/mic/ucm2/`, with its own notes in `setup/mic/ucm2/UPSTREAM.md`.
+Ours is in `setup/mic/ucm2/`, with its own notes in `setup/mic/ucm2/UPSTREAM.md`
+— including what the validator caught in our own profile before a maintainer
+had to, which was three things.
+
+One to carry forward: run `alsa-info.sh` from an empty directory. An unquoted
+expansion in it globs the working directory into the distro line, and ours came
+out carrying `systemd-private-<machine id>` paths and unrelated log filenames.
+That was caught on the way into a public tree, not after.
