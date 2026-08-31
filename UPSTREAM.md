@@ -70,5 +70,9 @@ had to, which was three things.
 
 One to carry forward: run `alsa-info.sh` from an empty directory. An unquoted
 expansion in it globs the working directory into the distro line, and ours came
-out carrying `systemd-private-<machine id>` paths and unrelated log filenames.
+out carrying `systemd-private-<boot id>` paths and input-method log filenames.
+(First written here as "machine id", which overstated it: checked against
+`journalctl --list-boots`, the string was the boot ID, which changes every boot.
+The log filenames were the part actually worth removing -- they name what the
+owner runs and when.)
 That was caught on the way into a public tree, not after.
