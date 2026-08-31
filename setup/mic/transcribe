@@ -11,9 +11,25 @@ set -u
 HERE=$(cd -- "$(dirname -- "$0")" && pwd)
 W=${WHISPER_DIR:-$HOME/whisper.cpp}
 MODEL=${WHISPER_MODEL:-$W/models/ggml-base.bin}
-PROMPT=${WHISPER_PROMPT:-"以下是繁體中文的句子。語音輸入、刪除資料、錯字、正確、平板、電子紙、終端機。"}
+RAW=${1:?usage: transcribe <wav> [lang]}
+LANG_CODE=${2:-${WHISPER_LANG:-auto}}
 
-RAW=${1:?usage: transcribe <wav>}
+# The prompt is language-specific, and for Chinese it is doing two jobs at once:
+# choosing the script, and carrying the words that otherwise come out wrong. For
+# the others it has nothing to fix -- English and Japanese have no Simplified
+# problem -- and a Chinese prompt in front of Japanese audio is actively
+# misleading, which is the bug this avoids by keying on the language rather than
+# shipping one prompt for everything.
+# `auto` keeps the Chinese prompt rather than dropping it. Not knowing the
+# language is not the same as knowing it is not Chinese, this device's is, and
+# the prompt was measured to be harmless the other way: English audio with the
+# Chinese prompt and -l auto still transcribed as English. Dropping it here
+# would have quietly returned the command line to Simplified output.
+case "$LANG_CODE" in
+	zh|auto) DEFAULT_PROMPT="以下是繁體中文的句子。語音輸入、刪除資料、錯字、正確、平板、電子紙、終端機。" ;;
+	*)       DEFAULT_PROMPT="" ;;
+esac
+PROMPT=${WHISPER_PROMPT:-$DEFAULT_PROMPT}
 MONO=${RAW%.wav}-mono.wav
 
 [ -x "$W/build/bin/whisper-cli" ] || {
@@ -30,7 +46,7 @@ case $? in
 	*) exit 1 ;;
 esac
 
-"$W/build/bin/whisper-cli" -m "$MODEL" -f "$MONO" -l auto -t 4 -np \
+"$W/build/bin/whisper-cli" -m "$MODEL" -f "$MONO" -l "$LANG_CODE" -t 4 -np \
 	--prompt "$PROMPT" 2>/dev/null |
 	sed -E 's/^\[[0-9:.]+ --> [0-9:.]+\][[:space:]]*//' |
 	sed '/^[[:space:]]*$/d'

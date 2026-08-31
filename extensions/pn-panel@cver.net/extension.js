@@ -239,6 +239,23 @@ const PN_RIME_FACES = {
 // The rime source expands into these faces in the cycle, order is tap order.
 const PN_RIME_FACE_ORDER = ["pinyin", "bopomofo"];
 
+// ── The language you are typing in is the language you are speaking ────────
+// The panel already knows: PN_INPUT_LABELS resolves an input source down to a
+// language, and stops there on purpose. Speech wants exactly that layer, so it
+// borrows it rather than building a second answer to the same question -- two
+// tables mapping input sources to languages would disagree eventually, and the
+// disagreement would show up as a sentence transcribed in the wrong language.
+//
+// Telling whisper the language also beats letting it detect one. Detection
+// reads the opening of the clip, and the opening of a short dictated sentence
+// is the weakest evidence in it.
+const PN_VOICE_LANGS = {
+    US: "en",
+    JP: "ja",
+    TW: "zh",
+    KR: "ko",
+};
+
 // ~/.config/pn-panel.json. Same pattern as pn-osk.json: missing = all defaults.
 // Only one key currently:
 //   buttons: { "input": true, "tone": true, "refresh": true, "rotate": true }
@@ -440,6 +457,15 @@ export default class PineNotePanelExtension extends Extension {
         return GLib.build_filenamev([dir, name]);
     }
 
+    // The label is the ground truth here too, for the same reason it is for
+    // RIME: it is what the person can see. Unknown source falls back to
+    // whisper's own detection rather than guessing at English.
+    _pnVoiceLang() {
+        const source = Keyboard.getInputSourceManager().currentSource;
+        const label = PN_INPUT_LABELS[source?.id];
+        return PN_VOICE_LANGS[label] ?? "auto";
+    }
+
     _pnVoiceToggle() {
         if (this._pnVoiceState === "recording") {
             this._pnVoiceStop();
@@ -470,7 +496,8 @@ export default class PineNotePanelExtension extends Extension {
         // Whether the button steals the text field's focus is the question this
         // whole design turns on, so record the answer rather than trusting it.
         const im = Main.inputMethod;
-        console.log(`pn-panel: voice recording, currentFocus=${!!im?.currentFocus}`);
+        console.log(`pn-panel: voice recording, lang=${this._pnVoiceLang()}, `
+                  + `currentFocus=${!!im?.currentFocus}`);
         this._pnVoiceState = "recording";
         this._pnVoiceSyncIcon();
     }
@@ -492,7 +519,7 @@ export default class PineNotePanelExtension extends Extension {
         let proc;
         try {
             proc = Gio.Subprocess.new(
-                [this._pnVoicePath("transcribe"), this._pnVoiceWav],
+                [this._pnVoicePath("transcribe"), this._pnVoiceWav, this._pnVoiceLang()],
                 Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE);
         } catch (e) {
             console.error(`pn-panel: could not start transcribe: ${e}`);
