@@ -1,0 +1,36 @@
+#!/bin/bash
+# Turn a recording of the microphone array into text.
+#
+# Split out of `dictate` because the panel button records for as long as you
+# hold the conversation open -- start on one tap, stop on the next -- and so it
+# owns the recording itself. This is the half they share.
+#
+# Why the settings are what they are: see the comments in `dictate`, and the
+# README's "Speaking to it".
+set -u
+HERE=$(cd -- "$(dirname -- "$0")" && pwd)
+W=${WHISPER_DIR:-$HOME/whisper.cpp}
+MODEL=${WHISPER_MODEL:-$W/models/ggml-base.bin}
+PROMPT=${WHISPER_PROMPT:-"以下是繁體中文的句子。語音輸入、刪除資料、錯字、正確、平板、電子紙、終端機。"}
+
+RAW=${1:?usage: transcribe <wav>}
+MONO=${RAW%.wav}-mono.wav
+
+[ -x "$W/build/bin/whisper-cli" ] || {
+	echo "no whisper-cli under $W -- see the README's speech section" >&2
+	exit 1
+}
+[ -s "$MODEL" ] || { echo "no model at $MODEL" >&2; exit 1; }
+[ -s "$RAW" ] || { echo "no recording at $RAW" >&2; exit 1; }
+
+python3 "$HERE/beam.py" "$RAW" "$MONO" --gate "${DICTATE_GATE:-1.6}" >/dev/null
+case $? in
+	0) ;;
+	3) exit 0 ;;   # nothing said; say nothing back
+	*) exit 1 ;;
+esac
+
+"$W/build/bin/whisper-cli" -m "$MODEL" -f "$MONO" -l auto -t 4 -np \
+	--prompt "$PROMPT" 2>/dev/null |
+	sed -E 's/^\[[0-9:.]+ --> [0-9:.]+\][[:space:]]*//' |
+	sed '/^[[:space:]]*$/d'

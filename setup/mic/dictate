@@ -28,18 +28,6 @@ export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
 
 HERE=$(cd -- "$(dirname -- "$0")" && pwd)
 W=${WHISPER_DIR:-$HOME/whisper.cpp}
-MODEL=${WHISPER_MODEL:-$W/models/ggml-base.bin}
-# The prompt does two jobs, and the second one was worth more than expected.
-#
-# It fixes the script -- whisper writes Simplified by default, and asking for
-# Traditional in the prompt is cheaper and truer than converting afterwards.
-#
-# It also carries vocabulary, and that is what rescued this from unusable. The
-# words that failed were not scattered: the same handful failed over and over,
-# and the worst of them was the subject itself. Over one recording, base heard
-# "雲蘇如" where the words were "語音輸入"; with those words in the prompt it
-# heard them correctly, at no cost in time. Add the words you actually say.
-PROMPT=${WHISPER_PROMPT:-"以下是繁體中文的句子。語音輸入、刪除資料、錯字、正確、平板、電子紙、終端機。"}
 # Six seconds cut people off mid-sentence in testing, and a truncated clause is
 # not a small error: whisper writes an ending for it. Ten is long enough for a
 # spoken thought, and trailing silence costs nothing -- it lowers the median
@@ -51,36 +39,15 @@ SEC=${1:-10}
 # That has already cost this repository one round of twelve claps; it does not
 # need to cost a round of dictation too.
 RAW=${DICTATE_KEEP:-/tmp/dictate-last.wav}
-MONO=${RAW%.wav}-mono.wav
 
 [ -x "$W/build/bin/whisper-cli" ] || {
 	echo "no whisper-cli under $W -- see the README's speech section" >&2
 	exit 1
 }
-[ -s "$MODEL" ] || { echo "no model at $MODEL" >&2; exit 1; }
 
-# Record through plughw at the rate whisper wants, rather than at the card's
-# 48k and resampling here. ALSA does that conversion in C for no measurable
-# CPU; the pure-Python filter this replaced cost 7 seconds for a 3 second clip,
-# which was more than whisper spent on it. Four channels still arrive separately
-# -- the summing is what we keep, and that part is cheap.
 arecord -D plughw:PineNote,1 -c 4 -r 16000 -f S16_LE -d "$SEC" "$RAW" 2>/dev/null || {
 	echo "recording failed -- is the UCM profile installed? (setup/mic/ucm2)" >&2
 	exit 1
 }
 
-# Silence is a pathological input for whisper, not merely a wasted one: its
-# decoder keeps falling back and retrying, hunting for words in noise. A three
-# second empty recording took 30s here, longer than eleven seconds of real
-# speech. So decide whether anything was said before handing it over.
-python3 "$HERE/beam.py" "$RAW" "$MONO" --gate "${DICTATE_GATE:-1.6}" >/dev/null
-case $? in
-	0) ;;
-	3) exit 0 ;;   # nothing said; say nothing back
-	*) exit 1 ;;
-esac
-
-"$W/build/bin/whisper-cli" -m "$MODEL" -f "$MONO" -l auto -t 4 -np \
-	--prompt "$PROMPT" 2>/dev/null |
-	sed -E 's/^\[[0-9:.]+ --> [0-9:.]+\][[:space:]]*//' |
-	sed '/^[[:space:]]*$/d'
+exec "$HERE/transcribe" "$RAW"
