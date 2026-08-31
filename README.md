@@ -1329,6 +1329,28 @@ small, same prompt         我認為語音輸入其實不用要求字的全部�
 Putting the words you actually say into the prompt costs nothing and recovers
 most of the gap to a model three and a half times slower. Set `WHISPER_PROMPT`.
 
+### Forcing a language makes it translate
+
+The panel button picks a prompt from the input source you are typing in, and
+for a while it also forced whisper's language to match. That is a silent way to
+lose what someone said. One English sentence, forced to `zh`:
+
+```
+-l zh, Chinese vocabulary prompt   這很正確。非常好，謝謝。
+-l zh, Traditional prompt only     它是非常對的。它是非常美麗的。 Thank you.
+-l auto, same Chinese prompt       It's really very correct. It's so wonderful...
+```
+
+The first is fluent, plausible, and not what was said. Nothing on screen
+suggests the sentence was rewritten, which makes it worse than a wrong word: a
+wrong word looks wrong. Detection was right in every case tested, including
+English audio behind a Chinese prompt, and when detection is wrong you can see
+that it is.
+
+So whisper detects the language, and the input source only chooses the prompt.
+The wish that started this -- *type Japanese, dictate Japanese* -- still holds,
+because the prompt is what carries the script and the vocabulary.
+
 ### Three things this cost
 
 **Silence is not a cheap input for whisper, it is a pathological one.** Its

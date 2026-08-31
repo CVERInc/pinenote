@@ -11,8 +11,23 @@ set -u
 HERE=$(cd -- "$(dirname -- "$0")" && pwd)
 W=${WHISPER_DIR:-$HOME/whisper.cpp}
 MODEL=${WHISPER_MODEL:-$W/models/ggml-base.bin}
-RAW=${1:?usage: transcribe <wav> [lang]}
-LANG_CODE=${2:-${WHISPER_LANG:-auto}}
+RAW=${1:?usage: transcribe <wav> [prompt-language]}
+
+# 🔴 The second argument picks the PROMPT, not whisper's language. Forcing a
+#    language whisper disagrees with does not make it listen harder -- it makes
+#    it translate. Measured on one English sentence with -l zh:
+#
+#      -l zh, Chinese prompt   這很正確。非常好,謝謝。
+#      -l zh, weaker prompt    它是非常對的。它是非常美麗的。 Thank you.
+#      -l auto, same prompt    It's really very correct. It's so wonderful...
+#
+#    The first is fluent, plausible, and not what was said. That failure is
+#    silent, which makes it worse than a wrong word: nothing on screen suggests
+#    the sentence was rewritten. Detection was right in every case tested, and
+#    when detection is wrong you can see that it is. So detection decides the
+#    language and the input source only decides the prompt.
+PROMPT_LANG=${2:-auto}
+LANG_CODE=${WHISPER_LANG:-auto}
 
 # The prompt is language-specific, and for Chinese it is doing two jobs at once:
 # choosing the script, and carrying the words that otherwise come out wrong. For
@@ -25,7 +40,7 @@ LANG_CODE=${2:-${WHISPER_LANG:-auto}}
 # the prompt was measured to be harmless the other way: English audio with the
 # Chinese prompt and -l auto still transcribed as English. Dropping it here
 # would have quietly returned the command line to Simplified output.
-case "$LANG_CODE" in
+case "$PROMPT_LANG" in
 	zh|auto) DEFAULT_PROMPT="以下是繁體中文的句子。語音輸入、刪除資料、錯字、正確、平板、電子紙、終端機。" ;;
 	*)       DEFAULT_PROMPT="" ;;
 esac
