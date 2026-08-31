@@ -41,7 +41,12 @@ trap 'rm -f "$RAW" "$MONO"' EXIT
 }
 [ -s "$MODEL" ] || { echo "no model at $MODEL" >&2; exit 1; }
 
-arecord -D hw:PineNote,1 -c 4 -r 48000 -f S16_LE -d "$SEC" "$RAW" 2>/dev/null || {
+# Record through plughw at the rate whisper wants, rather than at the card's
+# 48k and resampling here. ALSA does that conversion in C for no measurable
+# CPU; the pure-Python filter this replaced cost 7 seconds for a 3 second clip,
+# which was more than whisper spent on it. Four channels still arrive separately
+# -- the summing is what we keep, and that part is cheap.
+arecord -D plughw:PineNote,1 -c 4 -r 16000 -f S16_LE -d "$SEC" "$RAW" 2>/dev/null || {
 	echo "recording failed -- is the UCM profile installed? (setup/mic/ucm2)" >&2
 	exit 1
 }
