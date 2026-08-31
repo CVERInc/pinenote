@@ -1247,6 +1247,47 @@ fit anything: claps from directly above and below collapse to ±1 sample. A line
 of microphones is equidistant from those directions, so a straight line is what
 the sideways claps and the vertical ones agree on independently.
 
+### Front and back, which the geometry cannot answer
+
+A straight line measures one thing: the angle between the source and itself.
+Every direction on the cone at that angle gives identical delays, and front and
+back sit on that cone, so no amount of arithmetic on arrival times separates
+them. Turning the tablet does not fix this. It only changes which real
+directions get confused -- upright, the screen's front with the tablet's back;
+flat on a desk, the far side of the table with your own side.
+
+The body is a second, independent cue, and it works. With white noise on the
+screen's axis, three pairs of takes, turning the tablet between them:
+
+| | level | HF−LF tilt |
+|---|---|---|
+| back − front | −5.7, −4.5, −4.8 dB | −9.6, −11.1, −11.4 dB |
+| same side twice (control) | +0.1, +1.0 dB | +0.6, −1.2 dB |
+
+About 25 cm of tablet is several wavelengths across at 4 kHz and less than one
+at 200 Hz, so it takes the treble and passes the bass. **Tilt is the cue worth
+using, not level**: level moves with distance and with how loudly someone
+speaks, colour does not. An earlier single measurement said −3.0 dB of level
+against a −3 dB threshold and meant nothing at all -- the talker had simply
+spoken more quietly the second time.
+
+Two limits, both unmeasured rather than argued: white noise carries far more
+2--6 kHz energy than speech does, so the usable tilt for a voice will be
+smaller; and this was measured on the axis, where the body is squarely in the
+path. A source 45° to one side is not shadowed by anything.
+
+```sh
+setup/mic/shadow.py front.wav back.wav     # level and tilt, with a verdict
+setup/mic/rotation-check.py *.wav          # did the tablet actually turn?
+```
+
+The second one is not a convenience. Two full rounds of this experiment
+produced clean null results because the cue to turn the tablet was inaudible
+over the noise being measured, and a tablet that never moved looks exactly like
+a tablet with no shadowing. A 180° turn reverses the microphones' order, so the
+delay between the outer channels must change sign: −1 before, +1 after. That
+line is the difference between a measurement and a story.
+
 ### What follows for speech
 
 A 68 mm aperture with 21 mm spacing puts spatial aliasing near 8 kHz, and
