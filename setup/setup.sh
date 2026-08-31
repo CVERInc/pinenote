@@ -587,3 +587,49 @@ if [ -d "$PNH" ]; then
 else
   echo "   -> Missing pnhelper schemas, skipping; auto_refresh remains disabled by modprobe.d" >&2
 fi
+
+echo "== [18] Voice input: build whisper.cpp and fetch the model =="
+# The array is a usable source after [17]; this is what listens to it. Everything
+# runs on the tablet -- no account, no network at dictation time, nothing leaves
+# the machine.
+#
+# This step is the slow one in the whole script: a from-scratch build takes about
+# fifteen minutes on four Cortex-A55s, plus 142 MB of model. Set PINENOTE_VOICE=0
+# to skip it; everything else in this repository works without it.
+#
+# base, f16, is not a compromise between tiny and small, it is the measured
+# answer. tiny is twice as fast and collapses the moment it carries an initial
+# prompt; small is three and a half times slower for one word's improvement;
+# quantised models are *slower* than f16 here, because this CPU's asimdhp makes
+# f16 its native path. The numbers are in the README under "Speaking to it".
+if [ "${PINENOTE_VOICE:-1}" = "0" ]; then
+  echo "   -> Skipped (PINENOTE_VOICE=0)"
+else
+  WDIR="${WHISPER_DIR:-$HOME/whisper.cpp}"
+  if [ -x "$WDIR/build/bin/whisper-cli" ]; then
+    echo "   -> whisper-cli already built at $WDIR, leaving it alone"
+  else
+    sudo apt-get install -y -q git cmake build-essential
+    [ -d "$WDIR" ] || git clone -q --depth 1 https://github.com/ggml-org/whisper.cpp "$WDIR"
+    echo "   -> Building (this is the fifteen minutes)"
+    cmake -S "$WDIR" -B "$WDIR/build" -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=ON >/dev/null
+    cmake --build "$WDIR/build" -j"$(nproc)" >/dev/null
+    echo "   -> Built"
+  fi
+  if [ -s "$WDIR/models/ggml-base.bin" ]; then
+    echo "   -> Model already present"
+  else
+    ( cd "$WDIR" && sh ./models/download-ggml-model.sh base >/dev/null 2>&1 )
+    [ -s "$WDIR/models/ggml-base.bin" ] && echo "   -> Model downloaded (142 MB)" \
+      || echo "   -> Model download failed; run models/download-ggml-model.sh base in $WDIR" >&2
+  fi
+  # The panel's microphone button looks for the scripts beside this one. It
+  # defaults to ~/pinenote/setup/mic, so say something if this checkout is
+  # elsewhere rather than letting the button fail silently later.
+  MICDIR="$D/mic"
+  if [ "$MICDIR" != "$HOME/pinenote/setup/mic" ]; then
+    echo "   -> This checkout is not at ~/pinenote. Add to ~/.config/pn-panel.json:"
+    echo "        {\"voice\": {\"dir\": \"$MICDIR\"}}"
+  fi
+  echo "   -> Try it: $MICDIR/dictate   (or the microphone button in the top bar)"
+fi
