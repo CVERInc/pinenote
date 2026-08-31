@@ -1247,6 +1247,42 @@ fit anything: claps from directly above and below collapse to ±1 sample. A line
 of microphones is equidistant from those directions, so a straight line is what
 the sideways claps and the vertical ones agree on independently.
 
+### What summing the four channels is worth, and what it is not
+
+`beam.py` sums the four microphones, and against a synthetic signal with
+independent noise on each channel it recovers exactly the 6 dB the arithmetic
+predicts. That number is real, and it is narrower than it sounds.
+
+Summing an unsteered array helps against noise that arrives **incoherently** --
+fans, hiss, traffic, a room's own floor. It does nothing against a point
+source. A phone playing a podcast reaches all four microphones coherently, so
+summing lifts it by exactly as much as it lifts the talker, and the ratio does
+not move.
+
+Measured, with a podcast as the interferer at three levels, transcribing the
+same recording twice -- once summed, once from one microphone:
+
+```
+level 2, summed      6、マスタイトルというか、サタイトルの話について…
+level 2, one mic     というスタイトルというか、サタイトルも放送されて…
+```
+
+Both transcribed the podcast rather than the person, and both failed the same
+way at every level. The array cannot help here because the problem is not
+signal to noise: whisper has no notion of which voice was wanted, and 6 dB of
+nothing-in-particular does not tell it.
+
+Rejecting an interferer needs the array to be **steered** -- delays chosen to
+put a null in its direction -- which is a different thing from summing and is
+not implemented here. Summing stays because diffuse noise is what a quiet room
+mostly has, and it costs nothing.
+
+(The protocol for that measurement had a flaw worth admitting: the recording
+window started the moment the prompt appeared, so the talker's reply landed at
+the end and was clipped. That ruins any comparison *between* the three levels.
+It leaves the comparison that mattered untouched, since summed and single come
+from one recording and are clipped identically.)
+
 ### Front and back, which the geometry cannot answer
 
 A straight line measures one thing: the angle between the source and itself.
