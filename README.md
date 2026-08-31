@@ -1271,10 +1271,35 @@ speaks, colour does not. An earlier single measurement said −3.0 dB of level
 against a −3 dB threshold and meant nothing at all -- the talker had simply
 spoken more quietly the second time.
 
-Two limits, both unmeasured rather than argued: white noise carries far more
-2--6 kHz energy than speech does, so the usable tilt for a voice will be
-smaller; and this was measured on the axis, where the body is squarely in the
-path. A source 45° to one side is not shadowed by anything.
+One limit is geometric: this was measured on the axis, where the body is
+squarely in the path. A source 45° to one side is not shadowed by anything.
+
+The other limit was measured afterwards, and it is the one that matters. Repeat
+the experiment with recorded speech instead of white noise and the cue does not
+survive:
+
+| | level | HF−LF tilt |
+|---|---|---|
+| back − front | −1.9, −4.0, +0.6 dB | +0.6, −6.1, −2.1 dB |
+| same side twice (control) | −1.3, +1.2 dB | **+4.0**, +1.4 dB |
+
+Two takes of the same side, same distance, nothing moved, differ by 4.0 dB of
+tilt — more than two of the three front/back pairs, one of which has the wrong
+sign. Five seconds of speech is not a stable spectrum: whether a sibilant
+happened to fall inside the window moves the 2--6 kHz band further than the
+tablet does.
+
+The physics has not gone anywhere; the body still takes the treble. What fails
+is the measurement, and then the application, which is worse. A real system
+never gets to compare two recordings — it gets one utterance and has to say
+which side it came from, which needs to know how bright that person is when
+nothing is in the way. That varies by speaker and by sentence, by more than the
+shadow is worth.
+
+So: **left and right, yes, from the delays. Front and back, no** — not from
+level, not from colour, not without a reference recording of the same voice
+from a known side. Placement remains the answer: put everyone who matters on
+one side of the tablet, and the ambiguity has nothing to be ambiguous about.
 
 ```sh
 setup/mic/shadow.py front.wav back.wav     # level and tilt, with a verdict
