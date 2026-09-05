@@ -338,6 +338,87 @@ tried first and did nothing, because the pseudo class never arrives. So the key
 is named after what it is doing instead: `caps lock` becomes `caps locked`. On a
 panel with two colours and no animation, words are the signal that survives.
 
+### Chords
+
+A latched modifier reaches only half of GNOME's keyboard. `keyboard.js` hands
+`this._modifiers` to `commit()`, which is the path a character key takes, and
+does not hand it to the branch immediately above:
+
+```js
+} else if (key.keyval) {
+    button.connect('keyval', (_actor, keyval) => {
+        this._keyboardController.keyvalPress(keyval);        // modifiers never read
+} else {
+    button.connect('commit', (_actor, str) => {
+        this._keyboardController.commit(str, this._modifiers);
+```
+
+Every key carrying a keyval goes through the first branch — Tab, Escape, Enter,
+the arrows, Home, End, Page Up, Page Down. So `Ctrl+C` worked and `Ctrl+Left` did
+nothing, and from the outside those two look the same: a key that was pressed and
+had no effect.
+
+Shift was not a modifier at all. Upstream's Shift is a `levelSwitch` — it changes
+which faces are drawn on the keys, and there is no instant at which Shift is
+being held. `Shift+Tab` could not exist. Not "did not work": could not exist.
+
+Both halves are fixed here. The controller is patched rather than `_addRowKeys`,
+because that keyval handler is a closure connected inside upstream's build loop
+and there is nothing left to reach once a key exists — but every one of those
+closures ends up in `keyvalPress`. And the row's right-hand Shift becomes a real
+`Shift_L`. Two Shifts is a habit inherited from keyboards you play with ten
+fingers; nobody chords with two thumbs on a tablet. The left one still switches
+levels, the right one latches like the `ctrl` and `alt` beside it, one key at a
+time, and then lets go.
+
+Letters still arrive capitalised through it: with a modifier held, `commit()`
+sends raw keyvals instead of going through the input method, and the compositor
+resolves the letter at the level Shift selects. The only visible difference is
+that the right Shift no longer flips the faces on screen — the latched paint says
+so instead.
+
+Forwarding a real modifier is also why the result is right rather than merely
+close. Sending the shifted keysym directly would produce `ISO_Left_Tab` with no
+modifier set, which is not what a keyboard sends. This is what an application
+receives now:
+
+```
+press   keyval=Shift_L (0xffe1)       keycode=50   state=-
+press   keyval=ISO_Left_Tab (0xfe20)  keycode=23   state=SHIFT
+release keyval=ISO_Left_Tab (0xfe20)  keycode=23   state=SHIFT
+release keyval=Shift_L (0xffe1)       keycode=50   state=SHIFT
+```
+
+Nothing sent `ISO_Left_Tab`. Tab was sent, and the compositor resolved it at the
+shifted level by itself, because Shift was genuinely down. Measured the same way:
+`Shift`+`→` arrives as `Right`+SHIFT, `ctrl`+`←` as `Left`+CTRL, and
+`ctrl`+`Shift`+`c` as `C`+SHIFT+CTRL — which is the terminal's copy.
+
+### Pressing a key from a machine
+
+The keyboard can only be pressed by a finger, and a finger cannot report what
+arrived. "Shift+Tab works now" is otherwise a sentence someone has to be standing
+next to the tablet to say, which is how the shadow experiments in this repo went
+wrong twice.
+
+So the keyboard grew a way to be pressed and a way to be read:
+
+- `TapKey` and `Keys` on `org.cver.PnOsk`. `TapKey` presses a key with the same
+  two calls the touch handler makes — `Key._press` and `Key._release` on the same
+  actor — so the path from the button to the application is the real one. A key
+  is named by its label (`tab`), its icon (`osk-shift-symbolic`), its keyval
+  (`0xff09`), or `#N` from the `Keys` inventory; the two Shifts differ in nothing
+  else.
+- `setup/keylog.py` is the other end: a window that prints what the application
+  actually got, keyval and keycode and modifier mask, and prints separately the
+  text that arrived through the input method without ever being a key event.
+
+The pair runs over SSH, which is the point. The first run with them found that
+every keystroke was going into the overview's search box rather than the logger —
+visible immediately in a `Capture()` screenshot, with the candidates up and a
+stray `b` sitting in the search field. An instrument that says nothing is not
+evidence that nothing happened.
+
 ### On GNOME 48
 
 48 renames every keyboard-specific OSK icon to an `osk-` prefix —

@@ -262,6 +262,21 @@
     border: 2px solid #333;
 }
 
+/* A latched modifier is the only key here whose state outlives the press, so it
+   is the only one that has to be readable while your finger is somewhere else.
+   Unlike the caps-lock case above, the :latched pseudo class really does arrive
+   for a modifier key — GNOME sets it in _setModifierEnabled — and that is what
+   makes a rule work here at all. Confirmed by photographing the keyboard with
+   Shift held, not by reading the code: the first photograph showed the two
+   Shifts identical, which is how this rule came to exist.
+   Inverted rather than tinted: any grey between #333 and #fff quantises to
+   noise in the two-colour mode this device spends its life in. */
+#keyboard .keyboard-key.default-key:latched {
+    background-color: #fff;
+    color: #000;
+    border: 2px solid #000;
+}
+
 #keyboard .keyboard-key:active,
 #keyboard .keyboard-key:checked {
     background-color: #000;

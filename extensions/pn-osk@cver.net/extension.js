@@ -57,7 +57,7 @@ import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import * as InputSourceStatus from 'resource:///org/gnome/shell/ui/status/keyboard.js';
 import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 
-const BUILD = 29;
+const BUILD = 30;
 
 // These represent the panel's physics, as a default state rather than a toggle.
 // They were previously applied manually over D-Bus because CSS overrides were
@@ -224,6 +224,13 @@ const IFACE = `
     </method>
     <method name="SuppressCandidates">
       <arg type="b" direction="in" name="suppress"/>
+    </method>
+    <method name="Keys">
+      <arg type="s" name="json" direction="out"/>
+    </method>
+    <method name="TapKey">
+      <arg type="s" name="spec" direction="in"/>
+      <arg type="s" name="json" direction="out"/>
     </method>
     <method name="ShowKeyboard"/>
     <method name="HideKeyboard"/>
@@ -471,6 +478,14 @@ const byAction = name => k => k.action === name;
 // strings and worked correctly. The broken ones were the five we built: Esc,
 // Home, End, PgUp, PgDn. The broken set mapped exactly to the bespoke set,
 // which isolated the cause.
+// The stock JSON keeps keyvals as hexadecimal strings, and only Key parses one
+// (keyboard.js: parseInt(keyval, 16)) — Keyboard._modifiers stores the raw
+// string and hands it straight to notify_keyval(), which wants a guint. GJS
+// coerces '0xffe3' to 65507 rather than throwing, measured on the device with
+// GLib.Variant.new_uint32, so upstream gets away with it. Parse anyway: a
+// number is what the call means, and the coercion is not ours to rely on.
+const pnKeyvalNum = kv => (typeof kv === 'number' ? kv : parseInt(kv, 16));
+
 const hexKeyval = n => {
     if (typeof n !== 'number') {
         console.error(`pn-osk: hexKeyval expects a number, got ${typeof n} (${n})`);
@@ -550,6 +565,7 @@ export default class PineNoteOskExtension extends Extension {
         proto._updateLayout = function (groupName, purpose) {
             ext._config = readConfig();
             this._pnPurpose = purpose;
+            ext._pnPatchModifiers(this);
             if (ext._config.trace)
                 log(`[pn-osk] _updateLayout group=${groupName} purpose=${purpose} TERMINAL=${Clutter.InputContentPurpose.TERMINAL} k6=${ext._config.k6Layout}`);
 
@@ -1592,6 +1608,7 @@ export default class PineNoteOskExtension extends Extension {
         this._origRelayout = null;
         this._origUpdateLayout = null;
         this._origAddRowKeys = null;
+        this._pnUnpatchModifiers();
 
 
         this._dbus?.unexport();
@@ -1602,6 +1619,104 @@ export default class PineNoteOskExtension extends Extension {
 
         this._restoreRatio();
         this._rebuild();
+    }
+
+    // A latched modifier reaches only half the keyboard upstream. keyboard.js
+    // hands this._modifiers to commit(), which is the path a character key
+    // takes, and does not hand it to the branch directly above:
+    //
+    //     } else if (key.keyval) {
+    //         button.connect('keyval', (_actor, keyval) => {
+    //             this._keyboardController.keyvalPress(keyval);   // no modifiers
+    //
+    // Every key carrying a keyval goes through there — Tab, Escape, Enter, the
+    // arrows, Home/End/PgUp/PgDn — so Ctrl+C worked and Ctrl+Left did not, and
+    // Shift+Tab could not exist at all. Identical in 47 and in the 48.7 this
+    // device runs (read out of libshell-16.so, not out of a release tarball).
+    //
+    // The controller is what gets patched, not _addRowKeys: that keyval handler
+    // is a closure connected inside upstream's build loop, so there is nothing
+    // left to reach once a key exists — but every one of those closures ends up
+    // in these two methods.
+    _pnPatchModifiers(keyboard) {
+        const kc = keyboard?._keyboardController;
+        if (!kc || kc._pnOrigKeyvalPress)
+            return;
+
+        kc._pnOrigKeyvalPress = kc.keyvalPress.bind(kc);
+        kc._pnOrigKeyvalRelease = kc.keyvalRelease.bind(kc);
+        kc._pnOrigCommit = kc.commit.bind(kc);
+
+        // commit() puts the modifiers down itself and then sends the character
+        // through this very method. Re-entering would press them a second time
+        // around a key that is already inside them, so the guard covers the
+        // whole call — with modifiers held, commit() takes its synchronous
+        // branch and the await resolves immediately.
+        kc.commit = (str, modifiers) => {
+            kc._pnInside = true;
+            return kc._pnOrigCommit(str, modifiers)
+                .finally(() => (kc._pnInside = false));
+        };
+
+        kc.keyvalPress = kv => {
+            if (kc._pnInside) {
+                kc._pnOrigKeyvalPress(kv);
+                return;
+            }
+            // Remember what went down. The release has to let go of exactly
+            // this set, and by then the latch has already been cleared.
+            kc._pnHeld = [...(keyboard._modifiers ?? [])].map(pnKeyvalNum);
+            kc._pnInside = true;
+            try {
+                for (const mod of kc._pnHeld)
+                    kc._pnOrigKeyvalPress(mod);
+                kc._pnOrigKeyvalPress(kv);
+            } finally {
+                kc._pnInside = false;
+            }
+        };
+
+        kc.keyvalRelease = kv => {
+            if (kc._pnInside) {
+                kc._pnOrigKeyvalRelease(kv);
+                return;
+            }
+            kc._pnInside = true;
+            try {
+                kc._pnOrigKeyvalRelease(kv);
+                // Reverse order, the way a hand lets go of a chord.
+                for (const mod of [...(kc._pnHeld ?? [])].reverse())
+                    kc._pnOrigKeyvalRelease(mod);
+            } finally {
+                kc._pnInside = false;
+                kc._pnHeld = [];
+                // One key each, the same one-shot the commit path gives them.
+                // Without this the latch outlives the key it modified and the
+                // next letter arrives with Ctrl still down.
+                keyboard._disableAllModifiers?.();
+            }
+        };
+
+        (this._pnPatchedKc ??= new Set()).add(kc);
+    }
+
+    // The originals live on the prototype, so restoring is deleting the own
+    // properties rather than writing the bound copies back — those are bound,
+    // and a bound copy left on the instance would outlive the extension.
+    _pnUnpatchModifiers() {
+        for (const kc of this._pnPatchedKc ?? []) {
+            if (!kc._pnOrigKeyvalPress)
+                continue;
+            delete kc.keyvalPress;
+            delete kc.keyvalRelease;
+            delete kc.commit;
+            delete kc._pnOrigKeyvalPress;
+            delete kc._pnOrigKeyvalRelease;
+            delete kc._pnOrigCommit;
+            delete kc._pnHeld;
+            delete kc._pnInside;
+        }
+        this._pnPatchedKc = null;
     }
 
     // Rebuild levels 0 (plain) and 1 (shifted) as a 65% keyboard, 17 columns
@@ -1774,7 +1889,28 @@ export default class PineNoteOskExtension extends Extension {
         const flexBackspace = sized(backspace, w.backspace);
         const flexBackslash = extras[extras.length - 1];
         const flexEnter = sized(enter, w.enter);
-        const flexShift = sized(rightShift, w.shift);
+        // 🔴 Upstream's Shift is a levelSwitch: it repaints the keys with
+        //    their shifted faces and is never actually held down, so Shift+Tab
+        //    and Shift+Arrow had no way to exist — there was no moment at which
+        //    Shift was a modifier. The row carries two of them, which is a
+        //    physical-keyboard habit; nobody chords with two thumbs on a
+        //    tablet. The right one becomes a real Shift_L, latching like Ctrl
+        //    and Alt beside it.
+        //
+        //    Letters still come out capitalised through it: with the modifier
+        //    held, commit() sends raw keyvals instead of going through the
+        //    input method, and the compositor resolves the letter at the level
+        //    Shift selects. The only visible difference is that the right Shift
+        //    no longer flips the faces on screen — the latched paint says so
+        //    instead. The left Shift is untouched and still switches levels.
+        //
+        //    Guarded on what the key actually is: levels 2 and 3 put the =/<
+        //    symbol switch in this slot, and those levels ship as they are.
+        const shiftMod = rightShift?.action === 'levelSwitch' && level < 2
+            ? {...rightShift, action: 'modifier',
+               keyval: hexKeyval(Clutter.KEY_Shift_L), level: undefined}
+            : rightShift;
+        const flexShift = sized(shiftMod, w.shift);
         const flexSpace = sized(space, w.space);
 
         const rowsOut = [
@@ -2251,6 +2387,85 @@ export default class PineNoteOskExtension extends Extension {
         } catch (e) {
             invocation.return_value(new GLib.Variant('(s)', [`error: ${e.message}`]));
         }
+    }
+
+    // Every claim about a chord — "Shift then Tab now arrives as Shift+Tab" —
+    // otherwise needs someone standing next to the tablet with a finger, and
+    // then needs them to say what happened. These two press a key the way the
+    // touch handler does (Key._press/_release on the same actor, keyboard.js
+    // _makeKey), so the path from the button to the application is the real one
+    // and the answer can be read over SSH.
+    //
+    // Keys are found by walking, not by indexing _layers: the level container
+    // wraps its keys in rows in some builds and grids them directly in others,
+    // and the thing that identifies a Key is that it owns a keyButton.
+    _pnWalkKeys(actor, out = []) {
+        for (const child of actor?.get_children?.() ?? []) {
+            if (child.keyButton)
+                out.push(child);
+            else
+                this._pnWalkKeys(child, out);
+        }
+        return out;
+    }
+
+    _pnLayerKeys() {
+        const kb = Main.keyboard?._keyboard;
+        const layer = kb?._currentPage ??
+            Object.values(kb?._layers ?? {}).find(l => l.visible);
+        return this._pnWalkKeys(layer);
+    }
+
+    _pnKeyList(keys) {
+        return keys.map((k, i) => ({
+            i,
+            label: k.keyButton?.label ?? null,
+            icon: k._icon?.icon_name ?? null,
+            keyval: k._keyval ? `0x${k._keyval.toString(16)}` : null,
+            latched: k.keyButton?.has_style_pseudo_class?.('latched') ?? null,
+        }));
+    }
+
+    Keys() {
+        const kb = Main.keyboard?._keyboard;
+        return JSON.stringify({
+            build: BUILD,
+            visible: kb?.visible ?? null,
+            modifiers: [...(kb?._modifiers ?? [])],
+            keys: this._pnKeyList(this._pnLayerKeys()),
+        });
+    }
+
+    // spec is a label ('Tab'), an icon name ('osk-shift-symbolic'), a keyval
+    // ('0xff09'), or '#N' for the index Keys() printed — the two Shifts differ
+    // in nothing else.
+    TapKey(spec) {
+        const keys = this._pnLayerKeys();
+        const list = this._pnKeyList(keys);
+        const idx = /^#\d+$/.test(spec)
+            ? parseInt(spec.slice(1), 10)
+            : list.findIndex(k =>
+                k.label === spec || k.icon === spec || k.keyval === spec);
+
+        const key = keys[idx];
+        if (!key)
+            return JSON.stringify({error: `no key matching ${spec}`, keys: list});
+
+        // The commit string is not kept on the Key, but the button wears it as
+        // its label whenever there is one; a keyval key ignores the argument.
+        key._press(key.keyButton);
+        key._release(key.keyButton, key.keyButton?.label ?? null);
+
+        // Read the key back AFTER the tap, not from the list the match came
+        // from: `latched` is the whole point of tapping a modifier, and the
+        // pre-tap snapshot reports every modifier as unlatched no matter what
+        // just happened. An instrument that quietly answers the previous
+        // question is worse than one that answers none.
+        const kb = Main.keyboard?._keyboard;
+        return JSON.stringify({
+            tapped: {...this._pnKeyList([key])[0], i: idx},
+            modifiers: [...(kb?._modifiers ?? [])],
+        });
     }
 
     Geometry() {
