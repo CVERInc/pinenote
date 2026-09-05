@@ -101,7 +101,7 @@ file per subject, in the order the device asks for them:
 
 ## Upstream
 
-Three of the fixes here are workarounds for things that belong in someone else's tree, and
+Four of the fixes here are workarounds for things that belong in someone else's tree, and
 [`UPSTREAM.md`](UPSTREAM.md) records which have been raised, where, and what came back. Read
 it before filing anything: we once reported the accelerometer collision twice from the same
 account, weeks apart, because the second search came back empty and that was trusted.

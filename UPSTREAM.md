@@ -76,3 +76,33 @@ out carrying `systemd-private-<boot id>` paths and input-method log filenames.
 The log filenames were the part actually worth removing -- they name what the
 owner runs and when.)
 That was caught on the way into a public tree, not after.
+
+## gnome-shell — latched modifiers and the on-screen keyboard's keyval keys
+
+- **Issue:** [gnome-shell#9397](https://gitlab.gnome.org/GNOME/gnome-shell/-/issues/9397)
+  (open), with the patch attached as a comment so it can be applied without
+  waiting for the MR.
+- **MR:** [gnome-shell!4386](https://gitlab.gnome.org/GNOME/gnome-shell/-/merge_requests/4386)
+  — `keyboard: Forward latched modifiers on the keyval path`, from the fork at
+  `cver/gnome-shell`, branch `osk-keyval-modifiers`.
+
+`Keyboard._addRowKeys` hands `this._modifiers` to `commit()`, the path a
+character key takes, and not to the branch above it, where every key with a
+keyval lives — Tab, Escape, Enter, the arrows, Home/End, Page Up/Down. A latched
+Ctrl reached `c` and not `←`. Present in 47, in the 48.7 this device runs, and on
+`main` as of 2026-09-05; searched under the `5. On-screen Keyboard` label (198
+issues) and a dozen queries before filing, after checking the search could find
+a known MR. The nearest prior report, #8670, was a different bug in Mutter.
+
+Shift is a separate matter: upstream's Shift is a level switch and never a held
+key, so Shift+Tab has no path at all. The issue notes it; the MR does not attempt
+it.
+
+Our workaround: `extensions/pn-osk@cver.net`, behind `chords` in `pn-osk.json`,
+patches the controller and makes the right Shift a real `Shift_L`. Keep it until
+the MR is in a release this device runs; the Shift half stays regardless.
+
+Filing this needed a gitlab.gnome.org account. New accounts there cannot create
+projects — and so cannot fork — until an SSH key is on the account, after which
+automation lifts the limit within about half an hour. That is documented in the
+GNOME handbook; the error message does not say so.
