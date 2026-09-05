@@ -1,36 +1,50 @@
-/* 我們自己那三顆頂列按鈕（色調／刷新／旋轉）要看起來是一組。原廠內距是留給
-   滑鼠指標的，三顆各留一份之後，它們比右邊那組系統圖示還要鬆 —— 而那組之所以
-   緊密，是因為整組其實只是**一顆**按鈕。我們三顆各自要能單獨按，所以只能收內距。
+/* Our own three top-row buttons (tone / refresh / rotate) need to look like one
+   group. Stock padding is sized for a mouse pointer, and with each of the three
+   keeping its own share, they end up looser than the system icon group on the
+   right — and that group is only tight because the whole group is actually
+   just **one** button. Our three each need to be individually pressable, so
+   padding is the only thing we can shrink.
 
-   數字是量出來的，不是挑的：原廠那三顆（Wi-Fi／音量／電量）從截圖量到的中心距是
-   28.0 邏輯像素，所以這裡配到一樣的 28（16 的圖示＋左右各 5＋主題自己的 0.1em
-   邊界）。
+   The numbers are measured, not chosen: the stock three (Wi-Fi / volume /
+   battery) measure 28.0 logical pixels center-to-center from a screenshot, so
+   this matches the same 28 (16 for the icon + 5 on each side + the theme's own
+   0.1em border).
 
-   ⚠️ 但兩邊的 28 不是同一種東西。原廠那三顆**整組只是一顆按鈕**，28 是圖示之間
-   的距離、不是點擊目標；我們三顆各自要能按，所以 28 邏輯就是實際目標＝56 實體
-   ＝這片 226dpi 面板上的 6.3mm。還按得到，但這是下限，再收就是拿命中率換版面。 */
+   ⚠️ But the two 28s are not the same kind of thing. The stock three **are one
+   button as a whole group** — 28 is the distance between icons, not a tap
+   target; our three each need to be tappable, so 28 logical is the actual
+   target = 56 physical = 6.3mm on this 226dpi panel. Still tappable, but this
+   is the floor — shrinking further trades hit rate for layout. */
 #panel .pn-panel-button {
     -natural-hpadding: 5px;
     -minimum-hpadding: 4px;
 }
 
-/* 寬度不只來自按鈕：St 的狀態圖示自己也帶 padding 和 margin，兩層加起來才是
-   實測的那 62px。只收一層完全沒有效果，而且是「看起來像沒生效」那種沒效果。 */
+/* The width doesn't come from the button alone: St's status icon carries its
+   own padding and margin too, and it takes both layers together to reach the
+   measured 62px. Shrinking only one layer does nothing at all — and it's the
+   kind of nothing that looks like the change didn't take. */
 #panel .pn-panel-button .system-status-icon {
     padding: 0;
     margin: 0;
 }
 
-/* pn-input。四顆要看起來是一組，所以這顆的目標寬度就是另外三顆量到的那個 26：
-   內容 20 ＋左右各 3。圖示那三顆是內容 16 ＋左右各 5，同樣是 26 —— 兩個大寫
-   拉丁字母比一個圖示寬，所以內距往內收，總寬對齊。
+/* pn-input. All four need to look like one group, so this button's target
+   width is the same 26 measured for the other three: content 20 + 3 on each
+   side. The icon-based three are content 16 + 5 on each side, also 26 — two
+   uppercase Latin letters are wider than one icon, so the padding shrinks
+   inward to keep the total width aligned.
 
-   ⚠️ 20/3/11px 這三個數字是算出來對齊 26 的，不是量出來的。另外三顆的 26 是
-   從截圖量的（見上面那段）。這一顆要用 PanelInfo 的 w 對過才算數。
+   ⚠️ The three numbers 20/3/11px are calculated to align to 26, not measured.
+   The other three's 26 is measured from a screenshot (see the paragraph
+   above). This one only counts once it's been checked against PanelInfo's w.
 
-   🔴 寬度仍然鎖死。US／JP／TW 三個都是兩個大寫字母，寬度差得很小，但頂列是
-   比例字型，J 比 U 窄 —— 不鎖的話按鈕會跟著切換抽動，把左邊三顆一起推。在這
-   片面板上那不是「動一下」，那是每次切換都留一條拖影。 */
+   🔴 The width is still locked down. US / JP / TW are all two uppercase
+   letters, so the width difference is tiny, but the top row uses a
+   proportional font and J is narrower than U — without locking it, the
+   button would twitch on every switch and push the three buttons to its left
+   along with it. On this panel that's not "a little jitter", it's a ghost
+   trail left behind on every switch. */
 #panel .pn-panel-button.pn-panel-input {
     -natural-hpadding: 3px;
     -minimum-hpadding: 3px;
@@ -45,16 +59,21 @@
     margin: 0;
 }
 
-/* 鄰居（quickSettings）。六顆要一致間距，而剩下那 10 個像素在它的左內距裡：
-   它左緣到 Wi-Fi 中心是 24.5 邏輯像素，一致所需的是 14.5。
+/* Neighbour (quickSettings). All six need consistent spacing, and the
+   remaining 10 pixels live in its left padding: its left edge to the Wi-Fi
+   center measures 24.5 logical pixels, and consistency calls for 14.5.
 
-   🔴 只往下收，永遠不給負值。負的 margin 不會被 St 忽略也不會被夾住 ——
-   它會變成負的配置寬度，一路傳到 offscreen framebuffer 被當成無號整數
-   （−64 → 4294967232），然後 g_error 中止整個 gnome-shell。見 upstream/。 */
+   🔴 Only ever shrink downward, never pass a negative value. A negative
+   margin is neither ignored nor clamped by St — it turns into a negative
+   allocated width, which propagates all the way to the offscreen framebuffer
+   where it's read as an unsigned integer (−64 → 4294967232), and g_error
+   aborts the whole gnome-shell. See upstream/. */
 #panel .pn-panel-neighbour {
     -natural-hpadding: 2px;
     -minimum-hpadding: 2px;
-    /* -natural-hpadding 是對稱的，收左邊就會連右邊一起收，於是整組被推向螢幕
-       邊緣（電量右緣從 17.5 掉到 9.5 邏輯像素）。用正的 margin 把邊界補回來。 */
+    /* -natural-hpadding is symmetric, so shrinking the left side shrinks the
+       right along with it, pushing the whole group toward the screen edge
+       (the battery icon's right edge drops from 17.5 to 9.5 logical pixels).
+       A positive margin adds the edge back. */
     margin-right: 8px;
 }

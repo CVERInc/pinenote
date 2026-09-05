@@ -1,5 +1,5 @@
 [Unit]
-Description=PineNote idle refresh (停手才清殘影)
+Description=PineNote idle refresh (clears ghosting only once idle)
 After=graphical-session.target
 [Service]
 Type=simple

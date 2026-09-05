@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
-# pn — 這台上我們自己加的每一個功能，一個地方看現況、一個地方開關。
+# pn — one place to see the state of every feature we added on this device, one
+# place to switch them.
 #
-# 🔴 它**不擁有狀態**。每個功能的真值留在它原本的家 —— gsettings、systemd
-#    unit、~/.config/*.json、sysfs —— 這支只是統一的讀寫入口。所以重刷之後
-#    setup.sh 建好的東西它一跑就認得，不需要自己的資料庫；也所以它報的是
-#    **現況**不是設定值：Wi-Fi 省電問的是 iw、輸入法問的是 ibus、波形問的是
-#    sysfs。設定檔寫了什麼跟現在是什麼是兩件事，這台已經被這個差別咬過。
+# 🔴 It **owns no state**. Each feature's source of truth stays in its own home
+#    — gsettings, a systemd unit, ~/.config/*.json, sysfs — this script is only
+#    a unified read/write entry point. So after a reflash it recognizes whatever
+#    setup.sh built the moment it runs, with no database of its own; and that's
+#    also why it reports **current state**, not configured values: Wi-Fi
+#    power-save asks iw, the input method asks ibus, the waveform asks sysfs.
+#    What a config file says and what's actually true are two different things,
+#    and this device has already been bitten by that gap.
 #
-# 用法
-#   pn                      全部功能的現況
-#   pn <名字>               一個功能的現況
-#   pn <名字> on|off        開關（只有標 ⇄ 的可以）
-#   pn ime add|rm <引擎>    輸入法進出循環（順序就是戳一下的順序）
-#   pn panel hide|show <鍵>  頂列按鈕
+# Usage
+#   pn                      state of every feature
+#   pn <name>               state of one feature
+#   pn <name> on|off        toggle (only the ones marked ⇄ support this)
+#   pn ime add|rm <engine>  add/remove from the input method cycle (order = tap order)
+#   pn panel hide|show <key>  top-row buttons
 set -u
 
-# ── 工具 ────────────────────────────────────────────────────────────────
+# ── helpers ──────────────────────────────────────────────────────────────
 ok()   { printf '  \033[1m%-14s\033[0m %s\n' "$1" "$2"; }
 warn() { printf '  \033[1m%-14s\033[0m \033[33m%s\033[0m\n' "$1" "$2"; }
 die()  { echo "pn: $*" >&2; exit 1; }
@@ -24,7 +28,7 @@ unit_active() { systemctl --user is-active "$1" 2>/dev/null; }
 ext_state() {
   gnome-extensions info "$1" 2>/dev/null | awk -F': ' '/State:/{print $2}'
 }
-# 面板的 D-Bus 介面。這台從 SSH 開，玻璃上的東西要用問的。
+# The panel's D-Bus interface. This runs over SSH, so what's on the glass has to be asked for.
 panel_info() {
   gdbus call --session --dest org.cver.PnPanel --object-path /org/cver/PnPanel \
     --method org.cver.PnPanel.PanelInfo 2>/dev/null | python3 -c '
@@ -35,11 +39,11 @@ d=json.loads(ast.literal_eval(raw)[0])
 print(json.dumps(d))'
 }
 
-# ── 每個功能一組 status / on / off ────────────────────────────────────────
-# 名字就是 setup.sh / README 用的那個。加新功能＝加一組 f_<名字>_status
-# （必要）和 f_<名字>_set on|off（可選，沒有就是唯讀）。
+# ── one status / on / off pair per feature ────────────────────────────────
+# The name is the same one setup.sh / the README use. Adding a feature = adding
+# a f_<name>_status (required) and a f_<name>_set on|off (optional; no set = read-only).
 
-# 打字模式：A2 波形＋清除觸發器。真值在 sysfs。
+# Typing mode: A2 waveform + clear trigger. Source of truth is in sysfs.
 f_typing_status() {
   local P=/sys/module/rockchip_ebc/parameters
   local wf; wf=$(cat $P/default_waveform 2>/dev/null)
@@ -54,7 +58,7 @@ f_typing_set() {
   esac
 }
 
-# 閒置清除。
+# Idle clear.
 f_idle_status() { ok idle-refresh "$(unit_active pn-idle-refresh.service)"; }
 f_idle_set() {
   case $1 in
@@ -63,7 +67,7 @@ f_idle_set() {
   esac
 }
 
-# 三個擴充。
+# The three extensions.
 f_osk_status()   { ok osk   "$(ext_state pn-osk@cver.net)"; }
 f_panel_status() { ok panel "$(ext_state pn-panel@cver.net)"; }
 f_wave_status()  { ok wave  "$(ext_state pn-wave@cver.net)"; }
@@ -71,7 +75,7 @@ f_osk_set()   { gnome-extensions "$([ "$1" = on ] && echo enable || echo disable
 f_panel_set() { gnome-extensions "$([ "$1" = on ] && echo enable || echo disable)" pn-panel@cver.net; }
 f_wave_set()  { gnome-extensions "$([ "$1" = on ] && echo enable || echo disable)" pn-wave@cver.net; }
 
-# k6 版面（pn-osk.json 裡的 k6Layout）。
+# k6 layout (k6Layout in pn-osk.json).
 f_k6_status() {
   local v; v=$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.config/pn-osk.json"))).get("k6Layout",True))' 2>/dev/null)
   ok k6 "${v:-?}"
@@ -84,13 +88,13 @@ d=json.load(open(p))
 d["k6Layout"]= sys.argv[1]=="on"
 json.dump(d,open(p,"w"),indent=2,ensure_ascii=False)
 PY
-  echo "  (pn-osk 在下次 rebuild 時重讀，收起再叫出鍵盤即可)"
+  echo "  (pn-osk re-reads this on its next rebuild — dismiss and bring up the keyboard again to trigger one)"
 }
 
-# Wi-Fi 省電。真值問 iw，不問設定檔。
+# Wi-Fi power-save. Source of truth is iw, not the config file.
 f_wifi_status() {
   local ps; ps=$(/usr/sbin/iw dev wlan0 get power_save 2>/dev/null | awk '{print $3}')
-  if [ "$ps" = "off" ]; then ok wifi-powersave "off (good)"; else warn wifi-powersave "${ps:-unknown} — 這台會失聯，見 lifeline.sh [5]"; fi
+  if [ "$ps" = "off" ]; then ok wifi-powersave "off (good)"; else warn wifi-powersave "${ps:-unknown} — this device will drop off the network, see lifeline.sh [5]"; fi
 }
 f_wifi_set() {
   case $1 in
@@ -99,7 +103,7 @@ f_wifi_set() {
   esac
 }
 
-# 輸入法。真值：gsettings 的清單 + ibus 現用引擎。
+# Input method. Source of truth: gsettings' list + the ibus engine currently in use.
 f_ime_status() {
   local cur; cur=$(ibus engine 2>/dev/null)
   local list; list=$(gs org.gnome.desktop.input-sources sources)
@@ -112,9 +116,10 @@ if raw:
   ok ime "current=${cur:-?} face=${face:-?}"
   ok "" "cycle=$list"
 }
-# pn ime add|rm <引擎>：改清單。順序就是 pn-input 戳一下的順序。
-# pn ime face <US|JP|TW|pinyin|bopomofo>：直接跳到那張臉。TW＝pinyin（第一張）；
-# pinyin / bopomofo 是同一個 rime 源的兩個方案，頂列都顯示 TW，差別在鍵帽。
+# pn ime add|rm <engine>: edit the list. Order = the order pn-input taps through.
+# pn ime face <US|JP|TW|pinyin|bopomofo>: jump straight to that face. TW = pinyin
+# (the first one); pinyin / bopomofo are two schemas of the same rime engine, both
+# shown as TW on the top row — the difference is in the keycaps.
 f_ime_cmd() {
   local op=$1 eng=${2:-}
   if [ "$op" = face ]; then
@@ -123,7 +128,7 @@ f_ime_cmd() {
       --method org.cver.PnPanel.InputFace "$eng" >/dev/null && f_ime_status
     return
   fi
-  [ -n "$eng" ] || die "pn ime $op <engine>  （rime / mozc-on / chewing / hangul）"
+  [ -n "$eng" ] || die "pn ime $op <engine>  (rime / mozc-on / chewing / hangul)"
   python3 - "$op" "$eng" <<'PY'
 import subprocess,sys,ast
 op,eng=sys.argv[1],sys.argv[2]
@@ -139,7 +144,7 @@ print("  sources =",val)
 PY
 }
 
-# 頂列按鈕。真值問面板自己。
+# Top-row buttons. Source of truth is the panel itself.
 f_buttons_status() {
   panel_info | python3 -c '
 import sys,json
@@ -154,9 +159,10 @@ print("  buttons       ", " ".join(parts))'
 
 }
 
-# pn buttons <input|tone|refresh|rotate> on|off：寫 ~/.config/pn-panel.json，
-# 然後 disable/enable 擴充讓它重讀。關掉的按鈕不建立（見 pn-panel 的
-# readPanelConfig），所以要重載才會消失 —— 不是即時的，但也不需要 restart gdm3。
+# pn buttons <input|tone|refresh|rotate> on|off: writes ~/.config/pn-panel.json,
+# then disables/enables the extension to make it re-read. A disabled button is
+# simply not created (see readPanelConfig in pn-panel), so a reload is needed
+# for it to disappear — not instant, but no restart gdm3 needed either.
 f_buttons_cmd() {
   local key=$1 val=${2:-}
   case $key in input|tone|refresh|rotate) ;; *) die "pn buttons <input|tone|refresh|rotate> on|off" ;; esac
@@ -177,31 +183,40 @@ PY
   f_buttons_status
 }
 
-# pn reload：restart gdm3。改了任何擴充的 extension.js 之後都要這一步 ——
-# GNOME 快取模組，disable/enable 只重讀 stylesheet 和 json，不重讀 JS。
-# autologin 是開的，session 自己會回來（README「Reloading an extension」那節）。
-# 🔴 從 SSH 跑這個會把你踢掉一次，這是預期的。
+# pn reload: restart gdm3. Needed after changing any extension's extension.js —
+# GNOME caches modules, disable/enable only re-reads the stylesheet and json,
+# never the JS. autologin is on, so the session comes back by itself (see the
+# README's "Reloading an extension" section).
+# 🔴 Running this over SSH will drop your connection once. That's expected.
 #
-# 🔴 會停在 greeter，而且不是偶爾 —— 這台的 session 拆解要五秒以上，gdm 等
-#    舊 PAM worker 的 grace 剛好五秒。前十幾次贏、後兩次連輸，差別只是 SoC
-#    當下忙不忙。日誌長這樣：
+# 🔴 It stalls at the greeter, and not occasionally — this device's session
+#    teardown takes more than five seconds, and gdm's grace period for the old
+#    PAM worker is exactly five seconds. It wins a dozen times in a row, then
+#    loses two in a row — the only difference is whether the SoC happens to be
+#    busy at that moment. The log looks like this:
 #      15:49:47  Stopping gnome-terminal-server / gvfs-* / xdg-*-portal ...
 #      15:49:52  gdm-session-worker [pam/gdm-autologin] isn't dying after 5 seconds
-#      15:49:52  pam_unix(gdm-autologin:session): session opened      ← 新的
-#      15:49:53  pam_unix(gdm-autologin:session): session closed      ← 舊的才死
-#      15:49:53  GdmDisplay: Session never registered, failing        ← 新的被帶走
-#    在邊緣上賭沒有意義。所以先把 session 拆乾淨（terminate-session 然後等它
-#    真的從 loginctl 消失），gdm 起來時就沒有東西可以等 —— 不是靠第二次
-#    restart 補救，是讓第一次沒有理由失敗。
+#      15:49:52  pam_unix(gdm-autologin:session): session opened      ← the new one
+#      15:49:53  pam_unix(gdm-autologin:session): session closed      ← only now does the old one die
+#      15:49:53  GdmDisplay: Session never registered, failing        ← the new one gets swept away with it
+#    Betting on the edge is pointless. So tear the session down cleanly first
+#    (terminate-session, then wait for it to actually vanish from loginctl) —
+#    by the time gdm comes up there's nothing left to wait on. It's not a
+#    second restart papering over the failure, it's removing the first
+#    restart's reason to fail.
 #
-#    這支自己就在 session 裡（SSH 也算 user 的 session，但不是 seat0 那個），
-#    terminate 的是 seat0 那個 graphical session，SSH 這條會活著。
+#    This script itself is running inside a session (SSH counts as a user
+#    session too, just not the seat0 one) — the one being terminated is the
+#    seat0 graphical session, so this SSH connection survives.
 f_reload_cmd() {
-  # 🔴 整段丟給 systemd 跑，不在這個 shell 裡做。terminate-session 會把同一個
-  #    使用者的 SSH scope 一起收掉 —— 從 SSH 跑的話這支腳本自己就是第一個死的，
-  #    後半段（restart gdm3）沒人跑，而且正在 scp 的檔案會寫一半（2026-08-18
-  #    真的發生：extension.js 截斷在第 808 行、U+0000）。
-  #    systemd-run 的 unit 是 system 層的，不屬於任何 user session，活得過去。
+  # 🔴 Hand the whole thing off to systemd instead of doing it in this shell.
+  #    terminate-session takes down the same user's SSH scope along with it —
+  #    run over SSH, this script would be the first thing to die, so the
+  #    second half (restart gdm3) never runs, and any file mid-scp gets left
+  #    half-written (happened for real on 2026-08-18: extension.js truncated
+  #    at line 808, U+0000).
+  #    systemd-run's unit lives at the system level, outside any user session,
+  #    so it survives.
   echo "  handing off to systemd: terminate seat0 session → wait → restart gdm3"
   echo "  (this SSH connection will drop; the desktop is back in ~10s)"
   sudo systemd-run --unit=pn-reload --collect bash -c '
@@ -219,16 +234,16 @@ f_reload_cmd() {
   ' >/dev/null 2>&1
 }
 
-# ── 分派 ─────────────────────────────────────────────────────────────────
+# ── dispatch ───────────────────────────────────────────────────────────────
 ALL="typing idle osk panel wave k6 wifi ime buttons"
 
 if [ $# -eq 0 ]; then
-  echo "pn — 現況（讀的是真值，不是設定檔）"
+  echo "pn — current state (reads the source of truth, not the config file)"
   for f in $ALL; do "f_${f}_status"; done
   echo
-  echo "可開關（pn <名字> on|off）：typing idle osk panel wave k6 wifi"
-  echo "輸入法：pn ime add|rm <引擎>    頂列：pn buttons <input|tone|refresh|rotate> on|off"
-  echo "改了擴充的 JS 之後：pn reload（restart gdm3）"
+  echo "toggleable (pn <name> on|off): typing idle osk panel wave k6 wifi"
+  echo "input method: pn ime add|rm <engine>    top row: pn buttons <input|tone|refresh|rotate> on|off"
+  echo "after changing an extension's JS: pn reload (restart gdm3)"
   exit 0
 fi
 

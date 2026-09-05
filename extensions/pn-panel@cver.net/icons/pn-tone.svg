@@ -1,16 +1,20 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
-  <!-- 色調。外框逐段照抄 pn-screen-refresh：同一塊裸面板、同樣沒有底座。兩顆
-       共用外框是要說「這兩顆都是對螢幕本身做事」，差別在框裡面。
+  <!-- Tone. The frame is copied verbatim from pn-screen-refresh: same bare panel, same
+       no bezel. Sharing the frame between the two icons says "both of these act on the
+       screen itself" — the difference is inside the frame.
 
-       🔑 裡面是**真的灰**，而這一顆圖示只有一張：
-       灰階模式下它是一道平滑的斜坡；黑白模式下驅動會把灰換算成網點，於是同一
-       張圖自己變成一排由粗到細的點。所以按鈕不必畫兩個狀態 —— 狀態是硬體畫
-       的，而且畫的就是這個模式對「灰」做了什麼。這是這台唯一一個可以讓儀器自
-       己當儀表的地方。
+       🔑 What's inside is **actually gray**, and this icon is a single image: in
+       grayscale mode it's a smooth gradient ramp; in black-and-white mode the driver
+       dithers gray into a halftone, so the same image turns itself into a row of dots
+       going from coarse to fine. So the button doesn't need to draw two states — the
+       state is drawn by the hardware, and what it draws is exactly what this mode does
+       to "gray". This is the one place on this device where the instrument gets to be
+       its own gauge.
 
-       ⚠️ 檔名不能帶 -symbolic：那條路會整片重新上色，灰會被拉成全黑。
-       ⚠️ 螢幕截圖裡它永遠是平滑的 —— 抖動發生在驅動裡，框緩衝看不到。這顆圖
-       示只有玻璃驗得了。 -->
+       ⚠️ The filename must not carry -symbolic: that path recolors the whole icon, and
+       the gray gets pulled to solid black.
+       ⚠️ In a screenshot it's always smooth — the dithering happens in the driver, and
+       the framebuffer never sees it. Only glass can verify this icon. -->
   <defs>
     <linearGradient id="r" x1="0" x2="1" y1="0" y2="0">
       <stop offset="0" stop-color="#555"/>
