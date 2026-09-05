@@ -2,7 +2,7 @@
 
 Part of [pinenote](../README.md).
 
-`setup/claude-code-theme.py`, which writes a theme called **Lumalock** — six
+`setup/claude-code-theme.py`, which writes a theme called **Lumalock** — eight
 overrides on `dark-ansi`, Claude Code's own ANSI-only preset. It used to be
 sixty-six computed colours, and why it is not any more is the useful half of
 this section.
