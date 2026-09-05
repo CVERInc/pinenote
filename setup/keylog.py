@@ -8,6 +8,9 @@ D-Bus method: TapKey presses, this prints, and the pair can be driven over SSH.
 
     keylog.py                 window with an entry, logs to stdout
     keylog.py --seconds 30    quit by itself
+    keylog.py --autocap       entry starts each sentence capitalised, so GNOME's
+                              own auto-shift (_updateLevelFromHints) fires on an
+                              empty, focused entry the way it does system-wide
 
 Each line is one event, as GTK sees it:
 
@@ -61,6 +64,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--seconds", type=int, default=0,
                     help="quit after this many seconds (0 = stay)")
+    ap.add_argument("--autocap", action="store_true",
+                    help="set input-hints to UPPERCASE_SENTENCES, so an empty "
+                         "focused entry reproduces sentence-start auto-shift")
     args = ap.parse_args()
 
     app = Gtk.Application(application_id="net.cver.keylog")
@@ -70,6 +76,8 @@ def main():
         win.set_default_size(600, 200)
 
         entry = Gtk.Entry(hexpand=True, placeholder_text="type here")
+        if args.autocap:
+            entry.set_input_hints(Gtk.InputHints.UPPERCASE_SENTENCES)
         # The buffer is watched as well as the keys: a key that goes through the
         # input method commits text without ever arriving as a key event, and
         # the difference between those two routes is usually what is in doubt.

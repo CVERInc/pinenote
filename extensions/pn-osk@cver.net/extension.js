@@ -57,7 +57,7 @@ import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import * as InputSourceStatus from 'resource:///org/gnome/shell/ui/status/keyboard.js';
 import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 
-const BUILD = 31;
+const BUILD = 33;
 
 // These represent the panel's physics, as a default state rather than a toggle.
 // They were previously applied manually over D-Bus because CSS overrides were
@@ -76,10 +76,15 @@ const DEFAULTS = {
     k6Layout: true,
     trace: false,
 
-    // Latched modifiers reaching keyval keys, and the right Shift becoming a
-    // real Shift_L, are both this patch (_pnPatchModifiers / the shiftMod
-    // conversion below). Set false to measure stock GNOME on this same device
-    // for an upstream bug report, or if some input method disagrees with it.
+    // Latched modifiers reaching keyval keys is _pnPatchModifiers. Both Shifts
+    // stay stock levelSwitch keys — faces flip, long-press still caps-locks —
+    // but a tap also arms Shift_L as a one-shot modifier, so Shift+Tab and
+    // Shift+arrow work from either key: the hook is _setLatched (that call is
+    // upstream's own signal that a level-switch KEY, not an auto-capitalising
+    // hint, changed the level) and _disableAllModifiers (keeps Shift_L armed
+    // under caps lock once the one-shot clear would otherwise drop it). Set
+    // false to measure stock GNOME on this same device for an upstream bug
+    // report, or if some input method disagrees with a raw-keyval Shift.
     chords: true,
 
     // Renames that apply in both orientations. portrait.labels sits on top of
@@ -544,6 +549,8 @@ export default class PineNoteOskExtension extends Extension {
         this._origRelayout = proto._relayout;
         this._origUpdateLayout = proto._updateLayout;
         this._origAddRowKeys = proto._addRowKeys;
+        this._origSetLatched = proto._setLatched;
+        this._origDisableAllModifiers = proto._disableAllModifiers;
 
         const ext = this;
         this._config = readConfig();
@@ -633,6 +640,49 @@ export default class PineNoteOskExtension extends Extension {
             }
             return ext._origAddRowKeys.call(
                 this, composed[row + 1] ?? keys, layout, emojiVisible);
+        };
+
+        // _setLatched is upstream's signal that a level-switch KEY was tapped
+        // (both Shifts and the ?123/#+= symbol switch, plus long-press caps
+        // lock) — as opposed to _updateLevelFromHints's auto-capitalisation,
+        // which drives _setActiveLevel directly and never calls this. That is
+        // the one hook that can tell "Shift was tapped" from "the sentence
+        // just started", so it is where Shift_L gets armed. Nothing paints:
+        // the flipped faces already show the state, and both Shifts stay
+        // exactly the levelSwitch keys upstream ships.
+        proto._setLatched = function (latched) {
+            const ret = ext._origSetLatched.call(this, latched);
+            if (!ext._config.chords)
+                return ret;
+            if (this._currentPage === this._layers?.shift)
+                this._modifiers.add('0xffe1');
+            else
+                this._modifiers.delete('0xffe1');
+            return ret;
+        };
+
+        // The one-shot clear (commit()'s own .then, and our keyvalRelease
+        // wrapper below) runs through here no matter which path triggered it,
+        // which is why this is wrapped instead of teaching each call site
+        // about caps lock. Caps lock is the one case where the clear must not
+        // stick: this._latched stays true until Shift is tapped again, so put
+        // Shift_L straight back if the page it latched on is still current.
+        //
+        // The original walks every keyval in this._modifiers through
+        // _setModifierEnabled, which indexes this._modifierKeys[keyval] to
+        // paint the key that owns it -- fine for a real modifier key, but
+        // 0xffe1 no longer has one (both Shifts are stock levelSwitch keys),
+        // so that index is undefined and the loop over it throws. Pull
+        // 0xffe1 out before handing the rest to the original, and decide
+        // whether it goes back from here instead of ever handing it in.
+        proto._disableAllModifiers = function () {
+            if (!ext._config.chords)
+                return ext._origDisableAllModifiers.call(this);
+            this._modifiers.delete('0xffe1');
+            ext._origDisableAllModifiers.call(this);
+            if (this._latched && this._currentPage === this._layers?.shift)
+                this._modifiers.add('0xffe1');
+            return undefined;
         };
 
         this._exportDBus();
@@ -1612,11 +1662,17 @@ export default class PineNoteOskExtension extends Extension {
             proto._updateLayout = this._origUpdateLayout;
         if (this._origAddRowKeys)
             proto._addRowKeys = this._origAddRowKeys;
+        if (this._origSetLatched)
+            proto._setLatched = this._origSetLatched;
+        if (this._origDisableAllModifiers)
+            proto._disableAllModifiers = this._origDisableAllModifiers;
         this._pnUndockCandidatePopup();
 
         this._origRelayout = null;
         this._origUpdateLayout = null;
         this._origAddRowKeys = null;
+        this._origSetLatched = null;
+        this._origDisableAllModifiers = null;
         this._pnUnpatchModifiers();
 
 
@@ -1647,6 +1703,14 @@ export default class PineNoteOskExtension extends Extension {
     // is a closure connected inside upstream's build loop, so there is nothing
     // left to reach once a key exists — but every one of those closures ends up
     // in these two methods.
+    //
+    // Shift itself is not patched here. An earlier build turned the right
+    // Shift into a real Shift_L modifier key so it had something to latch —
+    // but then the two identical-looking Shifts behaved differently, which is
+    // its own confusion. Both stay upstream's stock levelSwitch keys now
+    // (faces flip, long-press still caps-locks) and Shift_L is armed straight
+    // off a tap instead: see the _setLatched/_disableAllModifiers wrappers in
+    // enable().
     _pnPatchModifiers(keyboard) {
         const kc = keyboard?._keyboardController;
         if (!kc || kc._pnOrigKeyvalPress)
@@ -1898,28 +1962,12 @@ export default class PineNoteOskExtension extends Extension {
         const flexBackspace = sized(backspace, w.backspace);
         const flexBackslash = extras[extras.length - 1];
         const flexEnter = sized(enter, w.enter);
-        // 🔴 Upstream's Shift is a levelSwitch: it repaints the keys with
-        //    their shifted faces and is never actually held down, so Shift+Tab
-        //    and Shift+Arrow had no way to exist — there was no moment at which
-        //    Shift was a modifier. The row carries two of them, which is a
-        //    physical-keyboard habit; nobody chords with two thumbs on a
-        //    tablet. The right one becomes a real Shift_L, latching like Ctrl
-        //    and Alt beside it.
-        //
-        //    Letters still come out capitalised through it: with the modifier
-        //    held, commit() sends raw keyvals instead of going through the
-        //    input method, and the compositor resolves the letter at the level
-        //    Shift selects. The only visible difference is that the right Shift
-        //    no longer flips the faces on screen — the latched paint says so
-        //    instead. The left Shift is untouched and still switches levels.
-        //
-        //    Guarded on what the key actually is: levels 2 and 3 put the =/<
-        //    symbol switch in this slot, and those levels ship as they are.
-        const shiftMod = cfg.chords && rightShift?.action === 'levelSwitch' && level < 2
-            ? {...rightShift, action: 'modifier',
-               keyval: hexKeyval(Clutter.KEY_Shift_L), level: undefined}
-            : rightShift;
-        const flexShift = sized(shiftMod, w.shift);
+        // Both Shifts are left exactly as upstream builds them — plain
+        // levelSwitch keys, faces flip, long-press still caps-locks. Two
+        // identical keys that behaved differently was its own confusion.
+        // Shift+Tab and Shift+Arrow come from arming Shift_L as a modifier the
+        // instant either one is tapped instead — see _setLatched in enable().
+        const flexShift = sized(rightShift, w.shift);
         const flexSpace = sized(space, w.space);
 
         const rowsOut = [
@@ -2447,34 +2495,57 @@ export default class PineNoteOskExtension extends Extension {
 
     // spec is a label ('Tab'), an icon name ('osk-shift-symbolic'), a keyval
     // ('0xff09'), or '#N' for the index Keys() printed — the two Shifts differ
-    // in nothing else.
-    TapKey(spec) {
+    // in nothing else. An optional '@<ms>' suffix ('#45@700') holds the key
+    // down that long before releasing it — past KEY_LONG_PRESS_TIME (250ms)
+    // that is a long-press, which is how caps lock gets measured rather than
+    // assumed. Async because a hold has to wait out its own GLib timeout
+    // before there is a release to report.
+    TapKeyAsync([spec], invocation) {
+        const at = spec.indexOf('@');
+        const holdMs = at < 0 ? 0 : parseInt(spec.slice(at + 1), 10);
+        const keySpec = at < 0 ? spec : spec.slice(0, at);
+
         const keys = this._pnLayerKeys();
         const list = this._pnKeyList(keys);
-        const idx = /^#\d+$/.test(spec)
-            ? parseInt(spec.slice(1), 10)
+        const idx = /^#\d+$/.test(keySpec)
+            ? parseInt(keySpec.slice(1), 10)
             : list.findIndex(k =>
-                k.label === spec || k.icon === spec || k.keyval === spec);
+                k.label === keySpec || k.icon === keySpec || k.keyval === keySpec);
 
         const key = keys[idx];
-        if (!key)
-            return JSON.stringify({error: `no key matching ${spec}`, keys: list});
+        if (!key) {
+            invocation.return_value(new GLib.Variant('(s)',
+                [JSON.stringify({error: `no key matching ${spec}`, keys: list})]));
+            return;
+        }
+
+        const finish = () => {
+            // Read the key back AFTER the release, not from the list the
+            // match came from: `latched` is the whole point of tapping a
+            // modifier, and the pre-tap snapshot reports every modifier as
+            // unlatched no matter what just happened. An instrument that
+            // quietly answers the previous question is worse than one that
+            // answers none.
+            const kb = Main.keyboard?._keyboard;
+            invocation.return_value(new GLib.Variant('(s)', [JSON.stringify({
+                tapped: {...this._pnKeyList([key])[0], i: idx},
+                modifiers: [...(kb?._modifiers ?? [])],
+            })]));
+        };
 
         // The commit string is not kept on the Key, but the button wears it as
         // its label whenever there is one; a keyval key ignores the argument.
         key._press(key.keyButton);
-        key._release(key.keyButton, key.keyButton?.label ?? null);
-
-        // Read the key back AFTER the tap, not from the list the match came
-        // from: `latched` is the whole point of tapping a modifier, and the
-        // pre-tap snapshot reports every modifier as unlatched no matter what
-        // just happened. An instrument that quietly answers the previous
-        // question is worse than one that answers none.
-        const kb = Main.keyboard?._keyboard;
-        return JSON.stringify({
-            tapped: {...this._pnKeyList([key])[0], i: idx},
-            modifiers: [...(kb?._modifiers ?? [])],
-        });
+        if (holdMs > 0) {
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, holdMs, () => {
+                key._release(key.keyButton, key.keyButton?.label ?? null);
+                finish();
+                return GLib.SOURCE_REMOVE;
+            });
+        } else {
+            key._release(key.keyButton, key.keyButton?.label ?? null);
+            finish();
+        }
     }
 
     Geometry() {

@@ -63,17 +63,26 @@ being held. `Shift+Tab` could not exist. Not "did not work": could not exist.
 Both halves are fixed here. The controller is patched rather than `_addRowKeys`,
 because that keyval handler is a closure connected inside upstream's build loop
 and there is nothing left to reach once a key exists — but every one of those
-closures ends up in `keyvalPress`. And the row's right-hand Shift becomes a real
-`Shift_L`. Two Shifts is a habit inherited from keyboards you play with ten
-fingers; nobody chords with two thumbs on a tablet. The left one still switches
-levels, the right one latches like the `ctrl` and `alt` beside it, one key at a
-time, and then lets go.
+closures ends up in `keyvalPress`. Shift itself is not patched: both keys stay
+exactly the `levelSwitch` upstream ships — faces flip, long-press still
+caps-locks, and the two are otherwise indistinguishable. A tap also latches
+`Shift_L` as a modifier, one-shot, by mirroring the level switch into the
+modifier set. The hook is `_setLatched`, which upstream calls right after
+`_setActiveLevel` whenever a level-switch KEY was tapped — as opposed to
+sentence-start auto-capitalisation, which drives `_setActiveLevel` directly and
+never calls `_setLatched`, so it never arms the modifier either. Measured with
+the entry's `input-hints` set to `UPPERCASE_SENTENCES`: the page auto-shifts on
+an empty, focused entry exactly as it does system-wide, `modifiers` stays empty,
+and the next letter still goes through the input method instead of arriving as a
+raw keyval. Caps lock (the long-press) keeps `Shift_L` held rather than one-shot:
+it is put back after every commit clears it, for as long as caps lock's own state
+says the shift page is still latched.
 
 Letters still arrive capitalised through it: with a modifier held, `commit()`
 sends raw keyvals instead of going through the input method, and the compositor
-resolves the letter at the level Shift selects. The only visible difference is
-that the right Shift no longer flips the faces on screen — the latched paint says
-so instead.
+resolves the letter at the level Shift selects. Nothing about the keys changes on
+account of this — they already showed the state, flipped by the same levelSwitch
+upstream always painted them with.
 
 Forwarding a real modifier is also why the result is right rather than merely
 close. Sending the shifted keysym directly would produce `ISO_Left_Tab` with no
@@ -97,6 +106,14 @@ flag off, latching `ctrl` and tapping `←` arrives as `Left` with `state=-`. Me
 `Shift`+`→` arrives as `Right`+SHIFT, `ctrl`+`←` as `Left`+CTRL, and
 `ctrl`+`Shift`+`c` as `C`+SHIFT+CTRL — which is the terminal's copy.
 
+The terminal's copy and paste were never broken. GNOME Terminal binds them to
+`Ctrl+Shift+C` and `Ctrl+Shift+V`, which the on-screen keyboard could not
+produce until Shift became a modifier — chording two latches is impossible when
+one of them is a page flip instead. Measured by drag-selecting text in the
+terminal, tapping `ctrl` → `⇧` → `c`, and reading the clipboard over SSH: 55
+bytes, exactly the selected text. Pasting back is the same shape, `ctrl` → `⇧`
+→ `v`.
+
 ## Pressing a key from a machine
 
 The keyboard can only be pressed by a finger, and a finger cannot report what
@@ -110,8 +127,10 @@ So the keyboard grew a way to be pressed and a way to be read:
   two calls the touch handler makes — `Key._press` and `Key._release` on the same
   actor — so the path from the button to the application is the real one. A key
   is named by its label (`tab`), its icon (`osk-shift-symbolic`), its keyval
-  (`0xff09`), or `#N` from the `Keys` inventory; the two Shifts differ in nothing
-  else.
+  (`0xff09`), or `#N` from the `Keys` inventory when nothing else tells two keys
+  apart — both Shifts share a label, an icon, and a null keyval. An optional
+  `@ms` suffix (`#45@700`) holds the key down that long before releasing it, past
+  the long-press threshold, so a long-press effect can be measured too.
 - `setup/keylog.py` is the other end: a window that prints what the application
   actually got, keyval and keycode and modifier mask, and prints separately the
   text that arrived through the input method without ever being a key event.

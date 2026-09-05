@@ -77,11 +77,10 @@ extension refuses and warns rather than shipping a key too small to hit.
 ⌃ 1.5  123 1.5  ⌥ 1.5  ——— space 6 ———  😀 ⚙ ⌨   ← ↓ 1.5 →
 ```
 
-The two `⇧` on the fourth row are not the same key. The left one switches
-levels, the way GNOME's does. The right one is a real `Shift_L` that latches
-beside `⌃` and `⌥`, so that Shift+Tab and Shift+arrow exist at all — see
-[*Chords*](../../docs/keyboard.md#chords). They are drawn identically because they do the same
-thing to a letter; they differ only on the keys that never had a shifted face.
+The two `⇧` on the fourth row are both GNOME's own level switch, unchanged. A
+tap also latches Shift as a modifier for the next key, which is what makes
+Shift+Tab and Shift+arrow exist at all — see
+[*Chords*](../../docs/keyboard.md#chords).
 
 The left edge is a staircase, not a line: 1, 1.5, 2, 2.5, and then Ctrl back
 down to 1.5. That is what a physical keyboard does, and an earlier revision of
