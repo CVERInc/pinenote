@@ -88,7 +88,12 @@ release keyval=Shift_L (0xffe1)       keycode=50   state=SHIFT
 ```
 
 Nothing sent `ISO_Left_Tab`. Tab was sent, and the compositor resolved it at the
-shifted level by itself, because Shift was genuinely down. Measured the same way:
+shifted level by itself, because Shift was genuinely down.
+
+All of it sits behind `chords` in `pn-osk.json`, default on. Set it false and the
+keyboard is GNOME's again on the next rebuild — which is how the stock behaviour
+was measured on this same device rather than inferred from the code: with the
+flag off, latching `ctrl` and tapping `←` arrives as `Left` with `state=-`. Measured the same way:
 `Shift`+`→` arrives as `Right`+SHIFT, `ctrl`+`←` as `Left`+CTRL, and
 `ctrl`+`Shift`+`c` as `C`+SHIFT+CTRL — which is the terminal's copy.
 

@@ -57,7 +57,7 @@ import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import * as InputSourceStatus from 'resource:///org/gnome/shell/ui/status/keyboard.js';
 import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 
-const BUILD = 30;
+const BUILD = 31;
 
 // These represent the panel's physics, as a default state rather than a toggle.
 // They were previously applied manually over D-Bus because CSS overrides were
@@ -75,6 +75,12 @@ const DEFAULTS = {
     fillWidth: true,
     k6Layout: true,
     trace: false,
+
+    // Latched modifiers reaching keyval keys, and the right Shift becoming a
+    // real Shift_L, are both this patch (_pnPatchModifiers / the shiftMod
+    // conversion below). Set false to measure stock GNOME on this same device
+    // for an upstream bug report, or if some input method disagrees with it.
+    chords: true,
 
     // Renames that apply in both orientations. portrait.labels sits on top of
     // this one, so a key can read one way everywhere and another way only when
@@ -565,7 +571,10 @@ export default class PineNoteOskExtension extends Extension {
         proto._updateLayout = function (groupName, purpose) {
             ext._config = readConfig();
             this._pnPurpose = purpose;
-            ext._pnPatchModifiers(this);
+            if (ext._config.chords)
+                ext._pnPatchModifiers(this);
+            else
+                ext._pnUnpatchModifiers();
             if (ext._config.trace)
                 log(`[pn-osk] _updateLayout group=${groupName} purpose=${purpose} TERMINAL=${Clutter.InputContentPurpose.TERMINAL} k6=${ext._config.k6Layout}`);
 
@@ -1906,7 +1915,7 @@ export default class PineNoteOskExtension extends Extension {
         //
         //    Guarded on what the key actually is: levels 2 and 3 put the =/<
         //    symbol switch in this slot, and those levels ship as they are.
-        const shiftMod = rightShift?.action === 'levelSwitch' && level < 2
+        const shiftMod = cfg.chords && rightShift?.action === 'levelSwitch' && level < 2
             ? {...rightShift, action: 'modifier',
                keyval: hexKeyval(Clutter.KEY_Shift_L), level: undefined}
             : rightShift;

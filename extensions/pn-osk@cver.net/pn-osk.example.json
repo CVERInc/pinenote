@@ -2,6 +2,7 @@
   "fillWidth": true,
   "k6Layout": true,
   "trace": false,
+  "chords": true,
   "topRow": {
     "default": "`1234567890-=",
     "shift": "~!@#$%^&*()_+"
