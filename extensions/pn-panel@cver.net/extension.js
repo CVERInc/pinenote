@@ -35,7 +35,7 @@ import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import IBus from 'gi://IBus';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const BUILD = 4;
+const BUILD = 8;
 
 const IFACE = `<node>
   <interface name="org.cver.PnPanel">
@@ -324,24 +324,38 @@ const PN_ORIENTATION_TRANSFORM = {
 
 // ── Touch chords: undo/redo, delivered system-wide ──────────────────────
 // `grep -A8 touch /proc/bus/input/devices` on the device names the panel
-// cyttsp5, ABS_MT_SLOT 0..31 — 32-way real multitouch, not a single point
-// pretending. On Wayland the compositor never turns a bare finger into
+// cyttsp5, ABS_MT_SLOT 0..31 — a 32-slot protocol, which is not the same
+// claim as 32-way real multitouch. Measured with evtest and libinput
+// debug-events straight off /dev/input/event5 (docs/panel.md carries the
+// lines): the panel only ever resolves **two** concurrent contacts. A third
+// finger either steals one of the two slots mid-gesture or is never
+// reported at all — every three-finger attempt topped out at peak=2 at the
+// kernel, at libinput, and in this file, in that order, so it is not
+// Mutter's or libinput's doing to fix. Hence two fingers for both undo and
+// redo, told apart by hold time instead of by count.
+//
+// On Wayland the compositor never turns a bare finger into
 // button-press-event (the same fact _pnBindTaps above works around for our
 // own buttons); pure touch only ever arrives as Clutter's TOUCH_* types, so
-// a two- or three-finger tap has to be read at that level or not at all.
+// the chord has to be read at that level or not at all.
 //
-// gestures: {undo: N, redo: N} in pn-panel.json — finger counts, 0 disables
-// one side without the other (so a household that only wants redo off can
-// have it).
-const GESTURE_DEFAULTS = {undo: 2, redo: 3};
+// gestures: {undo: "tap", redo: "hold", fingers: 2, holdMs: 500, trace}
+// in pn-panel.json. fingers is the one concurrent count both gestures
+// require (peak === fingers, nothing else); undo/redo say which duration
+// class each fires on — "tap" (under GESTURE_MAX_DURATION), "hold" (at
+// least holdMs), or false/omitted to disable that side. The gap between
+// the two (300–500ms here) fires nothing on purpose: a hold that arrived a
+// little early is closer to "still deciding" than to either gesture, and
+// guessing which one it meant is how a real tap starts a wrong redo.
+const GESTURE_DEFAULTS = {undo: 'tap', redo: 'hold', fingers: 2, holdMs: 500};
 
 // Tuned against an actual hand, not a spec. A tap lands each finger a few
 // milliseconds apart and lets none of them sit perfectly still, so the
 // thresholds are slack enough to survive that and tight enough that a
-// two-finger scroll or pinch — which moves further and holds longer — is
-// never mistaken for a tap.
+// pinch — which drifts far more and on a different axis per finger — is
+// never mistaken for either gesture.
 const GESTURE_MAX_DRIFT = 24;      // px any one contact may wander
-const GESTURE_MAX_DURATION = 300;  // ms, first finger down to last finger up
+const GESTURE_MAX_DURATION = 300;  // ms, first finger down to last finger up: below this is a tap
 const GESTURE_MAX_LEAD = 120;      // ms one finger may sit alone before the rest land
 const GESTURE_STALE_MS = 1000;     // a group that never saw every finger lift is abandoned
 
@@ -1568,14 +1582,22 @@ export default class PineNotePanelExtension extends Extension {
     }
 
     // ── Touch chords: undo/redo ───────────────────────────────────────────
-    // Reads gestures.undo / gestures.redo from pn-panel.json (finger counts,
-    // 0 disables); falls back to GESTURE_DEFAULTS. Skipped entirely, no
-    // stage handler connected, when both are 0 — a stage-wide captured-event
-    // listener is not free to leave running for nothing.
+    // Reads gestures.{undo,redo,fingers,holdMs} from pn-panel.json, falls
+    // back to GESTURE_DEFAULTS. Skipped entirely, no stage handler
+    // connected, when fingers is 0 or both undo and redo are disabled — a
+    // stage-wide captured-event listener is not free to leave running for
+    // nothing.
     _pnInstallGestures() {
-        this._pnGestureUndo = this._pnConfig?.gestures?.undo ?? GESTURE_DEFAULTS.undo;
-        this._pnGestureRedo = this._pnConfig?.gestures?.redo ?? GESTURE_DEFAULTS.redo;
-        if (!this._pnGestureUndo && !this._pnGestureRedo)
+        const cfg = this._pnConfig?.gestures ?? {};
+        this._pnGestureFingers = cfg.fingers ?? GESTURE_DEFAULTS.fingers;
+        this._pnGestureUndoKind = cfg.undo ?? GESTURE_DEFAULTS.undo; // 'tap' | 'hold' | false
+        this._pnGestureRedoKind = cfg.redo ?? GESTURE_DEFAULTS.redo;
+        this._pnGestureHoldMs = cfg.holdMs ?? GESTURE_DEFAULTS.holdMs;
+        // Diagnostic only: one line per touch group when it resolves, one
+        // line per raw TOUCH_* event. Off by default — a stage-wide capture
+        // handler is loud enough without narrating every tap forever.
+        this._pnGestureTrace = cfg.trace ?? false;
+        if (!this._pnGestureFingers || (!this._pnGestureUndoKind && !this._pnGestureRedoKind))
             return;
         // Same seat/device call keyboard.js's OSK makes to type a real key:
         // one virtual keyboard, created once, fed synthetic press/release
@@ -1590,8 +1612,9 @@ export default class PineNotePanelExtension extends Extension {
         // which actor is under the finger.
         this._pnCapturedId = global.stage.connect('captured-event',
             (actor, event) => this._pnOnCapturedEvent(event));
-        console.log(`[pn-panel] gestures: undo=${this._pnGestureUndo}-finger ` +
-            `redo=${this._pnGestureRedo}-finger`);
+        console.log(`[pn-panel] gestures: fingers=${this._pnGestureFingers} ` +
+            `undo=${this._pnGestureUndoKind} redo=${this._pnGestureRedoKind} ` +
+            `holdMs=${this._pnGestureHoldMs} trace=${this._pnGestureTrace}`);
     }
 
     _pnRemoveGestures() {
@@ -1621,9 +1644,31 @@ export default class PineNotePanelExtension extends Extension {
         return x >= kx && x < kx + kb.width && y >= ky && y < ky + kb.height;
     }
 
+    // Human-readable name for a raw trace line; anything unexpected prints
+    // its numeric type rather than being swallowed.
+    _pnEventTypeName(type) {
+        switch (type) {
+        case Clutter.EventType.TOUCH_BEGIN: return 'BEGIN';
+        case Clutter.EventType.TOUCH_UPDATE: return 'UPDATE';
+        case Clutter.EventType.TOUCH_END: return 'END';
+        case Clutter.EventType.TOUCH_CANCEL: return 'CANCEL';
+        default: return String(type);
+        }
+    }
+
     // One entry per finger currently down, kept for the group's whole life
     // (not removed on TOUCH_END) so a late-lifting finger's peak drift is
     // still there to check when the group finally empties.
+    //
+    // 🔴 Keyed by slot (ABS_MT_SLOT), not by the ClutterEventSequence object
+    //    from get_event_sequence(). A GJS boxed wrapper for the same
+    //    underlying sequence is not guaranteed to be the same JS object on
+    //    every callback, so comparing those with === (or using one as a
+    //    Map/Set key) can silently stop matching a finger's own UPDATE/END
+    //    to its BEGIN — the exact failure this was built to catch: peak one
+    //    short of the real finger count, drift and lead stuck at zero
+    //    because the "second" entry never found its "first". keyboard.js
+    //    keys touches by get_slot() for the same reason.
     _pnOnCapturedEvent(event) {
         const type = event.type();
         if (type !== Clutter.EventType.TOUCH_BEGIN &&
@@ -1632,10 +1677,14 @@ export default class PineNotePanelExtension extends Extension {
             type !== Clutter.EventType.TOUCH_CANCEL)
             return Clutter.EVENT_PROPAGATE;
 
-        const seq = event.get_event_sequence();
+        const slot = event.get_event_sequence().get_slot();
         const time = event.get_time();
         const [x, y] = event.get_coords();
         let g = this._pnTouchGroup;
+        // Only BEGIN, the first UPDATE per finger, END and CANCEL get a raw
+        // line -- a still-held finger reports UPDATE many times a second,
+        // and none of it after the first is new information for a tap.
+        let traceThis = true;
 
         if (type === Clutter.EventType.TOUCH_BEGIN) {
             // A group that never reached zero (a dropped TOUCH_END, a grab
@@ -1645,28 +1694,54 @@ export default class PineNotePanelExtension extends Extension {
             if (g && time - g.start > GESTURE_STALE_MS)
                 g = null;
             if (!g) {
-                g = {start: time, lastBegin: time, active: 0, peak: 0, entries: []};
+                g = {start: time, lastBegin: time, active: new Set(), peak: 0, entries: new Map()};
                 this._pnTouchGroup = g;
             }
             g.lastBegin = time;
-            g.active++;
-            g.peak = Math.max(g.peak, g.active);
-            g.entries.push({seq, x, y, drift: 0, overKeyboard: this._pnOverKeyboard(x, y)});
+            g.active.add(slot);
+            g.peak = Math.max(g.peak, g.active.size);
+            g.entries.set(slot, {
+                x, y, time, drift: 0,
+                overKeyboard: this._pnOverKeyboard(x, y),
+                cancelled: false,
+                traced: false,
+            });
         } else if (g) {
-            const entry = g.entries.find(e => e.seq === seq);
+            const entry = g.entries.get(slot);
             if (type === Clutter.EventType.TOUCH_UPDATE) {
+                traceThis = !!entry && !entry.traced;
                 if (entry) {
+                    entry.traced = true;
                     const d = Math.hypot(x - entry.x, y - entry.y);
                     if (d > entry.drift)
                         entry.drift = d;
                 }
             } else { // TOUCH_END or TOUCH_CANCEL
-                g.active--;
-                if (g.active <= 0) {
-                    this._pnMaybeFireGesture(g, time);
-                    this._pnTouchGroup = null; // one gesture per group; next BEGIN starts fresh
-                }
+                // Mutter cancels a client's in-flight touches the moment it
+                // decides some other actor (a workspace-switch gesture, say)
+                // owns the sequence instead. That is a real, distinct outcome
+                // from a normal lift and must show up as one in the trace,
+                // not vanish into whatever the group's other checks say.
+                if (type === Clutter.EventType.TOUCH_CANCEL && entry)
+                    entry.cancelled = true;
+                g.active.delete(slot);
             }
+        } else {
+            traceThis = false; // UPDATE/END/CANCEL with no group at all: nothing to say
+        }
+
+        if (this._pnGestureTrace && traceThis) {
+            const device = event.get_device()?.get_device_name() ?? '?';
+            const active = g ? [...g.active].sort((a, b) => a - b).join(',') : '';
+            console.log(`[pn-panel] gesture raw ${this._pnEventTypeName(type)} ` +
+                `slot=${slot} x=${Math.round(x)} y=${Math.round(y)} ` +
+                `active=[${active}] device="${device}"`);
+        }
+
+        if (g && (type === Clutter.EventType.TOUCH_END || type === Clutter.EventType.TOUCH_CANCEL) &&
+            g.active.size === 0) {
+            this._pnMaybeFireGesture(g, time);
+            this._pnTouchGroup = null; // one gesture per group; next BEGIN starts fresh
         }
 
         // Never eaten: the app under the finger (Xournal++, a text field,
@@ -1676,32 +1751,75 @@ export default class PineNotePanelExtension extends Extension {
         return Clutter.EVENT_PROPAGATE;
     }
 
+    // Computes the same verdict trace and production code share -- one
+    // group in, one reason out, whether that reason is a fire or a specific
+    // rejection. Trace logging reads this rather than duplicating the
+    // threshold order, so the two can never disagree about why.
     _pnMaybeFireGesture(g, endTime) {
-        // Overview and any modal (lock screen, a dialog with its own grab)
-        // read state at the moment the group actually completes, which is
-        // close enough to "during" for a gesture under 300ms — undo must not
-        // reach through a lock screen to the document underneath it.
-        if (Main.overview.visible || Main.modalCount > 0)
-            return;
-        if (g.entries.some(e => e.overKeyboard))
-            return;
+        const duration = endTime - g.start;
+        const lead = g.lastBegin - g.start;
+        const entries = [...g.entries.values()];
+        const maxDrift = entries.reduce((m, e) => Math.max(m, e.drift), 0);
+        const overKeyboard = entries.some(e => e.overKeyboard);
+        const overviewOrModal = Main.overview.visible || Main.modalCount > 0;
+        const cancelled = entries.some(e => e.cancelled);
+        const rightCount = g.peak === this._pnGestureFingers;
 
-        const isUndo = this._pnGestureUndo && g.peak === this._pnGestureUndo;
-        const isRedo = this._pnGestureRedo && g.peak === this._pnGestureRedo;
-        if (!isUndo && !isRedo)
-            return;
-        if (g.entries.some(e => e.drift >= GESTURE_MAX_DRIFT))
-            return;
-        if (endTime - g.start >= GESTURE_MAX_DURATION)
-            return;
+        let verdict;
+        // Overview/modal and keyboard-box read state at the moment the group
+        // completes, which is close enough to "during" for a gesture under a
+        // second -- undo/redo must not reach through a lock screen to the
+        // document underneath it, or through the keyboard's own two-finger use.
+        if (cancelled)
+            verdict = 'cancelled';
+        else if (overviewOrModal)
+            verdict = 'rejected: overview/modal';
+        else if (overKeyboard)
+            verdict = 'rejected: keyboard-box';
+        // Only two concurrent contacts are real on this panel (measured with
+        // evtest/libinput straight off the kernel — see docs/panel.md); a
+        // third finger takes over one of the two slots or never shows up at
+        // all, so peak is checked against one configured count, not two.
+        else if (!rightCount)
+            verdict = `rejected: peak=${g.peak}`;
+        else if (maxDrift >= GESTURE_MAX_DRIFT)
+            verdict = `rejected: drift=${maxDrift.toFixed(1)}px`;
         // Every finger arrived close together: rules out a single tap that a
-        // second (and maybe third) finger joined a beat later, which is a
-        // real sequence of events on a device this size and must stay two
-        // single taps, not one two-finger one.
-        if (g.lastBegin - g.start >= GESTURE_MAX_LEAD)
-            return;
+        // second finger joined a beat later, which is a real sequence of
+        // events on a device this size and must stay two single taps, not
+        // one two-finger one.
+        else if (lead >= GESTURE_MAX_LEAD)
+            verdict = `rejected: lead=${lead}ms`;
+        else if (duration < GESTURE_MAX_DURATION)
+            verdict = this._pnGestureUndoKind === 'tap' ? 'fired undo' :
+                this._pnGestureRedoKind === 'tap' ? 'fired redo' :
+                    'rejected: no action bound to tap';
+        else if (duration >= this._pnGestureHoldMs)
+            verdict = this._pnGestureUndoKind === 'hold' ? 'fired undo' :
+                this._pnGestureRedoKind === 'hold' ? 'fired redo' :
+                    'rejected: no action bound to hold';
+        // The dead band between "definitely a tap" and "definitely a hold":
+        // firing either guess here is how a slightly-late tap starts an
+        // unwanted redo, or a slightly-short hold erases a stroke instead.
+        else
+            verdict = `rejected: ambiguous duration=${duration}ms`;
 
-        this._pnSendChord(isRedo);
+        if (this._pnGestureTrace) {
+            // Where the chord is about to go, at the moment it is decided —
+            // not where the finger landed. A tap that fires but does
+            // nothing to the app is a focus question, not a gesture one,
+            // and this is the one line that can tell the two apart.
+            const focus = global.display.focus_window;
+            const focusClass = focus?.get_wm_class() ?? '(none)';
+            const focusTitle = focus?.get_title() ?? '';
+            console.log(`[pn-panel] gesture peak=${g.peak} lead=${lead}ms ` +
+                `drift=${maxDrift.toFixed(1)}px duration=${duration}ms ` +
+                `keyboard=${overKeyboard} overview/modal=${overviewOrModal} ` +
+                `verdict=${verdict} focus=${focusClass} title="${focusTitle}"`);
+        }
+
+        if (verdict === 'fired undo' || verdict === 'fired redo')
+            this._pnSendChord(verdict === 'fired redo');
     }
 
     // Ctrl+Z / Ctrl+Shift+Z rather than Ctrl+Y: Ctrl+Shift+Z is GTK's own

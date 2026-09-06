@@ -152,34 +152,55 @@ under `org.gnome.shell.extensions.pnhelper`, the waveform picker is
 `org.pinenote.usb`. Both interfaces are on the system bus. None of them is a
 daily decision.
 
-## Two fingers for undo, three for redo
+## Two fingers, tap for undo, hold for redo
 
-`cyttsp5` (`ABS_MT_SLOT` 0..31 in `/proc/bus/input/devices`) is real
-multitouch, and on Wayland a bare finger never becomes `button-press-event` —
-only Clutter's `TOUCH_*` types. So a chord is read on `global.stage`'s
-`captured-event`, capture phase, seeing every touch before the actor under it
-does; the handler always returns `Clutter.EVENT_PROPAGATE`, since the app
-under the finger — Xournal++, a text field — still needs its own copy to draw
-or scroll. This does not own touch, only watches it.
+`cyttsp5` declares `ABS_MT_SLOT` 0..31 in `/proc/bus/input/devices` — a
+32-slot protocol, not a claim about how many fingers it resolves. Measured
+with `evtest` and `libinput debug-events` straight off `/dev/input/event5`,
+below Mutter and libinput both: a real three-finger touch never shows more
+than two slots active at once. One attempt produced three distinct
+`ABS_MT_TRACKING_ID`s (622, 623, 624), but the second released the instant
+the third landed, same `SYN_REPORT` frame:
 
-A group fires once the last finger lifts, and only if: the peak simultaneous
-count was exactly `gestures.undo` (default 2) or `gestures.redo` (default 3);
-every contact drifted under 24px; the whole group finished under 300ms; and
-every finger arrived within 120ms of the first — a tap a second finger joins
-a beat later stays two taps, not one. Skipped while the overview is open,
-while any modal has a grab, or if the touch began over the on-screen
-keyboard's own box, whose own two-finger use must not undo what it is typing.
+```
+697.717717  slot0=622 slot1=623 (down together)
+697.828285  slot2=624 down, slot1=-1 up  -- same frame
+697.837536  slot0=-1 up
+```
 
-Synthesized the way `pn-osk`'s keyboard.js types a real key: one virtual
-keyboard device, created at enable, fed Ctrl+Z or Ctrl+Shift+Z. Shift, not
-`Ctrl+Y` — GTK's own redo convention rather than Word's, so every GTK app
-here gets a working redo, and Xournal++ binds both anyway.
+A second attempt, held for a second, never produced a third tracking ID at
+all. `libinput`'s `TOUCH_DOWN`/`TOUCH_UP` lines matched frame for frame. A
+third finger steals one of the two live slots or is never reported, at the
+kernel, before Mutter or this file sees anything — not fixable in software
+here, so the gesture stays two fingers throughout, told apart by hold time.
 
-Measured with a synthetic uinput touchscreen (`python3-evdev`,
-`INPUT_PROP_DIRECT`, ranges matched to `cyttsp5`'s own evdev capabilities)
-rather than a hand, against a GTK4 window logging every key it received: 1
-finger produced nothing; 2 produced `Control_L` down, `z` at `state=CTRL`,
-both released; 3 added `Shift_L`, `state=SHIFT+CTRL` throughout. Whether a
-real tap on Xournal++ removes and restores the last stroke, and whether
-pinch-zoom still works beside it, is for the owner to try — a uinput tap
-drives the compositor, not that.
+A chord is read on `global.stage`'s `captured-event`, capture phase, always
+returning `Clutter.EVENT_PROPAGATE` since the app under the finger —
+Xournal++, a text field — still needs its own copy to draw or scroll. A
+group resolves when the last finger lifts, and only if: peak concurrent
+contacts was exactly `gestures.fingers` (default 2); every contact drifted
+under 24px (a pinch drifts far more, differently per finger); and every
+finger arrived within 120ms of the first. Duration then picks the chord:
+under 300ms fires `gestures.undo` (`"tap"`, Ctrl+Z), 500ms or more fires
+`gestures.redo` (`"hold"`, Ctrl+Shift+Z — GTK's convention, not Word's
+`Ctrl+Y`). 300–500ms fires nothing, on purpose: guessing a borderline hold
+is how a slightly-late tap starts an unwanted redo. Skipped while the
+overview is open, any modal has a grab, or the touch began over the
+on-screen keyboard's own box, whose two-finger use must not undo its typing.
+
+Two traps met building this. Sequences must be keyed by
+`event.get_event_sequence().get_slot()`, not the sequence object itself — a
+GJS boxed wrapper for the same touch need not be the same JS object next
+callback, so a Map keyed by `===` silently stopped matching a finger's
+UPDATE/END to its own BEGIN, and peak came out one finger short on every
+real hand while a synthetic tap (no UPDATE to lose) still passed;
+`pn-osk`'s keyboard.js keys the same way for the same reason. Second, the
+chord goes to `global.display.focus_window`, not necessarily the window a
+person is looking at — a tap that fires and changes nothing is a focus
+question, not a gesture one, and the trace line now names that window.
+
+Measured in three layers: a synthetic uinput touchscreen (`python3-evdev`,
+`INPUT_PROP_DIRECT`) to drive taps without a hand, a GTK4 window logging
+every key it received to confirm the chord's shape, and
+`evtest`/`libinput debug-events` to read the finger count below the
+compositor once the shell's own count looked wrong.
