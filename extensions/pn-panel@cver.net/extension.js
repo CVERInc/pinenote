@@ -35,7 +35,7 @@ import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import IBus from 'gi://IBus';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const BUILD = 3;
+const BUILD = 4;
 
 const IFACE = `<node>
   <interface name="org.cver.PnPanel">
@@ -322,6 +322,29 @@ const PN_ORIENTATION_TRANSFORM = {
     "right-up": 3,
 };
 
+// ── Touch chords: undo/redo, delivered system-wide ──────────────────────
+// `grep -A8 touch /proc/bus/input/devices` on the device names the panel
+// cyttsp5, ABS_MT_SLOT 0..31 — 32-way real multitouch, not a single point
+// pretending. On Wayland the compositor never turns a bare finger into
+// button-press-event (the same fact _pnBindTaps above works around for our
+// own buttons); pure touch only ever arrives as Clutter's TOUCH_* types, so
+// a two- or three-finger tap has to be read at that level or not at all.
+//
+// gestures: {undo: N, redo: N} in pn-panel.json — finger counts, 0 disables
+// one side without the other (so a household that only wants redo off can
+// have it).
+const GESTURE_DEFAULTS = {undo: 2, redo: 3};
+
+// Tuned against an actual hand, not a spec. A tap lands each finger a few
+// milliseconds apart and lets none of them sit perfectly still, so the
+// thresholds are slack enough to survive that and tight enough that a
+// two-finger scroll or pinch — which moves further and holds longer — is
+// never mistaken for a tap.
+const GESTURE_MAX_DRIFT = 24;      // px any one contact may wander
+const GESTURE_MAX_DURATION = 300;  // ms, first finger down to last finger up
+const GESTURE_MAX_LEAD = 120;      // ms one finger may sit alone before the rest land
+const GESTURE_STALE_MS = 1000;     // a group that never saw every finger lift is abandoned
+
 function box(actor) {
     if (!actor)
         return null;
@@ -348,6 +371,7 @@ function box(actor) {
 export default class PineNotePanelExtension extends Extension {
     enable() {
         this._pnInstallPanel();
+        this._pnInstallGestures();
         this._dbus = Gio.DBusExportedObject.wrapJSObject(IFACE, this);
         this._dbus.export(Gio.DBus.session, '/org/cver/PnPanel');
         this._nameId = Gio.bus_own_name(
@@ -357,6 +381,7 @@ export default class PineNotePanelExtension extends Extension {
     }
 
     disable() {
+        this._pnRemoveGestures();
         this._pnRemovePanel();
         this._dbus?.unexport();
         this._dbus = null;
@@ -1540,6 +1565,164 @@ export default class PineNotePanelExtension extends Extension {
                     shortName: s.shortName,
                 })),
         }, null, 2);
+    }
+
+    // ── Touch chords: undo/redo ───────────────────────────────────────────
+    // Reads gestures.undo / gestures.redo from pn-panel.json (finger counts,
+    // 0 disables); falls back to GESTURE_DEFAULTS. Skipped entirely, no
+    // stage handler connected, when both are 0 — a stage-wide captured-event
+    // listener is not free to leave running for nothing.
+    _pnInstallGestures() {
+        this._pnGestureUndo = this._pnConfig?.gestures?.undo ?? GESTURE_DEFAULTS.undo;
+        this._pnGestureRedo = this._pnConfig?.gestures?.redo ?? GESTURE_DEFAULTS.redo;
+        if (!this._pnGestureUndo && !this._pnGestureRedo)
+            return;
+        // Same seat/device call keyboard.js's OSK makes to type a real key:
+        // one virtual keyboard, created once, fed synthetic press/release
+        // pairs for the life of the extension.
+        this._pnVirtualKeyboard = Clutter.get_default_backend()
+            .get_default_seat()
+            .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        this._pnTouchGroup = null;
+        // Capture phase, not bubble: we want to see every touch before any
+        // actor (a button, Xournal++'s own surface, whatever) gets a chance
+        // to consume or reinterpret it, and captured-event runs regardless of
+        // which actor is under the finger.
+        this._pnCapturedId = global.stage.connect('captured-event',
+            (actor, event) => this._pnOnCapturedEvent(event));
+        console.log(`[pn-panel] gestures: undo=${this._pnGestureUndo}-finger ` +
+            `redo=${this._pnGestureRedo}-finger`);
+    }
+
+    _pnRemoveGestures() {
+        if (this._pnCapturedId) {
+            global.stage.disconnect(this._pnCapturedId);
+            this._pnCapturedId = 0;
+        }
+        // No destroy() on a Clutter virtual device; dropping the last
+        // reference is what keyboard.js relies on too, and GJS's refcounting
+        // frees the underlying device once it does.
+        this._pnVirtualKeyboard = null;
+        this._pnTouchGroup = null;
+    }
+
+    // True when (x, y) — stage coordinates, same space TOUCH_* events report
+    // — falls inside the on-screen keyboard's own box. A bounding-box test
+    // rather than keyboardBox.contains(actor): the actor under a captured
+    // touch is whatever St picked at that point, and asking "is this point
+    // inside that box" is one fact instead of two. The keyboard's own
+    // two-finger use (dragging its arrow pad, say) must not undo the
+    // document it is typing into.
+    _pnOverKeyboard(x, y) {
+        const kb = Main.layoutManager.keyboardBox;
+        if (!kb || !kb.visible)
+            return false;
+        const [kx, ky] = kb.get_transformed_position();
+        return x >= kx && x < kx + kb.width && y >= ky && y < ky + kb.height;
+    }
+
+    // One entry per finger currently down, kept for the group's whole life
+    // (not removed on TOUCH_END) so a late-lifting finger's peak drift is
+    // still there to check when the group finally empties.
+    _pnOnCapturedEvent(event) {
+        const type = event.type();
+        if (type !== Clutter.EventType.TOUCH_BEGIN &&
+            type !== Clutter.EventType.TOUCH_UPDATE &&
+            type !== Clutter.EventType.TOUCH_END &&
+            type !== Clutter.EventType.TOUCH_CANCEL)
+            return Clutter.EVENT_PROPAGATE;
+
+        const seq = event.get_event_sequence();
+        const time = event.get_time();
+        const [x, y] = event.get_coords();
+        let g = this._pnTouchGroup;
+
+        if (type === Clutter.EventType.TOUCH_BEGIN) {
+            // A group that never reached zero (a dropped TOUCH_END, a grab
+            // stealing the rest of the sequence) is forgotten here rather
+            // than kept alive by a live timer — it only matters again once
+            // something new touches down, and that is exactly this branch.
+            if (g && time - g.start > GESTURE_STALE_MS)
+                g = null;
+            if (!g) {
+                g = {start: time, lastBegin: time, active: 0, peak: 0, entries: []};
+                this._pnTouchGroup = g;
+            }
+            g.lastBegin = time;
+            g.active++;
+            g.peak = Math.max(g.peak, g.active);
+            g.entries.push({seq, x, y, drift: 0, overKeyboard: this._pnOverKeyboard(x, y)});
+        } else if (g) {
+            const entry = g.entries.find(e => e.seq === seq);
+            if (type === Clutter.EventType.TOUCH_UPDATE) {
+                if (entry) {
+                    const d = Math.hypot(x - entry.x, y - entry.y);
+                    if (d > entry.drift)
+                        entry.drift = d;
+                }
+            } else { // TOUCH_END or TOUCH_CANCEL
+                g.active--;
+                if (g.active <= 0) {
+                    this._pnMaybeFireGesture(g, time);
+                    this._pnTouchGroup = null; // one gesture per group; next BEGIN starts fresh
+                }
+            }
+        }
+
+        // Never eaten: the app under the finger (Xournal++, a text field,
+        // whatever) still needs its own copy of every one of these to draw
+        // or scroll. This is the one place in the file that watches touch
+        // without owning it.
+        return Clutter.EVENT_PROPAGATE;
+    }
+
+    _pnMaybeFireGesture(g, endTime) {
+        // Overview and any modal (lock screen, a dialog with its own grab)
+        // read state at the moment the group actually completes, which is
+        // close enough to "during" for a gesture under 300ms — undo must not
+        // reach through a lock screen to the document underneath it.
+        if (Main.overview.visible || Main.modalCount > 0)
+            return;
+        if (g.entries.some(e => e.overKeyboard))
+            return;
+
+        const isUndo = this._pnGestureUndo && g.peak === this._pnGestureUndo;
+        const isRedo = this._pnGestureRedo && g.peak === this._pnGestureRedo;
+        if (!isUndo && !isRedo)
+            return;
+        if (g.entries.some(e => e.drift >= GESTURE_MAX_DRIFT))
+            return;
+        if (endTime - g.start >= GESTURE_MAX_DURATION)
+            return;
+        // Every finger arrived close together: rules out a single tap that a
+        // second (and maybe third) finger joined a beat later, which is a
+        // real sequence of events on a device this size and must stay two
+        // single taps, not one two-finger one.
+        if (g.lastBegin - g.start >= GESTURE_MAX_LEAD)
+            return;
+
+        this._pnSendChord(isRedo);
+    }
+
+    // Ctrl+Z / Ctrl+Shift+Z rather than Ctrl+Y: Ctrl+Shift+Z is GTK's own
+    // redo convention (Ctrl+Y is Word's), so this reaches every GTK app the
+    // owner runs, not only the one it was built for. Xournal++ itself binds
+    // both, which is how this was checked without a second chord to build.
+    _pnSendChord(withShift) {
+        const kb = this._pnVirtualKeyboard;
+        if (!kb)
+            return;
+        // Matches keyboard.js: the event time a synthetic key event should
+        // carry is the current one, in microseconds.
+        const now = () => Clutter.get_current_event_time() * 1000;
+        if (withShift)
+            kb.notify_keyval(now(), Clutter.KEY_Shift_L, Clutter.KeyState.PRESSED);
+        kb.notify_keyval(now(), Clutter.KEY_Control_L, Clutter.KeyState.PRESSED);
+        kb.notify_keyval(now(), Clutter.KEY_z, Clutter.KeyState.PRESSED);
+        kb.notify_keyval(now(), Clutter.KEY_z, Clutter.KeyState.RELEASED);
+        kb.notify_keyval(now(), Clutter.KEY_Control_L, Clutter.KeyState.RELEASED);
+        if (withShift)
+            kb.notify_keyval(now(), Clutter.KEY_Shift_L, Clutter.KeyState.RELEASED);
     }
 
     Rotate() {

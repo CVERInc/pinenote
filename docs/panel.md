@@ -151,3 +151,35 @@ under `org.gnome.shell.extensions.pnhelper`, the waveform picker is
 `SetDefaultWaveform` on `org.pinenote.ebc`, and the USB MTP gadget is
 `org.pinenote.usb`. Both interfaces are on the system bus. None of them is a
 daily decision.
+
+## Two fingers for undo, three for redo
+
+`cyttsp5` (`ABS_MT_SLOT` 0..31 in `/proc/bus/input/devices`) is real
+multitouch, and on Wayland a bare finger never becomes `button-press-event` —
+only Clutter's `TOUCH_*` types. So a chord is read on `global.stage`'s
+`captured-event`, capture phase, seeing every touch before the actor under it
+does; the handler always returns `Clutter.EVENT_PROPAGATE`, since the app
+under the finger — Xournal++, a text field — still needs its own copy to draw
+or scroll. This does not own touch, only watches it.
+
+A group fires once the last finger lifts, and only if: the peak simultaneous
+count was exactly `gestures.undo` (default 2) or `gestures.redo` (default 3);
+every contact drifted under 24px; the whole group finished under 300ms; and
+every finger arrived within 120ms of the first — a tap a second finger joins
+a beat later stays two taps, not one. Skipped while the overview is open,
+while any modal has a grab, or if the touch began over the on-screen
+keyboard's own box, whose own two-finger use must not undo what it is typing.
+
+Synthesized the way `pn-osk`'s keyboard.js types a real key: one virtual
+keyboard device, created at enable, fed Ctrl+Z or Ctrl+Shift+Z. Shift, not
+`Ctrl+Y` — GTK's own redo convention rather than Word's, so every GTK app
+here gets a working redo, and Xournal++ binds both anyway.
+
+Measured with a synthetic uinput touchscreen (`python3-evdev`,
+`INPUT_PROP_DIRECT`, ranges matched to `cyttsp5`'s own evdev capabilities)
+rather than a hand, against a GTK4 window logging every key it received: 1
+finger produced nothing; 2 produced `Control_L` down, `z` at `state=CTRL`,
+both released; 3 added `Shift_L`, `state=SHIFT+CTRL` throughout. Whether a
+real tap on Xournal++ removes and restores the last stroke, and whether
+pinch-zoom still works beside it, is for the owner to try — a uinput tap
+drives the compositor, not that.

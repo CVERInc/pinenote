@@ -1,0 +1,12 @@
+{
+  "buttons": {
+    "input": true,
+    "tone": true,
+    "refresh": true,
+    "rotate": true
+  },
+  "gestures": {
+    "undo": 2,
+    "redo": 3
+  }
+}
