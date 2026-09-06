@@ -35,7 +35,7 @@ import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import IBus from 'gi://IBus';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const BUILD = 2;
+const BUILD = 3;
 
 const IFACE = `<node>
   <interface name="org.cver.PnPanel">
@@ -76,6 +76,27 @@ const PN_TONE_SCHEMA_DIR =
 const PN_TONE_GRAY = 0;
 const PN_TONE_MONO = 1;
 const PN_TONE_WAVEFORM = {[PN_TONE_GRAY]: 4 /* GC16 */, [PN_TONE_MONO]: 1 /* A2 */};
+
+// 🔴 2026-09-06: the panel had been sitting in 5 Hz "quality" mode
+// (dclk_select 0) the whole time, live and unremarked. Measured with the
+// owner's pen: 80 Hz + GC16 draws fast but the strokes come out broken —
+// GC16 is a 450 ms pulse train, damage rects during writing arrive every
+// 12 ms, it cannot keep up. 80 Hz + mono (bw_mode 1, waveform 1/A2) draws
+// fast *and* solid. 5 Hz + GC16 is right for reading. So the tone this
+// button already picks is also the thing that decides whether 80 Hz is
+// usable — mono implies performance, grey implies quality, no third
+// combination is offered.
+//
+// This does NOT call SetDclkSelect or spawn mode_switcher.js. pnhelper's
+// PerformanceModeButton owns dclk_select and the Mutter mode change
+// (extension.js ~207-300 in pnhelper@m-weigand.github.com): it watches its
+// own gsetting `quality-mode` (false = performance) and does the D-Bus call
+// and the mode switch itself, one owner, one code path, same reason bw-mode
+// above is written through pnhelper's gsetting rather than the driver
+// directly. We only flip the switch it is already watching. Set this to
+// false to decouple tone from mode again.
+const PN_TONE_SETS_MODE = true;
+const PN_TONE_MODE_KEY = "quality-mode";
 
 // Measured order: SetBwMode → BwModeChanged → SetDefaultWaveform →
 // WaveformChanged. All complete within the same main loop turn, only the
@@ -1086,11 +1107,22 @@ export default class PineNotePanelExtension extends Extension {
     // ── Tone: two modes, one button ─────────────────────────────────────────
     _pnToneOpenSettings() {
         // pnhelper's schema is not registered to the system path, its own
-        // schemas directory must be specified. Missing is not an error, it
-        // means 'pnhelper is absent', the guard below takes over.
+        // schemas directory must be specified. Resolved from the running
+        // extension itself (Main.extensionManager knows where it is
+        // actually installed) rather than trusting the hardcoded path to
+        // still be right; that path is kept only as a fallback for the
+        // unlikely case pnhelper is on disk but not (yet) known to the
+        // extension manager. Same schema also holds `quality-mode` (see
+        // PN_TONE_SETS_MODE), so this one Settings object serves both bw-mode
+        // and the mode flip. Missing is not an error, it means 'pnhelper is
+        // absent', the guard below takes over — logged once, here, not on
+        // every tap.
+        const dir = Main.extensionManager.lookup(
+            'pnhelper@m-weigand.github.com')?.path;
+        const schemaDir = dir ? `${dir}/schemas` : PN_TONE_SCHEMA_DIR;
         try {
             const src = Gio.SettingsSchemaSource.new_from_directory(
-                PN_TONE_SCHEMA_DIR, Gio.SettingsSchemaSource.get_default(), true);
+                schemaDir, Gio.SettingsSchemaSource.get_default(), true);
             const schema = src.lookup(PN_TONE_SCHEMA, false);
             if (schema)
                 return new Gio.Settings({settings_schema: schema});
@@ -1098,6 +1130,19 @@ export default class PineNotePanelExtension extends Extension {
             console.log(`[pn-osk] tone: no pnhelper schema: ${e.message}`);
         }
         return null;
+    }
+
+    // Flip pnhelper's own performance-mode switch to match the tone just
+    // set. See the note above PN_TONE_SETS_MODE for why: this writes the
+    // gsetting PerformanceModeButton already watches (changed::quality-mode
+    // → its _apply_quality_mode → SetDclkSelect + mode_switcher.js + a
+    // refresh of its own, none of which we touch). No settings object means
+    // no pnhelper — skip, already logged once in _pnToneOpenSettings.
+    _pnToneSyncMode(mode) {
+        if (!PN_TONE_SETS_MODE || !this._pnToneSettings)
+            return;
+        // quality-mode true = 5 Hz/GC16 (grey), false = 80 Hz (mono).
+        this._pnToneSettings.set_boolean(PN_TONE_MODE_KEY, mode === PN_TONE_GRAY);
     }
 
     _pnToneRead(then) {
@@ -1150,6 +1195,12 @@ export default class PineNotePanelExtension extends Extension {
 
     _pnToneSet(mode) {
         this._pnToneSettings?.set_uint("bw-mode", mode);
+        // Mode follows tone, not the reverse, and it is written second: the
+        // waveform/bw_mode write above must already be committed before
+        // pnhelper's quality-mode refresh (its own timeout_add_seconds(1))
+        // fires, or that refresh paints the display in the mode being left
+        // rather than the one being entered. See PN_TONE_SETS_MODE.
+        this._pnToneSyncMode(mode);
         // Guard: pnhelper might be missing, disabled, or eventually stop
         // listening to this key. If the deadline passes without movement, do
         // it ourselves and log it — a tap doing nothing is the worst failure

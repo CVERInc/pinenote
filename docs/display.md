@@ -181,3 +181,37 @@ they separate the client from the compositor:
 - `about:support` -> Window Protocol, for a browser window
 - `gdbus call --session --dest org.gnome.Mutter.DisplayConfig --object-path /org/gnome/Mutter/DisplayConfig --method org.gnome.Mutter.DisplayConfig.GetCurrentState` -> the transform
 - `pgrep Xwayland` -> whether an X11 path is involved at all
+
+# The five frames a second nobody mentioned
+
+`rockchip_ebc`'s `dclk_select` module parameter picks between the two DRM modes this panel
+actually offers: `1872x1404@5.000` (0, "quality") and `1872x1404@80.000` (1, "performance").
+pnhelper's `PerformanceModeButton` owns it — the D-Bus call, the Mutter mode change, all of it —
+and its own source says of quality mode: it "is not intended for writing."
+
+Measured 2026-09-06: quality mode was the live default, unremarked, the whole time — nobody had
+pressed pnhelper's `Q`/`N` button (hidden on this panel, see `PN_HIDDEN_PANEL_ROLES`) and
+`dclk_select` had simply never moved. With the owner's pen: 5 Hz + GC16 (the tone button's grey)
+drew broken strokes. GC16 is a ~450 ms DC-balanced pulse train; a stroke's damage rects arrive
+every ~12 ms while writing, so each new rect interrupts the last pulse before it settles. 80 Hz +
+mono (bw_mode 1, waveform 1/A2 — the tone button's mono) drew the same pen fast *and* solid; A2
+carries no such pulse-train constraint.
+
+So the tone button now carries the mode: mono asks pnhelper for performance, grey asks it back to
+quality — done by flipping pnhelper's own `quality-mode` gsetting (see `PN_TONE_SETS_MODE` in
+`extensions/pn-panel@cver.net/extension.js`), never `SetDclkSelect` or Mutter directly, so
+pnhelper stays the one owner of both. Order matters and is enforced there: tone first, mode
+second, so pnhelper's own refresh (about a second later) lands on the tone already in place.
+
+⚠️ Measured, not designed: pnhelper's `changed::quality-mode` handler does not read the boolean
+it is handed — it reads `dclk_select` back off the driver and flips whatever that says,
+unconditionally. Two clean toggles in a row landed correctly here because each started from the
+state the last one actually left; a write that does not change the gsetting's stored value fires
+no `changed` signal at all (GSettings drops no-op writes), silently skipping the mode switch that
+tap was supposed to cause. Not our code to fix — pnhelper stays the owner — but worth knowing
+before trusting a single toggle's result on faith.
+
+`EnterWritingMode()` changes `default_waveform` 4→1 and `split_area_limit` 12→8. `dclk_select` is
+untouched by it — measured across the transition, all three parameters read before and after.
+Writing mode and the 5/80 Hz mode are two independent switches on this device; nothing upstream
+ties them together, which is the whole reason the tone button had to do it instead.
