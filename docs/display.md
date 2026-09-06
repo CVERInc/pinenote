@@ -215,3 +215,38 @@ before trusting a single toggle's result on faith.
 untouched by it — measured across the transition, all three parameters read before and after.
 Writing mode and the 5/80 Hz mode are two independent switches on this device; nothing upstream
 ties them together, which is the whole reason the tone button had to do it instead.
+
+### What the pen actually waits for
+
+Measured with an iPhone at 240 fps from a low side angle, so the tip and the
+leading end of the ink are both in frame, drawing fast vertical lines in the mono
+tone at 80 Hz. The number is the distance from the tip to the end of the ink,
+divided by the tip's speed, read off consecutive frames — three strokes each
+time. The 8× slow-motion factor is Apple's standard and is assumed; neither clip
+showed a normal-speed segment to calibrate against.
+
+| | frames | latency |
+|---|---|---|
+| Xournal++ as installed (stabilizer: averaging, 20-point buffer) | 16–26 | **68–108 ms**, mean ≈ 89 |
+| stabilizer off (`stabilizerAveragingMethod` 0, `stabilizerPreprocessor` 0) | 5–6 | **20–24 ms**, mean ≈ 22 |
+
+The second row is a different quantity, and honestly so: with the stabilizer off
+the tip had finished and lifted before any ink showed, so what remains is the
+panel's own reveal time after the input pipeline is done. That is the point.
+Two-thirds of the delay was Xournal++ waiting to have twenty points before it
+drew the first; the compositor, the driver and the waveform together are a
+fifth of it. reMarkable quotes 21 ms for its purpose-built pen path, so on this
+device the stock desktop stack, with one preference changed, lands in the same
+neighbourhood — the mode switch and the tone carry the rest.
+
+In every clip the ink arrives as a dot, then a string of dashes, then a line:
+each 12.5 ms damage rectangle is refreshed on its own and the gaps fill in
+afterwards. That is what an 80 Hz compositor looks like on a panel that
+answers one rectangle at a time.
+
+The stabilizer is not a setting this repo changes for you — it is a drawing
+preference, and lines drawn without it are as steady as the hand. Clip Studio
+puts the strength under the artist's thumb; Procreate smooths only while the
+pen is held down and let go quickly, so a fast stroke costs nothing. Xournal++
+offers the first shape without a scale. If the trade is ever worth taking here,
+it is the second shape that should be built.
