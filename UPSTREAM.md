@@ -106,3 +106,20 @@ Filing this needed a gitlab.gnome.org account. New accounts there cannot create
 projects — and so cannot fork — until an SSH key is on the account, after which
 automation lifts the limit within about half an hour. That is documented in the
 GNOME handbook; the error message does not say so.
+
+## pinenote-gnome-extension — quality-mode honours its value
+
+- **PR:** [PNDeb/pinenote-gnome-extension#26](https://github.com/PNDeb/pinenote-gnome-extension/pull/26)
+  — `_apply_quality_mode()` derives the direction from the setting's value
+  instead of toggling off the driver's state.
+
+The handler for `changed::quality-mode` was handed the new value and ignored
+it: it read `dclk_select` back from the driver and flipped whatever it found, so
+every change toggled. Correct as long as the setting and the driver agree, and
+they do agree until a driver reset at boot or another client writing the
+setting — at which point `quality-mode=true` can switch the panel to 80 Hz.
+Found while wiring our tone button to that setting (`docs/display.md`, *The
+five frames a second nobody mentioned*).
+
+Our side does not work around it: pn-panel writes the setting and relies on
+pnhelper keeping the two in step, which pnhelper's own toggle already repairs.
