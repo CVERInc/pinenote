@@ -5,11 +5,19 @@
     "refresh": true,
     "rotate": true
   },
+  "hide": {
+    "battery": false
+  },
   "gestures": {
     "fingers": 2,
     "undo": "tap",
     "redo": "hold",
     "holdMs": 500,
+    "longPress": {
+      "enabled": true,
+      "ms": 600,
+      "drift": 24
+    },
     "trace": false
   }
 }

@@ -29,6 +29,16 @@
     margin: 0;
 }
 
+/* Pinned. Same rule pn-osk's stylesheet gives a latched modifier key —
+   inverted rather than tinted, because any grey between #333 and #fff
+   quantises to noise in the two-colour mode this device spends its life in,
+   and this panel has no other way to say "held" than a real keyboard does. */
+#panel .pn-panel-button .pn-panel-pinned {
+    background-color: #fff;
+    color: #000;
+    border: 2px solid #000;
+}
+
 /* pn-input. All four need to look like one group, so this button's target
    width is the same 26 measured for the other three: content 20 + 3 on each
    side. The icon-based three are content 16 + 5 on each side, also 26 — two

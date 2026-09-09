@@ -35,7 +35,7 @@ import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import IBus from 'gi://IBus';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const BUILD = 8;
+const BUILD = 13;
 
 const IFACE = `<node>
   <interface name="org.cver.PnPanel">
@@ -288,6 +288,12 @@ const PN_VOICE_LANGS = {
 // still occupy names in statusArea, and the _pnHidePanelItems guard would
 // run an extra loop for them. Unwanted things should simply not be born.
 // Read/written by setup/pn; requires extension disable/enable (or restart gdm3) to apply.
+//
+// pn-pin is the one button not gated from here: pinning is pn-osk's feature
+// (state, D-Bus, the keyboard patch that makes it stick), this extension only
+// draws the button and calls Pin() over the bus, so whether it exists at all
+// is pn-osk.json's `pin.button`, read by _pnOskWantsPinButton() below —
+// a second `buttons.pin` key here would be two knobs for one door.
 function readPanelConfig() {
     try {
         const path = GLib.build_filenamev([GLib.get_user_config_dir(), "pn-panel.json"]);
@@ -297,6 +303,26 @@ function readPanelConfig() {
         return JSON.parse(new TextDecoder().decode(bytes));
     } catch (e) {
         return {};
+    }
+}
+
+// Read the same file pn-osk.json's own readConfig() does, synchronously, at
+// install time — not a D-Bus round trip, and not a copy of pn-osk's default:
+// a missing file or a missing key both mean pn-osk's own default, which is
+// now false — the bottom-edge swipe reaches Pin(true) on its own (pn-osk's
+// pin.gesture), so the button is opt-in — and a fresh install racing
+// pn-osk's D-Bus name is not a failure mode this needs to survive if it
+// never has to.
+function _pnOskWantsPinButton() {
+    try {
+        const path = GLib.build_filenamev([GLib.get_user_config_dir(), "pn-osk.json"]);
+        const [ok, bytes] = GLib.file_get_contents(path);
+        if (!ok)
+            return false;
+        const cfg = JSON.parse(new TextDecoder().decode(bytes));
+        return cfg?.pin?.button === true;
+    } catch (e) {
+        return false;
     }
 }
 
@@ -358,6 +384,33 @@ const GESTURE_MAX_DRIFT = 24;      // px any one contact may wander
 const GESTURE_MAX_DURATION = 300;  // ms, first finger down to last finger up: below this is a tap
 const GESTURE_MAX_LEAD = 120;      // ms one finger may sit alone before the rest land
 const GESTURE_STALE_MS = 1000;     // a group that never saw every finger lift is abandoned
+
+// ── One-finger long-press: a right-click, everywhere ─────────────────────
+// Every app on this device already draws its own right-click context menu
+// with Copy/Paste in it (GTK, VTE, Firefox, Chromium, Xournal++), so a
+// long-press that becomes a right-click reaches all of them without one
+// line of per-app code — the iOS "hold for a menu" gesture, aimed at a
+// button GTK already built.
+//
+// gestures.longPress: {enabled, ms, drift} in pn-panel.json. One finger
+// only, on purpose: the two-finger tap/hold above already owns undo/redo,
+// and a hold is exactly how a two-finger gesture starts, so the two must
+// never fire off the same contact. They do not compete on this file's own
+// terms either — this only arms on a *fresh* group's first finger, and a
+// second finger joining before `ms` disarms it immediately (see the
+// TOUCH_BEGIN branch below), which is also well before GESTURE_MAX_LEAD
+// would accept that second finger into a chord.
+//
+// Unlike the chord above, which waits for every finger to lift and then
+// classifies the whole group, this must fire *while the finger is still
+// down* — that is the one thing that makes it read as "hold for a menu"
+// instead of "let go for a menu". So it is a timer armed on TOUCH_BEGIN,
+// not a verdict computed on TOUCH_END: GLib.timeout_add for `ms`, disarmed
+// by a second finger, by drift past `drift` px, or by the finger lifting
+// first; if none of those happen, it fires at the position the finger was
+// last seen at and marks the group so its own eventual TOUCH_END does not
+// also feed the chord evaluator a redundant "cancel".
+const LONGPRESS_DEFAULTS = {enabled: true, ms: 600, drift: 24};
 
 function box(actor) {
     if (!actor)
@@ -685,6 +738,56 @@ export default class PineNotePanelExtension extends Extension {
                     // pn-osk missing or down, caps remain latin, not an error
                 }
             });
+    }
+
+    // ── Pin: keeps pn-osk's keyboard up with nothing focused ────────────────
+    // State lives entirely in pn-osk, same as the tone button's mode lives in
+    // pnhelper's gsetting — this button reads before it writes rather than
+    // trusting its own last-known state, same reason _pnToneToggle does: two
+    // sessions of this extension (a reload of just pn-panel, or a second
+    // client on the bus) must not fight over which one remembers correctly.
+    _pnPinGetState(then) {
+        Gio.DBus.session.call(
+            "org.cver.PnOsk", "/org/cver/PnOsk", "org.freedesktop.DBus.Properties",
+            "Get", new GLib.Variant("(ss)", ["org.cver.PnOsk", "Pinned"]),
+            new GLib.VariantType("(v)"), Gio.DBusCallFlags.NONE, -1, null,
+            (bus, res) => {
+                try {
+                    const [variant] = bus.call_finish(res).deepUnpack();
+                    then(variant.deepUnpack());
+                } catch (e) {
+                    console.log(`[pn-panel] pin: Properties.Get failed: ${e.message}`);
+                    then(false);
+                }
+            });
+    }
+
+    _pnPinSet(pinned) {
+        Gio.DBus.session.call(
+            "org.cver.PnOsk", "/org/cver/PnOsk", "org.cver.PnOsk",
+            "Pin", new GLib.Variant("(b)", [pinned]), null,
+            Gio.DBusCallFlags.NONE, -1, null, (bus, res) => {
+                try {
+                    bus.call_finish(res);
+                } catch (e) {
+                    console.log(`[pn-panel] pin: Pin(${pinned}) failed: ${e.message}`);
+                    return;
+                }
+                this._pnSyncPinIcon(pinned);
+            });
+    }
+
+    _pnPinToggle() {
+        this._pnPinGetState(now => this._pnPinSet(!now));
+    }
+
+    // The latched look stylesheet.css already uses for a held modifier: white
+    // fill, black text, a 2px black border — no colour to spend on an e-ink
+    // panel, so state has to read as shape.
+    _pnSyncPinIcon(pinned) {
+        const button = Main.panel.statusArea?.["pn-pin"];
+        button?._pnIcon?.set_style_class_name(
+            pinned ? "system-status-icon pn-panel-pinned" : "system-status-icon");
     }
 
     _pnInputCycle() {
@@ -1016,7 +1119,7 @@ export default class PineNotePanelExtension extends Extension {
         const done = msg => {
             this._pnRotating = false;
             if (msg)
-                console.log(`[pn-osk] rotate: ${msg}`);
+                console.log(`[pn-panel] rotate: ${msg}`);
         };
 
         bus.call(
@@ -1113,7 +1216,9 @@ export default class PineNotePanelExtension extends Extension {
     // until the tablet is physically tilted through a fresh transition. This
     // reads the sensor's current value once and applies it directly, so
     // clearing the lock takes effect immediately. Called only from the
-    // orientation-lock changed handler, on the true→false edge.
+    // orientation-lock changed handler, on the true→false edge, and once per
+    // _pnOnSensorProxyAppeared() to land on the current value before the
+    // live tracking below starts reacting to further changes.
     _pnApplySensorOrientation() {
         Gio.DBus.system.call(
             "net.hadess.SensorProxy", "/net/hadess/SensorProxy",
@@ -1127,20 +1232,182 @@ export default class PineNotePanelExtension extends Extension {
                 } catch (e) {
                     if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
                         return; // teardown raced us, say nothing
-                    console.log(`[pn-osk] rotate: SensorProxy GetAll failed: ${e.message}`);
+                    console.log(`[pn-panel] rotate: SensorProxy GetAll failed: ${e.message}`);
                     return;
                 }
 
                 // Same deepUnpack?.() guard as GetCurrentState's is-current
                 // above: a{sv} values arrive as GLib.Variant, not plain JS.
                 const orientation = props["AccelerometerOrientation"]?.deepUnpack?.();
-                const transform = PN_ORIENTATION_TRANSFORM[orientation];
-                if (transform === undefined) {
-                    console.log(`[pn-osk] rotate: sensor reports "${orientation}", not one of the four mapped orientations — leaving the screen as-is`);
+                this._pnApplyOrientation(orientation);
+            });
+    }
+
+    // Shared by the one-shot resync above and the PropertiesChanged handler
+    // below: maps a SensorProxy AccelerometerOrientation string onto the
+    // transform _pnRotate already uses, and applies it — unless the value is
+    // one GetAll/PropertiesChanged never actually sends (unmapped), or it is
+    // the transform already in effect, in which case _pnRotate would just
+    // spend a GetCurrentState round trip discovering that itself.
+    _pnApplyOrientation(orientation) {
+        const transform = PN_ORIENTATION_TRANSFORM[orientation];
+        if (transform === undefined) {
+            console.log(`[pn-panel] rotate: sensor reports "${orientation}", not one of the four mapped orientations — leaving the screen as-is`);
+            return;
+        }
+        if (transform === this._pnLastAppliedTransform)
+            return;
+        this._pnLastAppliedTransform = transform;
+        console.log(`[pn-panel] rotate: sensor says ${orientation}, applying transform ${transform}`);
+        this._pnRotate(transform, this._pnSensorCancellable);
+    }
+
+    // ── Rotation: live tracking while unlocked ──────────────────────────────
+    // Measured on this device: with orientation-lock false and iio-sensor-proxy
+    // alive, AccelerometerOrientation does update as the tablet is turned, but
+    // mutter's own panel-orientation policy never applies it — DisplayConfig's
+    // transform sits still (GetCurrentState checked directly; the monitor is
+    // is-builtin true, which is normally what that policy keys off of). So
+    // rather than wait on mutter, pn-panel drives rotation itself for as long
+    // as the lock stays off, through the same _pnRotate() a tap or Rotate()
+    // uses — this is not a second rotation mechanism, it is a second trigger
+    // for the one that already exists.
+    //
+    // ClaimAccelerometer is what tells iio-sensor-proxy a client wants live
+    // updates rather than its last resting value; GetAll and the property
+    // itself are readable without it (confirmed live over ssh, where Claim*
+    // is the one polkit gates), but the signal this listens for is not
+    // guaranteed to fire without a claim outstanding, so one is held for the
+    // whole time the lock is off, not just around each read.
+    //
+    // bus_watch_name, not a one-time Claim: iio-sensor-proxy wedges across
+    // suspend/resume (a separate resume hook restarts it — see docs/panel.md)
+    // and comes back as a new process, which drops any outstanding claim and
+    // signal subscription with it. Each name-appeared edge — including the
+    // first one, whether or not the name is already owned when this starts —
+    // reclaims, resubscribes, and resyncs to the current value; the
+    // name-vanished edge only clears local bookkeeping, there is nothing left
+    // to release or unsubscribe on a connection that already dropped it.
+    _pnStartSensorTracking() {
+        if (this._pnSensorNameWatchId)
+            return;
+        this._pnSensorNameWatchId = Gio.bus_watch_name(
+            Gio.BusType.SYSTEM, "net.hadess.SensorProxy",
+            Gio.BusNameWatcherFlags.NONE,
+            () => this._pnOnSensorProxyAppeared(),
+            () => this._pnOnSensorProxyVanished());
+    }
+
+    // Called on orientation-lock's false→true edge and from _pnRemovePanel().
+    _pnStopSensorTracking() {
+        if (this._pnSensorDebounceId) {
+            GLib.Source.remove(this._pnSensorDebounceId);
+            this._pnSensorDebounceId = 0;
+        }
+        this._pnSensorPendingOrientation = undefined;
+        if (this._pnSensorSignalId) {
+            Gio.DBus.system.signal_unsubscribe(this._pnSensorSignalId);
+            this._pnSensorSignalId = 0;
+        }
+        this._pnReleaseAccelerometer();
+        if (this._pnSensorNameWatchId) {
+            Gio.bus_unwatch_name(this._pnSensorNameWatchId);
+            this._pnSensorNameWatchId = 0;
+        }
+    }
+
+    _pnOnSensorProxyAppeared() {
+        this._pnClaimAccelerometer();
+        this._pnSubscribeSensorSignal();
+        this._pnApplySensorOrientation();
+    }
+
+    // The name owner is gone — its claim and our signal subscription went
+    // with it. Only local bookkeeping needs clearing: signal_unsubscribe on
+    // an id whose connection already dropped it is a harmless no-op, and
+    // there is no live claim left to release. Next name-appeared (the
+    // restart, or the resume hook's) reclaims and resubscribes from scratch.
+    _pnOnSensorProxyVanished() {
+        this._pnAccelClaimed = false;
+        this._pnSensorSignalId = 0;
+    }
+
+    _pnClaimAccelerometer() {
+        if (this._pnAccelClaimed)
+            return;
+        Gio.DBus.system.call(
+            "net.hadess.SensorProxy", "/net/hadess/SensorProxy",
+            "net.hadess.SensorProxy", "ClaimAccelerometer", null, null,
+            Gio.DBusCallFlags.NONE, -1, this._pnSensorCancellable,
+            (bus, res) => {
+                try {
+                    bus.call_finish(res);
+                } catch (e) {
+                    if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.CANCELLED))
+                        return;
+                    console.log(`[pn-panel] rotate: ClaimAccelerometer failed: ${e.message}`);
                     return;
                 }
-                this._pnRotate(transform, this._pnSensorCancellable);
+                this._pnAccelClaimed = true;
+                console.log("[pn-panel] rotate: accelerometer claimed");
             });
+    }
+
+    // Fire-and-forget on purpose, and not tied to _pnSensorCancellable:
+    // called from _pnStopSensorTracking() on the lock edge and from
+    // _pnRemovePanel() during teardown, both of which want the release to
+    // actually reach iio-sensor-proxy rather than being cancelled with
+    // everything else mid-flight.
+    _pnReleaseAccelerometer() {
+        if (!this._pnAccelClaimed)
+            return;
+        this._pnAccelClaimed = false;
+        Gio.DBus.system.call(
+            "net.hadess.SensorProxy", "/net/hadess/SensorProxy",
+            "net.hadess.SensorProxy", "ReleaseAccelerometer", null, null,
+            Gio.DBusCallFlags.NONE, -1, null,
+            (bus, res) => {
+                try {
+                    bus.call_finish(res);
+                    console.log("[pn-panel] rotate: accelerometer released");
+                } catch (e) {
+                    console.log(`[pn-panel] rotate: ReleaseAccelerometer failed: ${e.message}`);
+                }
+            });
+    }
+
+    _pnSubscribeSensorSignal() {
+        if (this._pnSensorSignalId)
+            return;
+        this._pnSensorSignalId = Gio.DBus.system.signal_subscribe(
+            "net.hadess.SensorProxy", "org.freedesktop.DBus.Properties",
+            "PropertiesChanged", "/net/hadess/SensorProxy", null,
+            Gio.DBusSignalFlags.NONE,
+            (conn, sender, path, iface, signal, params) => {
+                const [changedIface, changed] = params.deepUnpack();
+                if (changedIface !== "net.hadess.SensorProxy")
+                    return;
+                const orientation = changed["AccelerometerOrientation"]?.deepUnpack?.();
+                if (orientation === undefined)
+                    return; // this PropertiesChanged was about a different property
+                this._pnQueueSensorOrientation(orientation);
+            });
+    }
+
+    // A tilt through a diagonal fires one or more intermediate orientations
+    // on its way to the one the tablet actually settles on (measured: normal
+    // → left-up passes through nothing reliably-named, but the point holds
+    // in general for any pair of the four) — debounce so only the resting
+    // value gets applied, not everything the sensor reported in transit.
+    _pnQueueSensorOrientation(orientation) {
+        this._pnSensorPendingOrientation = orientation;
+        if (this._pnSensorDebounceId)
+            GLib.Source.remove(this._pnSensorDebounceId);
+        this._pnSensorDebounceId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 600, () => {
+            this._pnSensorDebounceId = 0;
+            this._pnApplyOrientation(this._pnSensorPendingOrientation);
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     // ── Tone: two modes, one button ─────────────────────────────────────────
@@ -1302,22 +1569,61 @@ export default class PineNotePanelExtension extends Extension {
     _pnOnRotationLockChanged() {
         this._pnSyncRotateIcon();
         if (this._pnRotationLocked()) {
-            console.log("[pn-osk] rotate: orientation-lock set, auto-rotate is now off");
+            console.log("[pn-panel] rotate: orientation-lock set, auto-rotate is now off");
             Main.notify("Auto-rotate is off",
                 "Rotation is locked to the panel button now. Quick Settings > Auto Rotate turns it back on.");
+            this._pnStopSensorTracking();
         } else {
-            console.log("[pn-osk] rotate: orientation-lock cleared, resyncing to the sensor");
-            this._pnApplySensorOrientation();
+            console.log("[pn-panel] rotate: orientation-lock cleared, resyncing to the sensor and tracking it live");
+            this._pnStartSensorTracking();
         }
     }
 
     // Hide the container, not the actor: that is the layer the panel actually layouts.
+    //
+    // 🔴 The item we hide here is not ours: it belongs to whatever extension
+    //    built it (Pinenote Helper, mostly), and that extension can destroy
+    //    it out from under us. The lock screen does exactly that — pushing
+    //    session mode 'unlock-dialog' disables every extension that has not
+    //    opted into it, pn-panel and Pinenote Helper both, and whichever
+    //    disable() runs first tears its own indicators down. By the time our
+    //    _pnRemovePanel used to reach the restore loop below, `item` could
+    //    already be a disposed St.Bin — and touching `.container` on a
+    //    disposed GObject logs "already disposed" straight from GJS's C
+    //    boundary before a try/catch around the call ever gets a say (that
+    //    was the previous shape here: it looked like it should catch this
+    //    and instead the journal filled with three of these every lock).
+    //    So track the item's own 'destroy' signal instead of reacting to a
+    //    property read after the fact — that turns "ask a corpse to move"
+    //    into "notice it already left".
+    // Same shape as _pnHidePanelItems just above (hide, track the item's own
+    // 'destroy' so a rebuilt object cannot be asked to un-hide as a corpse,
+    // restore in _pnRemovePanel) but for a single actor that is not a
+    // statusArea role and has no .container wrapper: quickSettings._system
+    // IS the visible top-bar actor, so hide()/show() apply to it directly.
+    _pnHideSystemIndicator() {
+        const sys = Main.panel.statusArea?.quickSettings?._system;
+        if (!sys || !sys.visible)
+            return;
+        sys.hide();
+        this._pnSystemIndicator = sys;
+        this._pnSystemDestroyId = sys.connect("destroy", () => {
+            this._pnSystemIndicator = null;
+            this._pnSystemDestroyId = 0;
+        });
+    }
+
     _pnHidePanelItems() {
         for (const role of PN_HIDDEN_PANEL_ROLES) {
             const item = Main.panel.statusArea?.[role];
             if (item?.container?.visible) {
                 item.container.hide();
-                this._pnPanelHidden?.push(item);
+                const entry = {item};
+                entry.destroyId = item.connect('destroy', () => {
+                    if (this._pnPanelHidden)
+                        this._pnPanelHidden = this._pnPanelHidden.filter(e => e !== entry);
+                });
+                this._pnPanelHidden?.push(entry);
             }
         }
     }
@@ -1332,6 +1638,15 @@ export default class PineNotePanelExtension extends Extension {
         // call it may trigger) if disable() lands mid-flight — same intent as
         // _pnToneTimers above, for an async D-Bus call instead of a timer.
         this._pnSensorCancellable = new Gio.Cancellable();
+        // Live sensor-tracking bookkeeping (see "Rotation: live tracking
+        // while unlocked" above); _pnStartSensorTracking()/
+        // _pnStopSensorTracking() are the only things that touch these.
+        this._pnAccelClaimed = false;
+        this._pnSensorNameWatchId = 0;
+        this._pnSensorSignalId = 0;
+        this._pnSensorDebounceId = 0;
+        this._pnSensorPendingOrientation = undefined;
+        this._pnLastAppliedTransform = undefined;
 
         this._pnHidePanelItems();
         // 🔴 Hiding once is not enough. pnhelper disabled then enabled —
@@ -1347,6 +1662,19 @@ export default class PineNotePanelExtension extends Extension {
                 () => this._pnHidePanelItems())]);
 
         this._pnConfig = readPanelConfig();
+        // hide.battery (default false, see PN_HIDDEN_PANEL_ROLES above for
+        // the sibling mechanism this is not quite): unlike everything in
+        // that list, quickSettings' battery/power icon is not its own
+        // statusArea entry on 48 — it is Main.panel.statusArea.quickSettings.
+        // _system, a SystemIndicator (ui/status/system.js) living inside
+        // quickSettings' own _indicators box, confirmed by reading that file
+        // rather than guessed. Hiding _system hides only the always-on top-
+        // bar icon and percentage label; the Power Off menu entry it also
+        // owns (_systemItem, pushed into quickSettingsItems) is a separate
+        // object panel.js adds straight into the Quick Settings popup and is
+        // untouched.
+        if (this._pnConfig.hide?.battery === true)
+            this._pnHideSystemIndicator();
         const wanted = key => this._pnConfig.buttons?.[key.replace(/^pn-/, "")] !== false;
         const add = (key, name, icon, fn) => {
             if (!wanted(key))
@@ -1389,6 +1717,21 @@ export default class PineNotePanelExtension extends Extension {
         this._pnVoiceState = "idle";
         add("pn-voice", "PN Voice", "audio-input-microphone-symbolic",
             () => this._pnVoiceToggle());
+
+        // Pinned: keeps pn-osk's keyboard on screen with nothing focused, so
+        // a touch selection in Firefox (or anywhere else) can be chorded to
+        // Ctrl+C. `wanted` is pn-panel.json's own gate, `_pnOskWantsPinButton`
+        // is pn-osk's — see the comment above readPanelConfig().
+        if (wanted("pn-pin") && _pnOskWantsPinButton()) {
+            const pin = this._pnMakePanelButton(
+                "PN Pin", "input-keyboard-symbolic", () => this._pnPinToggle());
+            Main.panel.addToStatusArea("pn-pin", pin, 0, "right");
+            this._pnPanelButtons.push("pn-pin");
+            // Sync the icon to whatever pn-osk is actually holding — it may
+            // already be pinned from before this button existed (an
+            // independent pn-panel reload while pn-osk keeps running).
+            this._pnPinGetState(now => this._pnSyncPinIcon(now));
+        }
 
         // The fourth button. Text based, see the block above PN_INPUT_LABELS.
         if (wanted("pn-input")) {
@@ -1465,6 +1808,11 @@ export default class PineNotePanelExtension extends Extension {
         // same "mutter needs a nudge" problem as unlocking from this button.
         this._pnLockSignal = this._pnTouchSettings.connect(
             "changed::orientation-lock", () => this._pnOnRotationLockChanged());
+        // Startup can land already unlocked (Quick Settings' toggle survives
+        // a login) — track from the sensor immediately rather than waiting
+        // for a changed::orientation-lock that may never come.
+        if (!this._pnRotationLocked())
+            this._pnStartSensorTracking();
     }
 
     _pnRemovePanel() {
@@ -1491,6 +1839,11 @@ export default class PineNotePanelExtension extends Extension {
             this._pnLockSignal = 0;
         }
         this._pnTouchSettings = null;
+        // Unsubscribes, releases the accelerometer claim (not tied to
+        // _pnSensorCancellable — see _pnReleaseAccelerometer), and stops the
+        // name watch. Must run before the cancel below, which would abort
+        // an in-flight Claim but not this Release.
+        this._pnStopSensorTracking();
         // Signal is disconnected above, so no new call starts after this
         // point; cancel aborts one already in flight.
         this._pnSensorCancellable?.cancel();
@@ -1508,16 +1861,24 @@ export default class PineNotePanelExtension extends Extension {
             Main.panel.statusArea[key]?.destroy();
         this._pnPanelButtons = null;
         // The list may contain multiple generations: if pnhelper added buttons
-        // again, the previous ones were already destroyed by it, and touching
-        // them throws an exception, skipping the rest of the restoration.
-        for (const item of this._pnPanelHidden ?? []) {
-            try {
-                item.container?.show();
-            } catch (e) {
-                // Already gone, no need to restore
-            }
+        // again, the previous ones were already destroyed by it. Those never
+        // reach this loop any more — their own 'destroy' handler (see
+        // _pnHidePanelItems) already dropped them from the array the moment
+        // it happened — so everything still in it is guaranteed alive, and
+        // showing it needs no try/catch to survive a corpse.
+        for (const {item, destroyId} of this._pnPanelHidden ?? []) {
+            item.disconnect(destroyId);
+            item.container?.show();
         }
         this._pnPanelHidden = null;
+
+        if (this._pnSystemIndicator) {
+            if (this._pnSystemDestroyId)
+                this._pnSystemIndicator.disconnect(this._pnSystemDestroyId);
+            this._pnSystemIndicator.show();
+        }
+        this._pnSystemIndicator = null;
+        this._pnSystemDestroyId = 0;
     }
 
     PanelInfo() {
@@ -1594,18 +1955,38 @@ export default class PineNotePanelExtension extends Extension {
         this._pnGestureRedoKind = cfg.redo ?? GESTURE_DEFAULTS.redo;
         this._pnGestureHoldMs = cfg.holdMs ?? GESTURE_DEFAULTS.holdMs;
         // Diagnostic only: one line per touch group when it resolves, one
-        // line per raw TOUCH_* event. Off by default — a stage-wide capture
-        // handler is loud enough without narrating every tap forever.
+        // line per raw TOUCH_* event, and now one line per long-press
+        // fire/cancel. Off by default — a stage-wide capture handler is loud
+        // enough without narrating every tap forever.
         this._pnGestureTrace = cfg.trace ?? false;
-        if (!this._pnGestureFingers || (!this._pnGestureUndoKind && !this._pnGestureRedoKind))
+
+        const lp = cfg.longPress ?? {};
+        this._pnLongPressEnabled = lp.enabled ?? LONGPRESS_DEFAULTS.enabled;
+        this._pnLongPressMs = lp.ms ?? LONGPRESS_DEFAULTS.ms;
+        this._pnLongPressDrift = lp.drift ?? LONGPRESS_DEFAULTS.drift;
+
+        const chordsWanted = !!this._pnGestureFingers &&
+            (this._pnGestureUndoKind || this._pnGestureRedoKind);
+        if (!chordsWanted && !this._pnLongPressEnabled)
             return;
+
+        const seat = Clutter.get_default_backend().get_default_seat();
         // Same seat/device call keyboard.js's OSK makes to type a real key:
-        // one virtual keyboard, created once, fed synthetic press/release
-        // pairs for the life of the extension.
-        this._pnVirtualKeyboard = Clutter.get_default_backend()
-            .get_default_seat()
-            .create_virtual_device(Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        // one virtual device per kind actually used, created once, fed
+        // synthetic events for the life of the extension, destroyed (by
+        // dropping the last reference — Clutter virtual devices have no
+        // destroy()) in _pnRemoveGestures.
+        if (chordsWanted)
+            this._pnVirtualKeyboard = seat.create_virtual_device(
+                Clutter.InputDeviceType.KEYBOARD_DEVICE);
+        if (this._pnLongPressEnabled)
+            this._pnVirtualPointer = seat.create_virtual_device(
+                Clutter.InputDeviceType.POINTER_DEVICE);
+
         this._pnTouchGroup = null;
+        this._pnLongPressTimerId = 0;
+        this._pnLongPressSlot = null;
+        this._pnLongPressGroup = null;
         // Capture phase, not bubble: we want to see every touch before any
         // actor (a button, Xournal++'s own surface, whatever) gets a chance
         // to consume or reinterpret it, and captured-event runs regardless of
@@ -1614,7 +1995,9 @@ export default class PineNotePanelExtension extends Extension {
             (actor, event) => this._pnOnCapturedEvent(event));
         console.log(`[pn-panel] gestures: fingers=${this._pnGestureFingers} ` +
             `undo=${this._pnGestureUndoKind} redo=${this._pnGestureRedoKind} ` +
-            `holdMs=${this._pnGestureHoldMs} trace=${this._pnGestureTrace}`);
+            `holdMs=${this._pnGestureHoldMs} longPress=${this._pnLongPressEnabled} ` +
+            `longPressMs=${this._pnLongPressMs} longPressDrift=${this._pnLongPressDrift} ` +
+            `trace=${this._pnGestureTrace}`);
     }
 
     _pnRemoveGestures() {
@@ -1622,10 +2005,17 @@ export default class PineNotePanelExtension extends Extension {
             global.stage.disconnect(this._pnCapturedId);
             this._pnCapturedId = 0;
         }
+        if (this._pnLongPressTimerId) {
+            GLib.Source.remove(this._pnLongPressTimerId);
+            this._pnLongPressTimerId = 0;
+        }
+        this._pnLongPressSlot = null;
+        this._pnLongPressGroup = null;
         // No destroy() on a Clutter virtual device; dropping the last
         // reference is what keyboard.js relies on too, and GJS's refcounting
         // frees the underlying device once it does.
         this._pnVirtualKeyboard = null;
+        this._pnVirtualPointer = null;
         this._pnTouchGroup = null;
     }
 
@@ -1691,8 +2081,11 @@ export default class PineNotePanelExtension extends Extension {
             // stealing the rest of the sequence) is forgotten here rather
             // than kept alive by a live timer — it only matters again once
             // something new touches down, and that is exactly this branch.
-            if (g && time - g.start > GESTURE_STALE_MS)
+            if (g && time - g.start > GESTURE_STALE_MS) {
+                this._pnCancelLongPress('stale group replaced');
                 g = null;
+            }
+            const freshGroup = !g;
             if (!g) {
                 g = {start: time, lastBegin: time, active: new Set(), peak: 0, entries: new Map()};
                 this._pnTouchGroup = g;
@@ -1701,20 +2094,33 @@ export default class PineNotePanelExtension extends Extension {
             g.active.add(slot);
             g.peak = Math.max(g.peak, g.active.size);
             g.entries.set(slot, {
-                x, y, time, drift: 0,
+                x, y, curX: x, curY: y, time, drift: 0,
                 overKeyboard: this._pnOverKeyboard(x, y),
                 cancelled: false,
                 traced: false,
             });
+            // Long-press only ever arms on the first finger of a brand new
+            // group. A second (or later) finger joining an already-live
+            // group is exactly the "second finger joins before ms" case the
+            // spec disarms on — and it is also the chord's own lead-in, so
+            // this keeps the two gestures from ever firing off one contact.
+            if (freshGroup)
+                this._pnMaybeStartLongPress(slot, x, y, event);
+            else if (g.active.size > 1)
+                this._pnCancelLongPress(`second finger slot=${slot}`);
         } else if (g) {
             const entry = g.entries.get(slot);
             if (type === Clutter.EventType.TOUCH_UPDATE) {
                 traceThis = !!entry && !entry.traced;
                 if (entry) {
                     entry.traced = true;
+                    entry.curX = x;
+                    entry.curY = y;
                     const d = Math.hypot(x - entry.x, y - entry.y);
                     if (d > entry.drift)
                         entry.drift = d;
+                    if (slot === this._pnLongPressSlot && entry.drift > this._pnLongPressDrift)
+                        this._pnCancelLongPress(`drift=${entry.drift.toFixed(1)}px`);
                 }
             } else { // TOUCH_END or TOUCH_CANCEL
                 // Mutter cancels a client's in-flight touches the moment it
@@ -1725,6 +2131,9 @@ export default class PineNotePanelExtension extends Extension {
                 if (type === Clutter.EventType.TOUCH_CANCEL && entry)
                     entry.cancelled = true;
                 g.active.delete(slot);
+                if (slot === this._pnLongPressSlot)
+                    this._pnCancelLongPress(type === Clutter.EventType.TOUCH_CANCEL
+                        ? 'touch-cancelled' : 'released early');
             }
         } else {
             traceThis = false; // UPDATE/END/CANCEL with no group at all: nothing to say
@@ -1841,6 +2250,129 @@ export default class PineNotePanelExtension extends Extension {
         kb.notify_keyval(now(), Clutter.KEY_Control_L, Clutter.KeyState.RELEASED);
         if (withShift)
             kb.notify_keyval(now(), Clutter.KEY_Shift_L, Clutter.KeyState.RELEASED);
+    }
+
+    // ── One-finger long-press → right-click ─────────────────────────────────
+    // Armed only from the TOUCH_BEGIN branch above, only on a fresh group's
+    // first finger. 🩸 Used to gate on
+    // `device.get_device_type() === Clutter.InputDeviceType.TOUCHSCREEN_DEVICE`
+    // — wrong on this device's Wayland stack: Mutter reports every real
+    // finger touch here through a device named "Virtual pointer device for
+    // seat" whose get_device_type() is not TOUCHSCREEN_DEVICE, so that gate
+    // rejected every genuine long-press (`longpress cancel
+    // reason=not-touchscreen`, never once `fired`) while doing nothing to
+    // stop a pen, which never reaches here anyway. The right gate is the one
+    // the two-finger tracker above already uses and has never mistaken a pen
+    // for a finger on: event type. _pnOnCapturedEvent only calls this from
+    // its TOUCH_BEGIN branch, so by the time we are here the event is
+    // already a real touch sequence; get_device_tool() is the
+    // belt-and-braces exclusion for a stylus that ever arrives wrapped in a
+    // touch-typed event (it carries a non-null tool, a finger never does).
+    _pnMaybeStartLongPress(slot, x, y, event) {
+        if (!this._pnLongPressEnabled || !this._pnVirtualPointer)
+            return;
+        const type = event.type();
+        const isTouchEvent = type === Clutter.EventType.TOUCH_BEGIN ||
+            type === Clutter.EventType.TOUCH_UPDATE ||
+            type === Clutter.EventType.TOUCH_END ||
+            type === Clutter.EventType.TOUCH_CANCEL;
+        const device = event.get_device();
+        const isPenTool = !!event.get_device_tool?.();
+        if (!isTouchEvent || isPenTool) {
+            if (this._pnGestureTrace)
+                console.log(`[pn-panel] longpress cancel ` +
+                    `reason=${isPenTool ? 'pen-tool' : 'not-touch-event'} ` +
+                    `device="${device?.get_device_name?.() ?? '?'}" ` +
+                    `deviceType=${device?.get_device_type?.() ?? '?'}`);
+            return;
+        }
+        this._pnLongPressSlot = slot;
+        this._pnLongPressGroup = this._pnTouchGroup;
+        this._pnLongPressTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, this._pnLongPressMs, () => {
+            this._pnLongPressTimerId = 0;
+            this._pnFireLongPressIfValid();
+            return GLib.SOURCE_REMOVE;
+        });
+    }
+
+    // Disarms the pending timer, if any, and says why — called from every
+    // place that invalidates a long-press in progress: a second finger
+    // joining, this finger drifting past gestures.longPress.drift, this
+    // finger lifting before the timer fires, or the group going stale.
+    // A no-op once the timer has already fired or already been disarmed,
+    // so callers never need to check first.
+    _pnCancelLongPress(reason) {
+        if (!this._pnLongPressTimerId)
+            return;
+        GLib.Source.remove(this._pnLongPressTimerId);
+        this._pnLongPressTimerId = 0;
+        if (this._pnGestureTrace)
+            console.log(`[pn-panel] longpress cancel reason=${reason}`);
+        this._pnLongPressSlot = null;
+        this._pnLongPressGroup = null;
+    }
+
+    // Runs once, `ms` after the arming touch began, only if nothing since
+    // has disarmed it (see _pnCancelLongPress) — so reaching here already
+    // means: one finger, still down, under the drift limit. What is left
+    // to check is state that can only be read *now*: is the app under the
+    // finger still the same group we armed for (defensive; the timer is
+    // always cancelled with the group, so this should never trip), and is
+    // the shell in a state that should swallow the gesture (overview,
+    // modal, the on-screen keyboard's own box) at the moment it fires
+    // rather than at the moment it was armed, same rule as the chord above.
+    _pnFireLongPressIfValid() {
+        const slot = this._pnLongPressSlot;
+        const group = this._pnLongPressGroup;
+        this._pnLongPressSlot = null;
+        this._pnLongPressGroup = null;
+        if (slot === null || slot === undefined || !group)
+            return;
+        if (this._pnTouchGroup !== group || !group.active.has(slot) || group.active.size !== 1) {
+            if (this._pnGestureTrace)
+                console.log('[pn-panel] longpress cancel reason=state-changed');
+            return;
+        }
+        const entry = group.entries.get(slot);
+        if (!entry || entry.cancelled)
+            return;
+        if (Main.overview.visible || Main.modalCount > 0) {
+            if (this._pnGestureTrace)
+                console.log('[pn-panel] longpress cancel reason=overview/modal');
+            return;
+        }
+        const x = entry.curX ?? entry.x;
+        const y = entry.curY ?? entry.y;
+        if (this._pnOverKeyboard(x, y)) {
+            if (this._pnGestureTrace)
+                console.log('[pn-panel] longpress cancel reason=keyboard-box');
+            return;
+        }
+        // Marks the group so its own eventual TOUCH_END, evaluated by
+        // _pnMaybeFireGesture for the two-finger chord, is not mistaken for
+        // anything of ours — that evaluator already rejects a peak of 1
+        // finger on its own (this gesture is one finger by definition), so
+        // the flag is bookkeeping for the trace reading it back, not a
+        // second guard.
+        group.longPressFired = true;
+        this._pnSendRightClick(x, y);
+        if (this._pnGestureTrace)
+            console.log(`[pn-panel] longpress fired ${Math.round(x)},${Math.round(y)}`);
+    }
+
+    // A right-click is a button event, not a key: notify_absolute_motion
+    // first so whatever is under the finger actually receives the pointer
+    // there (a touch never moved the pointer itself), then press and
+    // release BUTTON_SECONDARY on it — the same shape _pnSendChord uses for
+    // a key, one virtual device created once in _pnInstallGestures.
+    _pnSendRightClick(x, y) {
+        const pointer = this._pnVirtualPointer;
+        if (!pointer)
+            return;
+        const now = () => Clutter.get_current_event_time() * 1000;
+        pointer.notify_absolute_motion(now(), x, y);
+        pointer.notify_button(now(), Clutter.BUTTON_SECONDARY, Clutter.ButtonState.PRESSED);
+        pointer.notify_button(now(), Clutter.BUTTON_SECONDARY, Clutter.ButtonState.RELEASED);
     }
 
     Rotate() {
