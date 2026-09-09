@@ -109,20 +109,27 @@ GNOME handbook; the error message does not say so.
 
 ## gnome-shell — dead Key objects in `_modifierKeys` after a layout rebuild
 
-- **Status:** draft, not yet filed. Draft kept locally until filed.
+- **Issue:** [gnome-shell#9408](https://gitlab.gnome.org/GNOME/gnome-shell/-/issues/9408)
+  (open, filed 2026-09-10; report text in
+  [`upstream/gnome-shell-modifier-keys-dead-objects.md`](upstream/gnome-shell-modifier-keys-dead-objects.md))
+- **MR:** [gnome-shell!4394](https://gitlab.gnome.org/GNOME/gnome-shell/-/merge_requests/4394)
+  — `keyboard: Reset _modifierKeys when the layout is rebuilt`, from the fork at
+  `cver/gnome-shell`, branch `keyboard-reset-modifier-keys`.
 
 `Keyboard._addRowKeys` appends every on-screen modifier key to
 `this._modifierKeys[keyval]`, which `_setModifierEnabled` walks to latch or
-unlatch them together. `_updateLayout` destroys `this._currentLayout` — every
-`Key` the prior `_addRowKeys` run built — on each rebuild, but never clears
-that map, so the destroyed generation's Keys stay in the lists the next
-modifier tap walks, and each tap logs one "Object St.Button has been already
-disposed" per dead key.
+unlatch them together. `_updateLayout` destroys `this._currentLayout` —
+every `Key` the prior `_addRowKeys` run built — on each rebuild, but never
+clears that map, so the destroyed generation's Keys stay in the lists the
+next modifier tap walks, and each tap logs one "Object St.Button has been
+already disposed" per dead key. One session on this device accumulated
+7,008 of them; the one before, 2,880.
 
-Proposed fix: `this._modifierKeys = new Map()` at the top of `_updateLayout`,
-before the `_addRowKeys` calls that repopulate it; and use `Map` semantics
-(`.get()`/`.set()`/`.clear()`) consistently, since the field is declared a
-`Map` but read and written everywhere with `[]` property access.
+Fix: reset `this._modifierKeys` to `{}` at the top of `_updateLayout`,
+before the `_addRowKeys` calls that repopulate it — matching how the field
+is read and written everywhere (bracket access), despite being declared
+`new Map()` in the constructor. That mismatch is called out in the MR and
+left as a separate cleanup.
 
 Our workaround: `extensions/pn-osk@cver.net` resets `this._modifierKeys` at
 the top of its `_updateLayout` wrapper. Keep it until this lands upstream.
