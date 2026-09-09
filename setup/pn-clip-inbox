@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""setup/pn-clip-inbox — a direct iPhone -> PineNote clipboard path.
+
+cliprelay (see pn-clip-relay) needs the Mac nearby for Universal Clipboard to
+have anything to relay; this skips the Mac entirely. It binds only to this
+device's own tailnet IPv4 — looked up once at start via `tailscale ip -4`,
+never 0.0.0.0 — because a clipboard is exactly the kind of thing a plain HTTP
+server should not hand to whatever else can reach it. Every request also has
+to carry the right X-Token header. See docs/clipboard.md.
+
+Routes:
+  POST /clip   body = UTF-8 text, <=64KB  -> wl-copy                 -> 204
+  GET  /clip   current clipboard (wl-paste --no-newline)             -> 200 text/plain
+
+Wrong or missing token -> 403, no body. Stdlib only, Python 3, no pip deps —
+this runs from a systemd --user unit, same as pn-clip-relay.
+
+Logs method, status, and byte count only — never clipboard content.
+"""
+import http.server
+import os
+import subprocess
+import sys
+
+PORT = 8765
+MAX_BODY = 64 * 1024
+TOKEN_PATH = os.path.expanduser("~/.config/pn-clip-inbox.token")
+
+# Set by pn-clip-inbox.service; defaulted here to match pn-clip-relay's own
+# fallback so the script also works when run by hand for testing.
+WAYLAND_DISPLAY = os.environ.get("WAYLAND_DISPLAY", "wayland-0")
+XDG_RUNTIME_DIR = os.environ.get("XDG_RUNTIME_DIR", "/run/user/1000")
+
+
+def wayland_env():
+    env = dict(os.environ)
+    env["WAYLAND_DISPLAY"] = WAYLAND_DISPLAY
+    env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
+    return env
+
+
+def load_token():
+    try:
+        with open(TOKEN_PATH, "r") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def tailnet_ipv4():
+    try:
+        out = subprocess.check_output(["tailscale", "ip", "-4"], text=True, timeout=5)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        sys.exit("pn-clip-inbox: could not get this device's tailnet IPv4 from "
+                  "`tailscale ip -4`: %s" % e)
+    lines = [l.strip() for l in out.strip().splitlines() if l.strip()]
+    if not lines:
+        sys.exit("pn-clip-inbox: `tailscale ip -4` returned nothing — is tailscaled running "
+                  "and this device joined to the tailnet?")
+    return lines[0]
+
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    server_version = "pn-clip-inbox/1"
+    protocol_version = "HTTP/1.1"
+
+    # Replaces the base class's own access log (which would print the
+    # request line, including query strings) with _log below.
+    def log_message(self, fmt, *args):
+        pass
+
+    def _log(self, status, nbytes):
+        sys.stderr.write("%s %d %dB\n" % (self.command, status, nbytes))
+        sys.stderr.flush()
+
+    def _send(self, status, body=b"", content_type=None, nbytes=None):
+        # nbytes: what to log. A 204 has no response body, so a POST logs
+        # the request size it accepted, not the zero it sent back.
+        self.send_response(status)
+        if content_type:
+            self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if body:
+            self.wfile.write(body)
+        self._log(status, len(body) if nbytes is None else nbytes)
+
+    def _authorized(self):
+        token = load_token()
+        return token is not None and self.headers.get("X-Token") == token
+
+    def do_POST(self):
+        if self.path != "/clip":
+            self._send(404)
+            return
+        if not self._authorized():
+            self._send(403)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+        except ValueError:
+            self._send(400)
+            return
+        if length > MAX_BODY:
+            # Drain so the connection can be reused instead of reset mid-body.
+            self.rfile.read(min(length, MAX_BODY))
+            self._send(413)
+            return
+        body = self.rfile.read(length)
+        try:
+            body.decode("utf-8")
+        except UnicodeDecodeError:
+            self._send(400)
+            return
+        try:
+            subprocess.run(["wl-copy"], input=body, env=wayland_env(), check=True, timeout=5)
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            self._send(502)
+            return
+        self._send(204, nbytes=len(body))
+
+    def do_GET(self):
+        if self.path != "/clip":
+            self._send(404)
+            return
+        if not self._authorized():
+            self._send(403)
+            return
+        try:
+            out = subprocess.run(["wl-paste", "--no-newline"], env=wayland_env(),
+                                  check=True, capture_output=True, timeout=5).stdout
+        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            self._send(502)
+            return
+        self._send(200, out, content_type="text/plain; charset=utf-8")
+
+
+def main():
+    ip = tailnet_ipv4()
+    server = http.server.ThreadingHTTPServer((ip, PORT), Handler)
+    sys.stderr.write("pn-clip-inbox: listening on %s:%d\n" % (ip, PORT))
+    sys.stderr.flush()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+
+
+if __name__ == "__main__":
+    main()

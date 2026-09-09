@@ -1,0 +1,77 @@
+#!/usr/bin/env bash
+# setup/pn-clip-relay — pulls the Mac's clipboard onto this device.
+#
+# The direction is fixed by which side of this ssh connection already works
+# unattended: PineNote -> Mac uses a key that is already trusted, while
+# Mac -> PineNote is gated by Tailscale SSH's interactive check, so a daemon
+# on the Mac can't push. This runs here instead, spawns
+# mac/clip-relay-source over ssh, and turns every record it emits into
+# wl-copy.
+#
+# Framing (written by the other end, see mac/clip-relay-source): each record
+# is "<byte-length>\n<raw bytes>", length counted in bytes so multi-line text
+# and any UTF-8 payload survive intact. Nothing here logs clipboard content —
+# only record counts and byte lengths — because this runs as a journald unit.
+set -u
+
+MAC_HOST=${PN_CLIP_MAC_HOST:-mac}                                    # the alias this device's own ~/.ssh/config already uses for the Mac
+SOURCE_CMD=${PN_CLIP_SOURCE_CMD:-'~/Developer/pinenote/mac/clip-relay-source'}
+export WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-0}
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/1000}
+
+log() { printf '%(%Y-%m-%dT%H:%M:%S%z)T %s\n' -1 "$*"; }
+
+# Reads one framed record off file descriptor $1: a decimal length on its own
+# line, then exactly that many raw bytes, nothing else. Writes the payload
+# (and only the payload) to stdout; sets FRAME_LEN as a side channel so a
+# caller can log the byte count without capturing the payload itself into a
+# variable, which would strip trailing newlines and break on NUL bytes.
+# Returns 1 on EOF, a non-numeric length, or a zero length (the writer skips
+# empty clipboards, so a 0 here means the connection died mid-frame).
+#
+# Kept independent of ssh/wl-copy so it can be unit-tested with a here-string:
+#   printf '5\nhello' | bash -c 'source setup/pn-clip-relay; read_frame 0'
+read_frame() {
+  local fd=$1 len
+  IFS= read -r -u "$fd" len || return 1
+  [[ $len =~ ^[0-9]+$ ]] || return 1
+  [ "$len" -gt 0 ] || return 1
+  FRAME_LEN=$len
+  head -c "$len" <&"$fd"
+}
+
+# One ssh session's worth of relaying: connect, read records until the
+# connection ends, return. The caller reconnects with backoff.
+relay_once() {
+  log "connecting to $MAC_HOST"
+  # stderr is left alone (falls through to the journal) rather than merged
+  # into stdout: merging would put an ssh warning line where a frame's
+  # length line is expected and desync the parser on the very first record.
+  exec 3< <(ssh -o BatchMode=yes -o ConnectTimeout=10 \
+                 -o ServerAliveInterval=15 -o ServerAliveCountMax=3 \
+                 "$MAC_HOST" "$SOURCE_CMD")
+  local n=0
+  while :; do
+    FRAME_LEN=""
+    read_frame 3 > >(wl-copy) || break
+    n=$((n + 1))
+    log "record #$n, ${FRAME_LEN} bytes"
+  done
+  exec 3<&-
+  log "disconnected ($n record(s) this session)"
+}
+
+main() {
+  local backoff=2
+  while true; do
+    relay_once
+    log "reconnecting in ${backoff}s"
+    sleep "$backoff"
+    backoff=$(( backoff < 30 ? backoff * 2 : 30 ))
+  done
+}
+
+# Sourced (for read_frame's unit test) vs run directly.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main
+fi

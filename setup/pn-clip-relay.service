@@ -1,0 +1,13 @@
+[Unit]
+Description=Pull the Mac's clipboard onto this device (clip-relay)
+After=graphical-session.target network-online.target
+Wants=network-online.target
+[Service]
+Type=simple
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+ExecStart=%h/pinenote/setup/pn-clip-relay
+Restart=on-failure
+RestartSec=5
+[Install]
+WantedBy=graphical-session.target

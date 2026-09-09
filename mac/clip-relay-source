@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# mac/clip-relay-source — the Mac half of clipboard sync. Polls this Mac's
+# clipboard and writes each *change* to stdout as one framed record; the
+# PineNote spawns this over ssh (mac -> PineNote is interactive-gated by
+# Tailscale SSH, so the pull has to run the other direction) and turns each
+# record into wl-copy. See docs/clipboard.md for the full shape.
+#
+# Nothing here is installed or runs unattended on the Mac — it is a plain
+# script the PineNote's ssh command names directly, and it dies with that
+# ssh session.
+#
+# Framing: "<byte-length>\n<raw bytes>", length counted in bytes so a
+# multi-line paste or any UTF-8 (including emoji, which are >1 byte per
+# glyph) survives without the receiver having to guess where the record
+# ends. The payload is never round-tripped through a shell variable —
+# command substitution strips trailing newlines and chokes on NUL bytes,
+# and this has to be byte-exact — so pbpaste's output goes straight to a
+# temp file and is measured and streamed from there.
+set -u
+
+MAX_BYTES=65536   # 64 KiB; bigger than a note, and a daemon has no business relaying it
+POLL_S=0.5
+
+tmp=$(mktemp)
+trap 'rm -f "$tmp"' EXIT
+
+last_hash=""
+
+while true; do
+  pbpaste > "$tmp" 2>/dev/null
+  bytes=$(wc -c <"$tmp" | tr -d ' ')
+
+  if [ "$bytes" -gt 0 ] && [ "$bytes" -le "$MAX_BYTES" ]; then
+    hash=$(shasum -a 256 "$tmp" | cut -d' ' -f1)
+    if [ "$hash" != "$last_hash" ]; then
+      printf '%s\n' "$bytes"
+      cat "$tmp"
+      last_hash=$hash
+    fi
+  fi
+  # Clipboard content is not logged anywhere in this loop, on purpose: this
+  # runs over ssh into a journal on another device.
+
+  sleep "$POLL_S"
+done
