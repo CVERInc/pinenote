@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Lock at login
+Comment=PineNote autologs in; lock the screen as soon as the session is up so the unlock dialog stands in for a login prompt.
+Exec=sh -c "sleep 3; dbus-send --session --dest=org.gnome.ScreenSaver --type=method_call /org/gnome/ScreenSaver org.gnome.ScreenSaver.Lock"
+X-GNOME-Autostart-Phase=Applications
+NoDisplay=true
