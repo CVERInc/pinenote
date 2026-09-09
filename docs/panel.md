@@ -216,17 +216,19 @@ the same lock toggle, one level down from where this button sits on the top
 row. Nothing here removes the button — it stays the one-tap path — but it is
 no longer covering for a sensor that could not be relied on to do its own job.
 
-### Mutter never picks it up, so pn-panel drives it itself
+### Mutter only picks it up in tablet mode, so pn-panel drives it itself
 
-Turning the lock off is not, on this device, enough on its own. With
-`orientation-lock` false and iio-sensor-proxy alive, `AccelerometerOrientation`
-does update as the tablet is turned — confirmed live, `normal` → `left-up`
-tracked in real time — but Mutter's own panel-orientation policy never acts on
-it: `DisplayConfig`'s `GetCurrentState` transform sits still regardless (the
-monitor reports `is-builtin: true`, which is normally what that policy keys
-off of). Whatever this build of Mutter wants before it will drive a built-in
-panel from the sensor, it is not present here, and chasing it further looked
-like guessing at Mutter internals rather than fixing anything pn-panel owns.
+Turning the lock off is not, on this device, always enough. Mutter's own
+panel-orientation policy runs only while the seat is in touch mode, and touch
+mode ends the moment a physical keyboard or pointer is attached. A paired
+Keychron Q1 Max shows up in libinput as a keyboard and a pointer, and with it
+connected two things happen at once: the Auto Rotate toggle leaves Quick
+Settings (its visibility is `can-lock-orientation`, which is Mutter's
+`panel-orientation-managed`), and the screen stops following the sensor even
+though `AccelerometerOrientation` keeps updating. Disconnect the keyboard and
+both come back. An afternoon was spent blaming pn-panel's own virtual input
+devices and its sensor claim for that missing toggle; three A/B cuts changed
+nothing because the keyboard was the variable, not the extension.
 
 So pn-panel drives it instead, through the rotation it already has: while the
 lock is off, it calls `ClaimAccelerometer` on `net.hadess.SensorProxy` (system
