@@ -114,6 +114,160 @@ terminal, tapping `ctrl` → `⇧` → `c`, and reading the clipboard over SSH: 
 bytes, exactly the selected text. Pasting back is the same shape, `ctrl` → `⇧`
 → `v`.
 
+**Ctrl, then Shift, then V.** Upstream's `_setActiveLevel` calls
+`_disableAllModifiers()` right before swapping pages, so tapping Shift after
+Ctrl threw Ctrl away and the terminal received a capital `V` instead of paste
+— measured over D-Bus: `modifiers` went from `["0xffe3"]` to `["0xffe1"]` on
+the Shift tap. BUILD 38 wraps `_setActiveLevel` to carry every modifier except
+Shift's own `0xffe1` across the switch, so both orders work; Ctrl+Shift+V in
+the terminal now works in the order a hand expects.
+
+**Dead keys in the modifier list.** Upstream never resets `_modifierKeys` when
+a layout is rebuilt, so every rebuild leaves the previous layout's destroyed
+Key objects in the lists that `_setModifierEnabled` walks, and each modifier
+tap then logs one "Object St.Button has been already disposed" per dead key —
+about 7,000 in one session on this device, 2,880 the session before. BUILD 37
+resets the list at the top of `_updateLayout`, the moment the old keys stop
+existing. Reported upstream (pending); see [UPSTREAM.md](../UPSTREAM.md).
+
+## Summon and dismiss
+
+Chords answer *how* you press Ctrl+C on glass. They do not answer *when* the
+keyboard is there to press it on: upstream shows the OSK only while a text
+entry has focus, and selecting text is not focusing one. CHOD selects with
+touch in Firefox — or anywhere else — and had nothing to chord onto.
+
+The bottom-edge swipe is the answer now. Upstream already has a way to open
+the keyboard by touch alone — `KeyboardManager`'s own
+`EdgeDragAction(St.Side.BOTTOM, mode)`, one finger dragged up from off-screen
+— but upstream's swipe still only opens; it does nothing about *staying*
+open, and the same blur that ate a text-selection focus also ate a
+swipe-summoned keyboard the instant it lost focus. BUILD 40 connects a
+second listener onto that same action's `activated` signal — next to
+upstream's own, not instead of it — so the swipe now does what the button
+below always did: it pins. Upstream's handler still runs first and opens the
+keyboard the normal way; this one only pins what is already opening, through
+the exact `Pin(true)` call the button makes, so a swipe-summoned keyboard
+gets every guard `Pin(true)` already has rather than a second, narrower copy
+of them. Gated on `pin.gesture` in `pn-osk.json`, default `true`.
+
+That listener has somewhere to attach because the drag action already exists
+and is already enabled by the time `enable()` runs. `_syncEnabled()` only
+gates whether a `Keyboard` object exists at all — on `screen-keyboard-enabled
+true`, which this device sets since it has no physical keyboard, one is
+built at session start and stays built — and the action's own `mode` is
+`Shell.ActionMode.ALL & ~Shell.ActionMode.LOCK_SCREEN`, live everywhere but
+the lock screen; its `enabled` property then just tracks the keyboard's own
+`visibility-changed` (on while hidden, off while shown). None of that needed
+building; it only needed reading, out of `keyboard.js` on this device's own
+48.7.
+
+A button in the top bar — pn-panel's `pn-pin`, styled the same latched
+white-on-black as a held modifier — reaches the same place by tap instead of
+by swipe, over `org.cver.PnOsk`'s `Pin`/`Pinned`. Now that the swipe pins on
+its own, the button is off by default (`pin.button: false`); set it `true` to
+bring it back. `Pin(true)` calls `ShowKeyboard()`, which opens the keyboard
+exactly the way focusing an entry does, `KeyboardManager.open()`, so a
+pinned keyboard pushes the workarea and sits in `keyboardBox` the same as any
+other open one; nothing about struts needed touching. It also forces the
+keyboard visible immediately rather than trusting that open: `kb.open()`
+only schedules the show, behind a `KEYBOARD_REST_TIME` debounce of 300ms
+that upstream built for a focus flicker, not for a deliberate pin, and
+anything reading state right after `ShowKeyboard()` returns — `Capture()`, a
+caller's own D-Bus round trip — could and did outrun that timer and see
+nothing pinned yet even though `Pinned` had already flipped true. So
+`ShowKeyboard` follows the async open with a synchronous `open(true)` on the
+same `Keyboard` object, cancelling the just-scheduled timer first so it
+never double-fires, which makes `Pin(true)` as deterministic as the property
+it flips. `HideKeyboard` does the same in the other direction, so
+`Pin(false)` does not leave a caller waiting on that timer either.
+
+Closing is guarded, not removed, in the three places upstream itself can
+call `this.close()` on its own. `_onKeyboardStateChanged` reacts to
+`Main.inputMethod`'s `input-panel-state` — this is what a Wayland client
+like Firefox actually drives, ON when a field gets focus and OFF the moment
+it does not, selecting-without-focusing included, so this is the path
+CHOD's bug lived behind. `_onKeyFocusChanged` reacts to `global.stage`'s
+`key_focus` and only ever fires for shell-chrome `St.Entry` widgets (the
+overview search box, a modal dialog, the lock screen's own password field),
+since Wayland client content never touches `key_focus` at all. And
+`_onFocusWindowMoving`, wired to `FocusTracker`'s `window-grabbed` and
+`window-moved`, closes too: `window-moved` fires on the focused window's own
+`position-changed`, which the keyboard's opening animation triggers when it
+slides that window up to clear room for itself, so an app whose window has
+ever been slid for the keyboard could self-close a pinned one on its very
+next open. All three are replaced whole, not wrapped — none of the branches
+is its own method upstream — with the `close()` call itself skipped while
+pinned; everything else in each is copied verbatim.
+
+A fourth close path cannot be reached that way. The keyboard's own hide key
+— the chevron in its bottom row — and the emoji panel's close both call
+`this.close()` from closures upstream builds inside its own row-construction
+loop, bound at build time with nothing left to hook once the key exists. So
+`Keyboard.prototype.close` is patched instead: whenever it actually runs
+while pinned, that is by construction one of those two deliberate dismissals
+— nothing else still calls `close()` while pinned, per the three guards
+above — so the patch detects "closing while pinned", clears `_pinned` and
+emits pn-osk's `Pinned` property, then delegates to the original close. No
+extra call site to keep in sync if upstream ever adds another one.
+
+That is the pair CHOD asked for: a one-finger swipe up from the bottom edge
+summons the keyboard and keeps it up regardless of focus — the top-bar
+button does the same by tap, for anyone who has switched it back on — and
+the keyboard's own hide key sends it away. All of it leaves `_pinned`, the
+D-Bus property, and pn-panel's button state (when the button exists at all)
+agreeing with each other, whichever one moved first.
+
+Pinned state is never written to `pn-osk.json` — it starts unpinned every
+session and resets on `disable()`, the same disable the lock screen's mode
+switch calls, so a keyboard forced open never sits over a password entry.
+Three keys under `pin` in `pn-osk.json` are what *is* configured:
+`pin.gesture` (default `true`) gates the swipe-pins-too listener above,
+`pin.button` (default `false`) gates whether pn-panel builds the tap button
+at all — the same "unwanted things should simply not be born" rule the other
+four buttons follow, read from pn-osk's own config because pinning is
+pn-osk's feature and pn-panel only draws it — and `pin.atLogin` (default
+`false`) pins once at `enable()`, guarded to `'user'` session mode so it
+never fires on the way into the lock screen's own `unlock-dialog` mode.
+
+`metadata.json` carries `session-modes: ["user", "unlock-dialog"]` now, so
+this layout is what the GNOME lock screen's password entry gets too, once
+that is turned on — not this button, `pn-panel` stays user-mode only, but the
+k6 keyboard underneath it does not stop existing just because the session
+locked. The mode switch is one more caller of `disable()`/`enable()`, on top
+of everything already exercising them (`gnome-extensions disable`/`enable`,
+`pn reload`), which is the other reason pinned resets there rather than
+somewhere narrower: whatever calls it, a keyboard stuck open over a password
+field is worse than the bug this feature fixes.
+
+## One keyboard for every field
+
+GNOME's stock `_updateLayout` does not draw one keyboard, it draws several,
+picked by the focused field's `InputContentPurpose`: DIGITS, NUMBER and
+PHONE get a numeric keypad, EMAIL and URL get their own named layout groups
+with `@`/`.`/`/` on the front row, and everything else — PASSWORD and ALPHA
+included — falls back to sharing NORMAL's layout.
+
+This extension used to compose its own layout only for TERMINAL and NORMAL
+and let GNOME handle every other purpose itself, on the assumption that a
+password field wanted a special layout the way an email field does. It
+does not; PASSWORD shares NORMAL upstream too. So the only effect of
+leaving it alone was that a Firefox password field, the lock screen, and
+any OTP field fell straight through to GNOME's own keyboard — no Ctrl, none
+of this layout's chords, no way to paste a one-time code relayed from a
+phone.
+
+`fullLayoutEverywhere` (default `true`) fixes that by folding every purpose
+except TERMINAL to NORMAL before `_updateLayout` — or upstream's own
+method — ever sees it, so this extension's full layout, number row and
+Ctrl/Alt included, composes for password fields, the lock screen, OTP
+fields and address bars, not just plain text. The purpose is folded only
+for the lookup that picks the layout group; anything reading the purpose
+back over D-Bus still gets the real, unfolded value. This is the piece that
+makes "copy on the iPhone, paste on the PineNote" work in the places that
+actually need it — an OTP field needs Ctrl+V more than it needs a keypad.
+Set it `false` to get GNOME's own per-purpose keyboards back.
+
 ## Pressing a key from a machine
 
 The keyboard can only be pressed by a finger, and a finger cannot report what

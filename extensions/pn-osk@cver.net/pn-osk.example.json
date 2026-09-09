@@ -3,6 +3,12 @@
   "k6Layout": true,
   "trace": false,
   "chords": true,
+  "fullLayoutEverywhere": true,
+  "pin": {
+    "gesture": true,
+    "button": false,
+    "atLogin": false
+  },
   "topRow": {
     "default": "`1234567890-=",
     "shift": "~!@#$%^&*()_+"

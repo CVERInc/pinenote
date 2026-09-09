@@ -6,6 +6,10 @@
     "47",
     "48"
   ],
-  "version": 4,
+  "session-modes": [
+    "user",
+    "unlock-dialog"
+  ],
+  "version": 5,
   "settings-schema": null
 }

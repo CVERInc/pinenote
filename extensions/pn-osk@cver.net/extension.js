@@ -57,7 +57,7 @@ import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import * as InputSourceStatus from 'resource:///org/gnome/shell/ui/status/keyboard.js';
 import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 
-const BUILD = 33;
+const BUILD = 40;
 
 // These represent the panel's physics, as a default state rather than a toggle.
 // They were previously applied manually over D-Bus because CSS overrides were
@@ -82,10 +82,63 @@ const DEFAULTS = {
     // Shift+arrow work from either key: the hook is _setLatched (that call is
     // upstream's own signal that a level-switch KEY, not an auto-capitalising
     // hint, changed the level) and _disableAllModifiers (keeps Shift_L armed
-    // under caps lock once the one-shot clear would otherwise drop it). Set
-    // false to measure stock GNOME on this same device for an upstream bug
-    // report, or if some input method disagrees with a raw-keyval Shift.
+    // under caps lock once the one-shot clear would otherwise drop it).
+    // BUILD 39: on a terminal that never answers surrounding-text requests,
+    // auto-capitalisation's own _setActiveLevel('shift') call (see
+    // _updateLevelFromHints, sometimes ~1s late from its delayed
+    // surrounding-text-set callback) was measured leaving 0xffe1 armed with
+    // no tap involved. _setActiveLevel now drops 0xffe1 on its way out of
+    // the shift layer for any reason short of caps lock, closing that
+    // regardless of which exact call was re-adding it; see the trace
+    // comments on _setActiveLevel/_setLatched/_disableAllModifiers/
+    // _updateLevelFromHints below for how to pin the exact call with
+    // `trace: true`. Set false to measure stock GNOME on this same device
+    // for an upstream bug report, or if some input method disagrees with a
+    // raw-keyval Shift.
     chords: true,
+
+    // Pinned keeps the keyboard open regardless of focus — CHOD selects with
+    // touch and had no way to reach Ctrl+C without a focused entry. The
+    // state itself is never persisted (see Pin() in enable()): what IS
+    // configured is how it gets summoned.
+    //
+    // `pin.gesture` (default true): the bottom-edge swipe that already opens
+    // the keyboard (KeyboardManager's own EdgeDragAction — see the "Summon
+    // and dismiss" comment on the gesture hook in enable()) now pins it too,
+    // through the exact Pin(true) code path a tap on the button used to be
+    // the only way to reach. Set false to let the swipe open the keyboard
+    // upstream's way — closing again on blur, the bug this feature exists
+    // to fix.
+    //
+    // `pin.button` (default false): a top-bar button pn-panel draws
+    // (org.cver.PnOsk's Pin/Pinned) that does the same Pin(true)/Pin(false)
+    // by tap instead of by swipe. The swipe reaches the same place now, so
+    // the button is off by default; set true to bring it back — it removes
+    // itself from pn-panel's row the same way pn-panel.json's own `buttons`
+    // map removes its own. Lives here rather than there because pinning is
+    // this extension's feature, pn-panel only draws what this says exists.
+    //
+    // `pin.atLogin` (default false): pin once at enable(), after the
+    // keyboard the shell already built exists, so a fresh session starts
+    // with it up rather than waiting for the first swipe or tap. Guarded to
+    // 'user' session mode only — enable() also runs on the unlock-dialog
+    // mode switch (session-modes above), and a keyboard forced open over a
+    // password entry is the bug this feature exists to avoid, not a boot
+    // convenience.
+    pin: {gesture: true, button: false, atLogin: false},
+
+    // "One keyboard for every field." GNOME's stock _updateLayout only gives
+    // DIGITS/NUMBER/PHONE a numeric keypad and EMAIL/URL their own named
+    // groups — every other purpose (PASSWORD included) already shares the
+    // same language-group layout as NORMAL. Composing this extension's
+    // layout only for TERMINAL/NORMAL therefore meant Firefox password
+    // fields and the lock screen (PASSWORD) fell through to GNOME's own
+    // keyboard: no Ctrl, none of this layout's chords, no way to paste an
+    // OTP relayed from a phone. With this on, every purpose but TERMINAL is
+    // treated as NORMAL — a full keyboard, number row included, everywhere;
+    // an OTP field needs Ctrl+V more than it needs a keypad. Set false to
+    // get GNOME's own per-purpose keyboards back.
+    fullLayoutEverywhere: true,
 
     // Renames that apply in both orientations. portrait.labels sits on top of
     // this one, so a key can read one way everywhere and another way only when
@@ -245,6 +298,10 @@ const IFACE = `
     </method>
     <method name="ShowKeyboard"/>
     <method name="HideKeyboard"/>
+    <method name="Pin">
+      <arg type="b" name="pinned" direction="in"/>
+    </method>
+    <property name="Pinned" type="b" access="read"/>
     <method name="Palette">
       <arg type="s" direction="out" name="json"/>
     </method>
@@ -551,10 +608,36 @@ export default class PineNoteOskExtension extends Extension {
         this._origAddRowKeys = proto._addRowKeys;
         this._origSetLatched = proto._setLatched;
         this._origDisableAllModifiers = proto._disableAllModifiers;
+        this._origSetActiveLevel = proto._setActiveLevel;
+        this._origUpdateLevelFromHints = proto._updateLevelFromHints;
+        this._origOnKeyFocusChanged = proto._onKeyFocusChanged;
+        this._origOnKeyboardStateChanged = proto._onKeyboardStateChanged;
+        this._origOnFocusWindowMoving = proto._onFocusWindowMoving;
+        this._origClose = proto.close;
+
+        // Pinning never survives a disable(): the mode switch onto the lock
+        // screen calls it, and a keyboard that stayed forced open over a
+        // password entry would be a worse bug than the one this feature fixes.
+        this._pinned = false;
 
         const ext = this;
         this._config = readConfig();
         this._pnDockCandidatePopup();
+
+        // BUILD 39 trace. A short stack is what tells a tap-driven caller
+        // (_addRowKeys' levelSwitch handlers, always _setActiveLevel then
+        // _setLatched, synchronously) apart from a hint-driven one
+        // (_updateLevelFromHints, either immediately or ~1s later from its
+        // own delayed surrounding-text-set callback) — GJS names an anonymous
+        // closure `outerFn/<@file:line`, so the enclosing function shows up
+        // even for the callback. Only active with pn-osk.json's `trace: true`.
+        const pnTrace = (label, extra) => {
+            if (!ext._config.trace)
+                return;
+            const stack = new Error().stack.split('\n').slice(1, 4)
+                .join(' | ').trim();
+            log(`[pn-osk] ${label} ${extra ? JSON.stringify(extra) : ''} :: ${stack}`);
+        };
 
         proto._relayout = function (...args) {
             ext._origRelayout.apply(this, args);
@@ -577,13 +660,49 @@ export default class PineNoteOskExtension extends Extension {
 
         proto._updateLayout = function (groupName, purpose) {
             ext._config = readConfig();
+            // Upstream keeps _modifierKeys for the life of the Keyboard and only
+            // ever appends to it in _addRowKeys, so every rebuild leaves the
+            // previous layout's destroyed Key objects in the lists that
+            // _setModifierEnabled walks; each modifier tap then logs one
+            // "already disposed" per dead key (thousands per session here).
+            // A rebuild is the moment the old keys stop existing, so this is
+            // where the lists start over. Reported upstream; see UPSTREAM.md.
+            this._modifierKeys = {};
             this._pnPurpose = purpose;
             if (ext._config.chords)
                 ext._pnPatchModifiers(this);
             else
                 ext._pnUnpatchModifiers();
-            if (ext._config.trace)
-                log(`[pn-osk] _updateLayout group=${groupName} purpose=${purpose} TERMINAL=${Clutter.InputContentPurpose.TERMINAL} k6=${ext._config.k6Layout}`);
+
+            // "One keyboard for every field" (fullLayoutEverywhere, default
+            // on). 🩸 The comment this replaces claimed GNOME "provides
+            // specialized layouts" for PASSWORD et al. — false for PASSWORD:
+            // keyboard.js 48.7's own _updateLayout only special-cases DIGITS/
+            // NUMBER/PHONE (a numeric KeyboardModel) and EMAIL/URL (their own
+            // named groups); PASSWORD, ALPHA, NORMAL and TERMINAL all fall
+            // through to the same groupName-based language layout already.
+            // The real gap was DIGITS/NUMBER/PHONE/EMAIL/URL landing on
+            // GNOME's stock keyboard — no Ctrl, none of this layout's chords
+            // — which is where CHOD lost Ctrl+V for an OTP relayed from his
+            // phone into a Firefox password field, and the same reason the
+            // lock screen (PASSWORD purpose) never got this keyboard either.
+            // _composeLayout only understands 'us'/'us-extended'-style xkb
+            // groups, never 'digits'/'email'/'url', so every purpose but
+            // TERMINAL is folded to NORMAL before it or the upstream method
+            // ever sees it: the real DIGITS/etc. purpose would otherwise
+            // route into KeyboardModel('digits') and skip _addRowKeys (and
+            // this override) entirely. this._pnPurpose above keeps the real,
+            // unfolded purpose for anything reading it back over D-Bus.
+            const effectivePurpose =
+                (ext._config.fullLayoutEverywhere &&
+                 purpose !== Clutter.InputContentPurpose.TERMINAL)
+                    ? Clutter.InputContentPurpose.NORMAL : purpose;
+
+            if (ext._config.trace) {
+                log(`[pn-osk] _updateLayout group=${groupName} purpose=${purpose} ` +
+                    `effectivePurpose=${effectivePurpose} ` +
+                    `TERMINAL=${Clutter.InputContentPurpose.TERMINAL} k6=${ext._config.k6Layout}`);
+            }
 
             // Compose the whole terminal layout up front. _addRowKeys is told
             // nothing about which level it is building, so the containers get
@@ -595,17 +714,17 @@ export default class PineNoteOskExtension extends Extension {
             this._pnBuiltLandscape = landscape;
             // The terminal is this layout's origin, but Esc, Tab, and the number row
             // remain necessary for standard text input. Renaming a folder without Esc
-            // forces a commit. Specific purposes (password, number, phone, email, URL)
-            // are left to GNOME, which provides specialized layouts for them;
-            // overriding those would be a regression.
+            // forces a commit. Checked against effectivePurpose, not purpose: with
+            // fullLayoutEverywhere on (the default) this always matches unless the
+            // purpose is TERMINAL, which already matched on its own.
             const composeFor = [
                 Clutter.InputContentPurpose.TERMINAL,
                 Clutter.InputContentPurpose.NORMAL,
             ];
-            if (composeFor.includes(purpose) && ext._config.k6Layout)
+            if (composeFor.includes(effectivePurpose) && ext._config.k6Layout)
                 this._pnComposed = ext._composeLayout(groupName, landscape);
 
-            const ret = ext._origUpdateLayout.call(this, groupName, purpose);
+            const ret = ext._origUpdateLayout.call(this, groupName, effectivePurpose);
 
             // _relayout only runs on monitor changes, so installing the ratio
             // override from there leaves it uninstalled after the extension is
@@ -650,7 +769,60 @@ export default class PineNoteOskExtension extends Extension {
         // just started", so it is where Shift_L gets armed. Nothing paints:
         // the flipped faces already show the state, and both Shifts stay
         // exactly the levelSwitch keys upstream ships.
+        // _setActiveLevel clears every modifier right before it swaps pages
+        // (keyboard.js: this._disableAllModifiers() ahead of this._currentPage
+        // = currentPage), so Ctrl, Shift, V arrived in the terminal as a
+        // capital V: the level switch had thrown Ctrl away. A chord keyboard
+        // keeps its modifiers until a key commits, so carry them across the
+        // switch. Shift's own 0xffe1 is _setLatched's business and stays out.
+        //
+        // BUILD 39. Measured on a terminal that never answers
+        // request_surrounding with real text: _updateLevelFromHints's
+        // AUTO_CAPITALIZATION branch then always takes the "first character
+        // in the buffer" arm and calls _setActiveLevel('shift') directly —
+        // sometimes immediately, sometimes ~1s later from its own delayed
+        // surrounding-text-set callback — and 0xffe1 was ending up armed
+        // regardless of _setLatched ever running. Whichever exact call adds
+        // it (trace logging below is what pins it), the semantics this must
+        // hold are: 0xffe1 is armed ONLY by a genuine Shift tap/long-press
+        // (the _setLatched call _addRowKeys makes right after this one), and
+        // disarmed the instant the page leaves the shift layer for ANY
+        // reason — auto-capitalisation included — except while caps lock
+        // (_latched === true) is holding the shift page latched. The line
+        // below is the belt: even if some future path re-adds 0xffe1 on the
+        // way through here, leaving shift for a reason other than caps lock
+        // always drops it again before this returns.
+        proto._setActiveLevel = function (level) {
+            pnTrace('_setActiveLevel', {
+                level,
+                modifiersBefore: [...(this._modifiers ?? [])],
+                latched: this._latched,
+                currentPageIsShift: this._currentPage === this._layers?.shift,
+            });
+            if (!ext._config.chords)
+                return ext._origSetActiveLevel.call(this, level);
+            const keep = [...(this._modifiers ?? [])].filter(k => k !== '0xffe1');
+            const ret = ext._origSetActiveLevel.call(this, level);
+            for (const k of keep) {
+                if (this._modifierKeys?.[k])
+                    this._setModifierEnabled(k, true);
+                else
+                    this._modifiers.add(k);
+            }
+            if (level !== 'shift' && !this._latched)
+                this._modifiers.delete('0xffe1');
+            pnTrace('_setActiveLevel:done', {
+                level, modifiersAfter: [...(this._modifiers ?? [])],
+            });
+            return ret;
+        };
+
         proto._setLatched = function (latched) {
+            pnTrace('_setLatched', {
+                latched,
+                currentPageIsShift: this._currentPage === this._layers?.shift,
+                modifiersBefore: [...(this._modifiers ?? [])],
+            });
             const ret = ext._origSetLatched.call(this, latched);
             if (!ext._config.chords)
                 return ret;
@@ -658,6 +830,7 @@ export default class PineNoteOskExtension extends Extension {
                 this._modifiers.add('0xffe1');
             else
                 this._modifiers.delete('0xffe1');
+            pnTrace('_setLatched:done', {modifiersAfter: [...(this._modifiers ?? [])]});
             return ret;
         };
 
@@ -676,18 +849,235 @@ export default class PineNoteOskExtension extends Extension {
         // 0xffe1 out before handing the rest to the original, and decide
         // whether it goes back from here instead of ever handing it in.
         proto._disableAllModifiers = function () {
+            pnTrace('_disableAllModifiers', {
+                latched: this._latched,
+                currentPageIsShift: this._currentPage === this._layers?.shift,
+                modifiersBefore: [...(this._modifiers ?? [])],
+            });
             if (!ext._config.chords)
                 return ext._origDisableAllModifiers.call(this);
             this._modifiers.delete('0xffe1');
             ext._origDisableAllModifiers.call(this);
             if (this._latched && this._currentPage === this._layers?.shift)
                 this._modifiers.add('0xffe1');
+            pnTrace('_disableAllModifiers:done', {modifiersAfter: [...(this._modifiers ?? [])]});
             return undefined;
         };
+
+        // BUILD 39, tracing only — no behaviour change. This is the method
+        // that decides "sentence start" for auto-capitalisation and is the
+        // suspected source of the unwanted 0xffe1 (see _setActiveLevel
+        // above): logging its entry, whether it already has a
+        // surrounding-text-set listener leaked from a previous call (see
+        // UPSTREAM.md — the empty-text branch in keyboard.js never
+        // disconnects it), and the page/latch state, is what tells the
+        // trace apart from a genuine tap. It cannot flag the delayed
+        // surrounding-text-set callback itself (that closure is upstream's,
+        // sealed inside this function, not ours to reach) — the callback's
+        // own _setActiveLevel call is what carries the stack that names it.
+        proto._updateLevelFromHints = function (userInputHappened) {
+            pnTrace('_updateLevelFromHints', {
+                userInputHappened,
+                contentHint: this._contentHint,
+                latched: this._latched,
+                currentPageIsShift: this._currentPage === this._layers?.shift,
+                hasSurroundingListener: !!this._surroundingTextId,
+            });
+            return ext._origUpdateLevelFromHints.call(this, userInputHappened);
+        };
+
+        // Pinning. Read out of libshell-16.so on this device's own GNOME
+        // 48.7, not a release tarball: `Main.keyboard.close()` — what
+        // ShowKeyboard/HideKeyboard below already call, and the only way
+        // upstream itself ever closes the keyboard — is reached from
+        // *two* places, and CHOD's bug lives behind the one this extension
+        // had never touched before:
+        //
+        //   _onKeyboardStateChanged  reacts to Main.inputMethod's
+        //     'input-panel-state', which is IBus/text-input-v3 telling the
+        //     compositor whether a text box is focused *in a Wayland client*.
+        //     This is what Firefox drives, ON when an entry gets focus, OFF
+        //     the moment it does not — including "nothing is focused because
+        //     you only selected text", which is the whole bug. This is the
+        //     path that matters here.
+        //   _onKeyFocusChanged  reacts to global.stage's 'notify::key-focus',
+        //     which only ever changes for shell-chrome widgets (St.Entry) —
+        //     the overview search box, a modal dialog, the lock screen's own
+        //     password field. Wayland client content never touches
+        //     stage.key_focus at all. Patched too, for the same reason
+        //     session-modes now includes unlock-dialog: a pinned keyboard
+        //     must not eat a focus change on the password prompt either.
+        //
+        // Both close by calling KeyboardManager.open()/close(), the same
+        // calls upstream's own focus paths make, so a pinned keyboard pushes
+        // the workarea and shows in keyboardBox exactly as a normally-opened
+        // one does; nothing about struts needed touching. FocusTracker's own
+        // 'focus-changed' signal (X11 only, gated by
+        // `!Meta.is_wayland_compositor()`) is left alone: this device never
+        // runs X11.
+        //
+        // Both replaced whole, not wrapped: neither close-on-blur branch is
+        // its own method upstream, each is a few lines inside a bigger one,
+        // so there is no narrower seam to hook. Everything else in both is
+        // copied verbatim.
+        //
+        // 🩸 A THIRD unconditional `this.close(true)` lives in
+        // _onFocusWindowMoving (wired to FocusTracker's 'window-grabbed' and
+        // 'window-moved', both connected unconditionally in the constructor,
+        // Wayland included — not the X11-only branch the paragraph above is
+        // about). 'window-moved' fires on the focused window's own
+        // 'position-changed', which _animateShow's _animateWindow triggers
+        // when it slides the focused window up to clear room for the
+        // keyboard — so an app whose window has ever been slid for the
+        // keyboard can self-close a pinned one on its very next open. Fixed
+        // the same way as the two above: guarded on ext._pinned, everything
+        // else copied verbatim.
+        //
+        // Summon and dismiss. The top-bar button Pin(true)s: it summons the
+        // keyboard and keeps it up regardless of focus, exactly as above.
+        // Putting it away again has two doors, and they should not agree by
+        // accident: Pin(false) (the same top-bar button) hands control
+        // straight back, per _pnFocused() below; the keyboard's OWN hide key
+        // — the chevron in its bottom row, action 'hide' inside upstream's
+        // _addRowKeys closure, `this.close(true)` — is a closure bound at
+        // row-build time and unreachable to patch directly (nothing left to
+        // hook once the key exists). So `close()` itself is patched instead:
+        // whenever it actually runs while pinned, clear pinned and tell
+        // pn-panel first, then perform the real close. This cannot fire from
+        // an incidental blur/state/window-move close — those three are
+        // guarded to never call close() at all while pinned — so by
+        // construction the only calls that reach a pinned close() are
+        // deliberate dismissals (the hide key, and _emojiSelection's
+        // 'close-request', which upstream also routes through close()).
+        proto._onKeyFocusChanged = function () {
+            let focus = global.stage.key_focus;
+
+            let extendedKeysWereFocused = this._focusInExtendedKeys;
+            this._focusInExtendedKeys = focus && (focus._extendedKeys || focus.extendedKey);
+            if (this._focusInExtendedKeys || extendedKeysWereFocused)
+                return;
+
+            if (!(focus instanceof Clutter.Text)) {
+                if (!ext._pinned)
+                    this.close();
+                return;
+            }
+
+            if (!this._showIdleId) {
+                this._showIdleId = GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+                    this.open(Main.layoutManager.focusIndex);
+                    this._showIdleId = 0;
+                    return GLib.SOURCE_REMOVE;
+                });
+                GLib.Source.set_name_by_id(this._showIdleId, '[gnome-shell] this.open');
+            }
+        };
+
+        proto._onKeyboardStateChanged = function (controller, state) {
+            let enabled;
+            if (state === Clutter.InputPanelState.OFF)
+                enabled = false;
+            else if (state === Clutter.InputPanelState.ON)
+                enabled = true;
+            else if (state === Clutter.InputPanelState.TOGGLE)
+                enabled = this._keyboardVisible === false;
+            else
+                return;
+
+            if (enabled)
+                this.open(Main.layoutManager.focusIndex);
+            else if (!ext._pinned)
+                this.close(true);
+        };
+
+        // See the 🩸 note above _onKeyFocusChanged: the third unguarded
+        // close(). this._focusWindow reset stays unconditional (it is just
+        // bookkeeping about which window FocusTracker is following), only
+        // the close() call is guarded.
+        proto._onFocusWindowMoving = function () {
+            if (this._focusTracker.currentWindow === this._focusWindow) {
+                this._focusWindow = null;
+                this._focusWindowStartY = null;
+            }
+
+            if (!ext._pinned)
+                this.close(true);
+        };
+
+        // See the "Summon and dismiss" note above: the only calls that ever
+        // reach this while ext._pinned is true are deliberate dismissals
+        // (the keyboard's own hide key, or _emojiSelection's
+        // 'close-request') — every incidental close (blur, input-panel
+        // state, a focus window moving) is guarded above to skip calling
+        // close() at all while pinned. So unpinning here, unconditionally,
+        // whenever close() actually runs while pinned, is exactly "the
+        // keyboard's own hide key puts it away and clears pinned" — with no
+        // extra call site to keep in sync if another close() call is ever
+        // added upstream.
+        proto.close = function (immediate) {
+            if (ext._pinned) {
+                ext._pinned = false;
+                ext._dbus?.emit_property_changed('Pinned', new GLib.Variant('b', false));
+            }
+            return ext._origClose.call(this, immediate);
+        };
+
+        // Summon and dismiss, gesture half. keyboard.js's KeyboardManager
+        // (constructed once by Main.layoutManager at shell startup, read out
+        // of libshell-16.so's ui/keyboard.js on this device's own 48.7,
+        // lines ~1074-1088) builds its own EdgeDragAction(St.Side.BOTTOM,
+        // mode) in its constructor, stores it as this._bottomDragAction, and
+        // connects 'activated' to open the keyboard immediately —
+        // Keyboard.gestureActivate() calls open(true), the same synchronous
+        // path Pin(true) forces below, not KeyboardManager.open()'s debounced
+        // one. `mode` there is `Shell.ActionMode.ALL & ~Shell.ActionMode.
+        // LOCK_SCREEN`, so the action itself is live in every session mode
+        // but the lock screen; `enabled` toggles on the keyboard's own
+        // 'visibility-changed' (true while hidden, false while shown) —
+        // nothing in KeyboardManager gates it on screen-keyboard-enabled
+        // directly, that a11y setting only decides whether a Keyboard object
+        // exists at all (_syncEnabled), and on this device
+        // (screen-keyboard-enabled true) one exists from session start. So
+        // the drag action is there, enabled, and reachable by the time this
+        // runs — measured, not assumed, since Main.keyboard is built before
+        // any extension's enable().
+        //
+        // A second 'activated' listener is added here, next to upstream's,
+        // not instead of it: upstream's own handler still runs first and
+        // opens the keyboard the normal way, this one only pins what is
+        // already opening — the same Pin(true) a tap on the top-bar button
+        // makes, so a swipe-summoned keyboard gets every guard Pin(true)
+        // already has (the three guarded close() paths, the patched close()
+        // for the hide key) rather than a second, narrower copy of them.
+        // Gated on `pin.gesture`, disconnected in disable() — upstream's own
+        // handler and the action itself are never touched.
+        this._bottomDragAction = Main.keyboard?._bottomDragAction ?? null;
+        if (this._bottomDragAction) {
+            this._pnBottomDragActivatedId = this._bottomDragAction.connect(
+                'activated', () => {
+                    if (ext._config.pin?.gesture ?? DEFAULTS.pin.gesture)
+                        ext.Pin(true);
+                });
+        } else {
+            console.warn('[pn-osk] Main.keyboard._bottomDragAction not found ' +
+                '— bottom-edge swipe will open the keyboard but not pin it');
+        }
 
         this._exportDBus();
         this._rebuild();
         console.log(`[pn-osk] enabled, build=${BUILD}`);
+
+        // pin.atLogin. Main.keyboard already exists by this point (built at
+        // shell startup, well before any extension's enable() — same fact
+        // the gesture hook above relies on), so this needs no timeout_add
+        // the way the launcher/grid/posterise steps below do for actors that
+        // are not initialized yet. 'user' only: enable() also runs on the
+        // way into unlock-dialog mode, and pinning there would force the
+        // keyboard open over the lock screen's own password entry.
+        if ((this._config.pin?.atLogin ?? DEFAULTS.pin.atLogin) &&
+            Main.sessionMode.currentMode === 'user') {
+            this.Pin(true);
+        }
 
         // App grid as full-screen launcher: reclaim the vertical space reserved
         // for workspace previews and the dash.
@@ -1666,6 +2056,18 @@ export default class PineNoteOskExtension extends Extension {
             proto._setLatched = this._origSetLatched;
         if (this._origDisableAllModifiers)
             proto._disableAllModifiers = this._origDisableAllModifiers;
+        if (this._origSetActiveLevel)
+            proto._setActiveLevel = this._origSetActiveLevel;
+        if (this._origUpdateLevelFromHints)
+            proto._updateLevelFromHints = this._origUpdateLevelFromHints;
+        if (this._origOnKeyFocusChanged)
+            proto._onKeyFocusChanged = this._origOnKeyFocusChanged;
+        if (this._origOnKeyboardStateChanged)
+            proto._onKeyboardStateChanged = this._origOnKeyboardStateChanged;
+        if (this._origOnFocusWindowMoving)
+            proto._onFocusWindowMoving = this._origOnFocusWindowMoving;
+        if (this._origClose)
+            proto.close = this._origClose;
         this._pnUndockCandidatePopup();
 
         this._origRelayout = null;
@@ -1673,8 +2075,29 @@ export default class PineNoteOskExtension extends Extension {
         this._origAddRowKeys = null;
         this._origSetLatched = null;
         this._origDisableAllModifiers = null;
+        this._origSetActiveLevel = null;
+        this._origUpdateLevelFromHints = null;
+        this._origOnKeyFocusChanged = null;
+        this._origOnKeyboardStateChanged = null;
+        this._origOnFocusWindowMoving = null;
+        this._origClose = null;
         this._pnUnpatchModifiers();
 
+        if (this._bottomDragAction && this._pnBottomDragActivatedId) {
+            this._bottomDragAction.disconnect(this._pnBottomDragActivatedId);
+        }
+        this._bottomDragAction = null;
+        this._pnBottomDragActivatedId = 0;
+
+        // Reset, not carried across: the lock screen calls disable() on the
+        // way back out of unlock-dialog mode (both modes are listed, but the
+        // shell tears extensions down and rebuilds them around a mode switch
+        // regardless), and a pinned keyboard is the one state here that must
+        // never survive it — closing it too, if nothing is focused, is the
+        // same "unpin with no entry focused" rule Pin(false) uses.
+        if (this._pinned && !this._pnFocused())
+            this.HideKeyboard();
+        this._pinned = false;
 
         this._dbus?.unexport();
         this._dbus = null;
@@ -3025,20 +3448,70 @@ export default class PineNoteOskExtension extends Extension {
             popup.opacity = suppress ? 0 : 255;
     }
 
+    // 🩸 kb.open(monitor) (KeyboardManager.open) is upstream's own entry
+    // point and worth calling first — it sets Main.layoutManager.
+    // keyboardIndex, which _relayout() needs — but it forwards to
+    // Keyboard.open() with no arguments, so immediate defaults false and the
+    // actual show is deferred behind a KEYBOARD_REST_TIME (300ms) GLib
+    // timer: right for a focus flicker, wrong for Pin(true), a deliberate
+    // action whose whole point is "show it now". Anything that reads state
+    // right after ShowKeyboard() returns — Capture(), a caller's own D-Bus
+    // round trip — can and did outrun that timer and see nothing pinned
+    // yet, even though Pinned had already flipped true. Forcing the same
+    // Keyboard object's open(true) afterward skips straight to the
+    // synchronous _open() path (cancelling the just-scheduled timer first,
+    // so it never double-fires) and makes Pin(true) as deterministic as the
+    // property it flips.
     ShowKeyboard() {
         const kb = Main.keyboard;
         if (kb?.open)
             kb.open(Main.layoutManager.bottomIndex ?? 0);
-        else
-            kb?._keyboard?.open?.();
+        kb?._keyboard?.open?.(true);
     }
 
+    // Same determinism, the other direction: do not leave Pin(false) waiting
+    // on a rest timer a caller's next read can outrun either.
     HideKeyboard() {
         const kb = Main.keyboard;
         if (kb?.close)
             kb.close();
-        else
-            kb?._keyboard?.close?.();
+        kb?._keyboard?.close?.(true);
+    }
+
+    // CHOD selects text with touch in Firefox and elsewhere and has no way to
+    // reach Ctrl+C: the OSK only ever shows while a text entry has focus, and
+    // selecting is not focusing one. Pin(true) opens it the normal way (so it
+    // pushes the workarea exactly as a focus-triggered open does — see the
+    // comment on the two patched methods in enable()) and the patches keep
+    // it open once focus moves elsewhere. Pin(false) hands control straight
+    // back: closing here if nothing is focused, rather than waiting for the
+    // next focus change to notice, is what "unpin ⇒ normal behaviour returns
+    // immediately" means.
+    //
+    // "Nothing is focused" has to ask both mechanisms _pnFocused() checks —
+    // a Wayland client's own text field (Main.inputMethod.currentFocus) never
+    // touches stage.key_focus at all (see the enable() comment), so checking
+    // only the latter would hide the keyboard out from under someone actually
+    // typing into Firefox the moment they unpinned it.
+    Pin(pinned) {
+        pinned = !!pinned;
+        if (this._pinned === pinned)
+            return;
+        this._pinned = pinned;
+        if (pinned)
+            this.ShowKeyboard();
+        else if (!this._pnFocused())
+            this.HideKeyboard();
+        this._dbus?.emit_property_changed('Pinned', new GLib.Variant('b', this._pinned));
+    }
+
+    _pnFocused() {
+        return (global.stage.key_focus instanceof Clutter.Text) ||
+            !!Main.inputMethod.currentFocus;
+    }
+
+    get Pinned() {
+        return !!this._pinned;
     }
 
     Palette() {
