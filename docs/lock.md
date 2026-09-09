@@ -16,14 +16,26 @@ straight into the desktop, and closing the cover only suspended it.
 ```
 org.gnome.desktop.lockdown disable-lock-screen false     # the key that blocked all of the above
 org.gnome.desktop.screensaver lock-enabled true           # lock, once the screensaver activates
-org.gnome.desktop.session idle-delay 600                  # 10 minutes — setup.sh sets this to 0
+org.gnome.desktop.session idle-delay 0                    # never: see "The idle lock that reset the tablet"
 ```
 
-`idle-delay 0` in `setup/setup.sh` was chosen to stop GNOME's own idle timer from fighting
-`pn-idle-refresh` (see [`docs/setup.md`](setup.md)); turning locking on needs a nonzero value,
-so `pn lock on` overrides it back to 10 minutes. `pn lock off` restores `disable-lock-screen`
-to `true` and removes the autostart entry below, but does not touch `idle-delay` or
-`lock-enabled` — there is nothing for either to do once the lockdown key is back.
+`idle-delay` stays at the `0` that `setup/setup.sh` chose (it also keeps GNOME's idle timer
+from fighting `pn-idle-refresh`, see [`docs/setup.md`](setup.md)). So the lock fires at login,
+on suspend (which is what the cover does), and from the power button, never from idleness.
+`pn lock off` restores `disable-lock-screen` to `true` and removes the autostart entry
+below; it does not touch `lock-enabled`, which has nothing to do once the lockdown key is
+back.
+
+### The idle lock that reset the tablet
+
+The first day this lock existed, `idle-delay` was 600, and the PineNote hard-reset twice:
+once at 16:03 when gdm was restarted while the shield was up, and once at 21:48 when the
+tablet was woken after ten idle minutes had locked it and blanked the panel. Both times the
+journal ends without a shutdown sequence and the kernel logs nothing after
+`rockchip_ebc_ctx_release`, the driver letting go of the display. The three locks that were
+walked through many times that day without incident all share one thing: the panel was never
+blanked and re-lit through the shield. Until that path is understood, the lock does not come
+from idleness, and `pn reload` is done with the screen unlocked.
 
 ## The cover magnet
 
@@ -54,7 +66,7 @@ precisely for this, see [`docs/keyboard.md`](keyboard.md#pinning-the-keyboard).
 install -m 0644 setup/pn-lock-at-login.desktop ~/.config/autostart/pn-lock-at-login.desktop
 gsettings set org.gnome.desktop.lockdown disable-lock-screen false
 gsettings set org.gnome.desktop.screensaver lock-enabled true
-gsettings set org.gnome.desktop.session idle-delay 600
+gsettings set org.gnome.desktop.session idle-delay 0
 ```
 
 `pn lock` reports the autostart entry and all three keys; `pn lock on|off` toggles the whole

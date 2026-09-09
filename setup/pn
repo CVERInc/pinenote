@@ -126,7 +126,9 @@ f_lock_set() {
       install -m 0644 "$(dirname "$(readlink -f "$0")")/pn-lock-at-login.desktop" "$LOCK_AUTOSTART"
       gsettings set org.gnome.desktop.lockdown disable-lock-screen false
       gsettings set org.gnome.desktop.screensaver lock-enabled true
-      gsettings set org.gnome.desktop.session idle-delay 600
+      # idle-delay stays 0: an idle lock blanks the e-ink, and waking from that
+      # blank hard-reset the tablet twice on 2026-09-09. See docs/lock.md.
+      gsettings set org.gnome.desktop.session idle-delay 0
       ;;
     off)
       rm -f "$LOCK_AUTOSTART"
