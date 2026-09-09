@@ -67,6 +67,103 @@ f_idle_set() {
   esac
 }
 
+# Clipboard relay: pulls the Mac's clipboard over the ssh connection that
+# already works unattended in that direction. See docs/clipboard.md.
+f_cliprelay_status() { ok cliprelay "$(unit_active pn-clip-relay.service)"; }
+f_cliprelay_set() {
+  case $1 in
+    on)  systemctl --user enable --now pn-clip-relay.service ;;
+    off) systemctl --user disable --now pn-clip-relay.service ;;
+  esac
+}
+
+# Clipboard inbox: a direct iPhone -> PineNote path over the tailnet, for
+# when there's no Mac nearby for Universal Clipboard to relay through. Unlike
+# cliprelay, "on" also installs the unit and mints the token, since there's
+# nothing for a person to run by hand on the iPhone side. See docs/clipboard.md.
+CLIPINBOX_TOKEN="$HOME/.config/pn-clip-inbox.token"
+f_clipinbox_status() { ok clipinbox "$(unit_active pn-clip-inbox.service)"; }
+f_clipinbox_set() {
+  case $1 in
+    on)
+      local D; D="$(dirname "$(readlink -f "$0")")"
+      chmod +x "$D/pn-clip-inbox"
+      mkdir -p "$HOME/.config/systemd/user"
+      install -m 0644 "$D/pn-clip-inbox.service" "$HOME/.config/systemd/user/pn-clip-inbox.service"
+      systemctl --user daemon-reload
+      if [ ! -f "$CLIPINBOX_TOKEN" ]; then
+        (umask 177; { command -v openssl >/dev/null 2>&1 && openssl rand -hex 16 || python3 -c 'import secrets; print(secrets.token_hex(16))'; } > "$CLIPINBOX_TOKEN")
+      fi
+      chmod 0600 "$CLIPINBOX_TOKEN"
+      systemctl --user enable --now pn-clip-inbox.service
+      local ip; ip=$(tailscale ip -4 2>/dev/null)
+      [ -n "$ip" ] || ip="<this device's tailnet IPv4>"
+      echo "  URL:   http://${ip}:8765/clip"
+      echo "  Token: $(cat "$CLIPINBOX_TOKEN")"
+      echo "  (put both into the iOS Shortcut's X-Token header — see docs/clipboard.md)"
+      ;;
+    off) systemctl --user disable --now pn-clip-inbox.service ;;
+  esac
+}
+
+# Lock at login: PNDeb shipped autologin plus the lockdown key that blocks all
+# locking, so nothing ever locked. This installs a per-session autostart entry
+# that locks the (still auto-logged-in) session as soon as it comes up, and
+# sets the three keys that let locking — idle, suspend, cover-close — actually
+# happen. See docs/lock.md.
+LOCK_AUTOSTART="$HOME/.config/autostart/pn-lock-at-login.desktop"
+f_lock_status() {
+  local a; [ -f "$LOCK_AUTOSTART" ] && a=on || a=off
+  local dl; dl=$(gs org.gnome.desktop.lockdown disable-lock-screen)
+  local le; le=$(gs org.gnome.desktop.screensaver lock-enabled)
+  local id; id=$(gs org.gnome.desktop.session idle-delay)
+  ok lock "autostart=$a disable-lock-screen=${dl:-?} lock-enabled=${le:-?} idle-delay=${id:-?}"
+}
+f_lock_set() {
+  case $1 in
+    on)
+      mkdir -p "$HOME/.config/autostart"
+      install -m 0644 "$(dirname "$(readlink -f "$0")")/pn-lock-at-login.desktop" "$LOCK_AUTOSTART"
+      gsettings set org.gnome.desktop.lockdown disable-lock-screen false
+      gsettings set org.gnome.desktop.screensaver lock-enabled true
+      gsettings set org.gnome.desktop.session idle-delay 600
+      ;;
+    off)
+      rm -f "$LOCK_AUTOSTART"
+      gsettings set org.gnome.desktop.lockdown disable-lock-screen true
+      ;;
+  esac
+}
+
+# Autorotate: the accelerometer feeding
+# org.gnome.settings-daemon's orientation lock. iio-sensor-proxy wedges after
+# a cover-close suspend (`pinenote_sleep_on_cover_close.sh`) — the driver's
+# st_accel_suspend/resume pair runs fine, the daemon just never reclaims the
+# device afterwards, "Failed to claim accelerometer: Timeout was reached"
+# until it's restarted. iio-sensor-proxy-resume.service (a *system* unit, not
+# this repo's usual --user ones — nothing user-session-shaped exists yet at
+# resume time) hooks suspend.target's Install and restarts it every time.
+# Source of truth for the unit is systemd; for the lock, gsettings.
+f_autorotate_status() {
+  local u; u=$(sudo systemctl is-enabled iio-sensor-proxy-resume.service 2>/dev/null)
+  local l; l=$(gs org.gnome.settings-daemon.peripherals.touchscreen orientation-lock)
+  ok autorotate "resume-unit=${u:-not-installed} orientation-lock=${l:-?}"
+}
+f_autorotate_set() {
+  case $1 in
+    on)
+      sudo install -m 0644 "$(dirname "$(readlink -f "$0")")/iio-sensor-proxy-resume.service" /etc/systemd/system/iio-sensor-proxy-resume.service
+      sudo systemctl daemon-reload
+      sudo systemctl enable iio-sensor-proxy-resume.service
+      gsettings set org.gnome.settings-daemon.peripherals.touchscreen orientation-lock false
+      ;;
+    off)
+      sudo systemctl disable iio-sensor-proxy-resume.service 2>/dev/null
+      gsettings set org.gnome.settings-daemon.peripherals.touchscreen orientation-lock true
+      ;;
+  esac
+}
+
 # The three extensions.
 f_osk_status()   { ok osk   "$(ext_state pn-osk@cver.net)"; }
 f_panel_status() { ok panel "$(ext_state pn-panel@cver.net)"; }
@@ -235,13 +332,13 @@ f_reload_cmd() {
 }
 
 # ── dispatch ───────────────────────────────────────────────────────────────
-ALL="typing idle osk panel wave k6 wifi ime buttons"
+ALL="typing idle osk panel wave k6 wifi cliprelay clipinbox lock autorotate ime buttons"
 
 if [ $# -eq 0 ]; then
   echo "pn — current state (reads the source of truth, not the config file)"
   for f in $ALL; do "f_${f}_status"; done
   echo
-  echo "toggleable (pn <name> on|off): typing idle osk panel wave k6 wifi"
+  echo "toggleable (pn <name> on|off): typing idle osk panel wave k6 wifi cliprelay clipinbox lock autorotate"
   echo "input method: pn ime add|rm <engine>    top row: pn buttons <input|tone|refresh|rotate> on|off"
   echo "after changing an extension's JS: pn reload (restart gdm3)"
   exit 0
