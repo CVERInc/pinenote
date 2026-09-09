@@ -107,6 +107,26 @@ projects — and so cannot fork — until an SSH key is on the account, after wh
 automation lifts the limit within about half an hour. That is documented in the
 GNOME handbook; the error message does not say so.
 
+## gnome-shell — dead Key objects in `_modifierKeys` after a layout rebuild
+
+- **Status:** draft, not yet filed. Draft kept locally until filed.
+
+`Keyboard._addRowKeys` appends every on-screen modifier key to
+`this._modifierKeys[keyval]`, which `_setModifierEnabled` walks to latch or
+unlatch them together. `_updateLayout` destroys `this._currentLayout` — every
+`Key` the prior `_addRowKeys` run built — on each rebuild, but never clears
+that map, so the destroyed generation's Keys stay in the lists the next
+modifier tap walks, and each tap logs one "Object St.Button has been already
+disposed" per dead key.
+
+Proposed fix: `this._modifierKeys = new Map()` at the top of `_updateLayout`,
+before the `_addRowKeys` calls that repopulate it; and use `Map` semantics
+(`.get()`/`.set()`/`.clear()`) consistently, since the field is declared a
+`Map` but read and written everywhere with `[]` property access.
+
+Our workaround: `extensions/pn-osk@cver.net` resets `this._modifierKeys` at
+the top of its `_updateLayout` wrapper. Keep it until this lands upstream.
+
 ## pinenote-gnome-extension — quality-mode honours its value
 
 - **PR:** [PNDeb/pinenote-gnome-extension#26](https://github.com/PNDeb/pinenote-gnome-extension/pull/26)

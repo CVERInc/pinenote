@@ -98,6 +98,12 @@ file per subject, in the order the device asks for them:
   this device, and what "an override lands only if the key exists" cost the version before it.
 - [`docs/microphones.md`](docs/microphones.md) — four PDM microphones nobody had documented, what
   beamforming can and cannot do with them, and dictating through whisper.cpp on the device itself.
+- [`docs/clipboard.md`](docs/clipboard.md) — why the Mac's clipboard is pulled rather than pushed,
+  the byte-exact framing that gets a multi-line, any-UTF-8 paste across it intact, and the
+  tailnet-only inbox that takes the Mac out of the loop entirely for an iPhone on its own.
+- [`docs/lock.md`](docs/lock.md) — the lockdown key that kept this device from ever locking, why
+  it locks at login instead of turning off autologin, and what closing the cover does now that
+  it's cleared.
 
 ## Upstream
 
