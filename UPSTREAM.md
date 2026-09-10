@@ -143,7 +143,20 @@ left as a separate cleanup.
 Our workaround: `extensions/pn-osk@cver.net` clears `this._modifierKeys` at
 the top of its `_updateLayout` wrapper. It clears rather than reassigns, so
 that it stays harmless on a shell that has taken !4396 and turned the field
-into a real `Map`. Keep it until that lands here.
+into a real `Map`.
+
+**Nobody has to watch for that day.** Upstream merging is not the same event as
+Debian shipping it to this tablet, and only the second one matters for deleting
+the workaround, so the tablet is what gets asked. After every layout rebuild the
+extension checks whether the shell put its modifier keys in the `Map` through
+`.set()`, which is what !4396 changed and what leaves `.size` above zero; 48.7
+hangs them on the object as properties and leaves `.size` at 0. When it flips,
+the journal gets one line and `pn osk` grows `upstream-fixed:!4396-landed`. Both
+say the same thing: this entry and that wrapper can go.
+
+`setup/test-upstream-probe.mjs` covers the probe against both shapes, including
+the one this device cannot produce yet, and both arms are `instanceof Map` on
+purpose: that is the check the bug makes useless.
 
 ## pinenote-gnome-extension — quality-mode honours its value
 

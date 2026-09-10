@@ -167,7 +167,24 @@ f_autorotate_set() {
 }
 
 # The three extensions.
-f_osk_status()   { ok osk   "$(ext_state pn-osk@cver.net)"; }
+# osk status carries one extra word when it applies: the extension watches
+# whether this shell has taken gnome-shell!4396 (see UPSTREAM.md), and says so
+# here rather than leaving it to somebody to notice. `upstream-fixed` means the
+# reset in pn-osk's _updateLayout wrapper is doing nothing any more and can go.
+f_osk_status()   {
+  local extra=""
+  # gdbus prints the JSON with its quotes backslash-escaped, so the pattern
+  # allows any run of quotes and backslashes between the key and the colon
+  # rather than assuming one shape. Matching the key and the value together
+  # matters too: a bare *true* would find "visible" or any latched key.
+  if gdbus call --session --dest org.gnome.Shell \
+       --object-path /org/cver/PnOsk \
+       --method org.cver.PnOsk.Keys 2>/dev/null |
+     grep -q 'upstreamOwnsModifierKeys[\\"]*:true'; then
+    extra=" upstream-fixed:!4396-landed"
+  fi
+  ok osk "$(ext_state pn-osk@cver.net)$extra"
+}
 f_panel_status() { ok panel "$(ext_state pn-panel@cver.net)"; }
 f_wave_status()  { ok wave  "$(ext_state pn-wave@cver.net)"; }
 f_osk_set()   { gnome-extensions "$([ "$1" = on ] && echo enable || echo disable)" pn-osk@cver.net; }

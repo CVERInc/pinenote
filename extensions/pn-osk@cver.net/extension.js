@@ -57,7 +57,7 @@ import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import * as InputSourceStatus from 'resource:///org/gnome/shell/ui/status/keyboard.js';
 import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 
-const BUILD = 42;
+const BUILD = 43;
 
 // These represent the panel's physics, as a default state rather than a toggle.
 // They were previously applied manually over D-Bus because CSS overrides were
@@ -408,6 +408,24 @@ function currentEngineId() {
 // one (VARIATION SELECTOR-16, ZERO WIDTH JOINER, COMBINING ENCLOSING KEYCAP).
 // Letters, digits and punctuation never match, so this only ever fires for
 // what the emoji page itself sends.
+// Does this shell store modifier keys through the Map API, the way
+// gnome-shell!4396 changed it to, or as properties hung on the Map object,
+// the way 48.7 does?
+//
+// It has to be asked behaviourally. The field is declared `new Map()` in both,
+// including the versions that then index it with brackets, so `instanceof Map`
+// answers yes either way and settles nothing. Only entries put there with
+// .set() count towards .size, so after a layout is rebuilt .size is 0 on a
+// shell that still needs our workaround and above 0 on one that does not.
+//
+// When it turns true the reset in the _updateLayout wrapper is redundant, and
+// so is the workaround note in UPSTREAM.md. The extension says so in the
+// journal once per session and through Keys(), which is how anyone finds out
+// without having to remember to look, and without anything running elsewhere.
+function pnUpstreamOwnsModifierKeys(mk) {
+    return typeof mk?.size === "number" && mk.size > 0;
+}
+
 function pnIsEmojiString(str) {
     if (!str)
         return false;
@@ -786,6 +804,17 @@ export default class PineNoteOskExtension extends Extension {
             // every rebuild, which is the honest place for it.
             if (ext._config.fillWidth)
                 ext._forceFullWidth(this);
+
+            ext._pnUpstreamOwnsModifierKeys =
+                pnUpstreamOwnsModifierKeys(this._modifierKeys);
+            if (ext._pnUpstreamOwnsModifierKeys && !ext._pnUpstreamNoted) {
+                ext._pnUpstreamNoted = true;
+                console.log("[pn-osk] this shell stores _modifierKeys through " +
+                    "the Map API, which is gnome-shell!4396 landing here. The " +
+                    "reset in our _updateLayout wrapper is redundant now, and " +
+                    "so is the workaround note in UPSTREAM.md. `pn osk` says " +
+                    "the same thing.");
+            }
             return ret;
         };
 
@@ -3124,6 +3153,8 @@ export default class PineNoteOskExtension extends Extension {
             build: BUILD,
             visible: kb?.visible ?? null,
             modifiers: [...(kb?._modifiers ?? [])],
+            // null until this session has rebuilt a layout at least once.
+            upstreamOwnsModifierKeys: this._pnUpstreamOwnsModifierKeys ?? null,
             keys: this._pnKeyList(this._pnLayerKeys()),
         });
     }
