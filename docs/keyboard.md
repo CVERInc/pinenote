@@ -21,8 +21,13 @@ a navigation column down the right edge. Portrait gets the same keyboard: one
 layout in both orientations is worth more than two tuned ones, and rotating the
 tablet no longer moves a key. The modifiers are named in lower case on both — the
 words fit once the label size is trimmed, and a key that can spell itself beats a
-glyph you have to learn. Escape keeps `⎋` in portrait, where the column is
-narrowest. Renames live in `labels` (both orientations) and `portrait.labels`
+glyph you have to learn. Escape reads `Esc` in both. It did keep `⎋`
+upright, back when it was the stock Escape under a rename: `portrait.labels`
+only reaches keys the stock layout draws, and the k6 layout emits its own
+Escape from `navLabels`, which has one value per key and no portrait variant.
+That `⎋` is still live with `k6Layout` off. It is not missed here: 13 columns
+across 1404 px leave the word more room than the 67 px that started the
+argument. Renames live in `labels` (both orientations) and `portrait.labels`
 (upright only), the second layered over the first.
 
 It also adds an Escape key, which the stock terminal layout does not have in any
