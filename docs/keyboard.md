@@ -11,7 +11,8 @@ keys were narrow enough that the terminal layout's own labels ellipsized: `Tab`
 rendered as `T…`, `Ctrl` as `C…`, `?123` as `?…`. They were not mystery keys.
 They were keys that could not spell their names.
 
-![The keyboard, landscape and portrait](../extensions/pn-osk@cver.net/keyboard.png)
+![Summoned with nothing focused, landscape and portrait: the keyboard holds the
+bottom third and the workarea moves up to meet it](../extensions/pn-osk@cver.net/keyboard.png)
 
 `extensions/pn-osk@cver.net` makes the keys use the band that was already being
 paid for, and rebuilds the terminal layout as a 65% keyboard: the digits with
