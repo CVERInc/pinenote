@@ -1,6 +1,6 @@
 {
   "fillWidth": true,
-  "k6Layout": true,
+  "layout65": true,
   "trace": false,
   "chords": true,
   "fullLayoutEverywhere": true,
@@ -55,7 +55,7 @@
   },
   "columns": 17,
   "portrait": {
-    "k6": true,
+    "layout65": true,
     "labels": {
       "Esc": "⎋",
       "Tab": "tab",

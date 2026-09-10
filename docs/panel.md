@@ -227,8 +227,10 @@ leaves Quick Settings along with it, and the screen stops following the
 sensor even though `AccelerometerOrientation` keeps updating.
 
 Two independent causes were found for that, not one. A paired Bluetooth
-keyboard (a Keychron Q1 Max) shows up in libinput as a keyboard and a
-pointer, and is one. The other turned out to be this extension's own doing:
+keyboard shows up in libinput as two devices, a keyboard and a pointer,
+which is ordinary for anything carrying a knob or media keys, and is one.
+No particular model is at fault: what ends touch mode is the pointer,
+whoever brings one. The other turned out to be this extension's own doing:
 the persistent virtual pointer device the long-press gesture used to keep
 open for the life of the extension (see "One finger, hold for a menu" below)
 reads to Mutter exactly like a real mouse being attached, so pn-panel was

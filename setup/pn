@@ -174,17 +174,17 @@ f_osk_set()   { gnome-extensions "$([ "$1" = on ] && echo enable || echo disable
 f_panel_set() { gnome-extensions "$([ "$1" = on ] && echo enable || echo disable)" pn-panel@cver.net; }
 f_wave_set()  { gnome-extensions "$([ "$1" = on ] && echo enable || echo disable)" pn-wave@cver.net; }
 
-# k6 layout (k6Layout in pn-osk.json).
-f_k6_status() {
-  local v; v=$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.config/pn-osk.json"))).get("k6Layout",True))' 2>/dev/null)
-  ok k6 "${v:-?}"
+# 65% layout (layout65 in pn-osk.json).
+f_layout65_status() {
+  local v; v=$(python3 -c 'import json,os;print(json.load(open(os.path.expanduser("~/.config/pn-osk.json"))).get("layout65",True))' 2>/dev/null)
+  ok layout65 "${v:-?}"
 }
-f_k6_set() {
+f_layout65_set() {
   python3 - "$1" <<'PY'
 import json,os,sys
 p=os.path.expanduser("~/.config/pn-osk.json")
 d=json.load(open(p))
-d["k6Layout"]= sys.argv[1]=="on"
+d["layout65"]= sys.argv[1]=="on"
 json.dump(d,open(p,"w"),indent=2,ensure_ascii=False)
 PY
   echo "  (pn-osk re-reads this on its next rebuild — dismiss and bring up the keyboard again to trigger one)"
@@ -334,13 +334,13 @@ f_reload_cmd() {
 }
 
 # ── dispatch ───────────────────────────────────────────────────────────────
-ALL="typing idle osk panel wave k6 wifi cliprelay clipinbox lock autorotate ime buttons"
+ALL="typing idle osk panel wave layout65 wifi cliprelay clipinbox lock autorotate ime buttons"
 
 if [ $# -eq 0 ]; then
   echo "pn — current state (reads the source of truth, not the config file)"
   for f in $ALL; do "f_${f}_status"; done
   echo
-  echo "toggleable (pn <name> on|off): typing idle osk panel wave k6 wifi cliprelay clipinbox lock autorotate"
+  echo "toggleable (pn <name> on|off): typing idle osk panel wave layout65 wifi cliprelay clipinbox lock autorotate"
   echo "input method: pn ime add|rm <engine>    top row: pn buttons <input|tone|refresh|rotate> on|off"
   echo "after changing an extension's JS: pn reload (restart gdm3)"
   exit 0

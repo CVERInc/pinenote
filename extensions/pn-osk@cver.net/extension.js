@@ -15,7 +15,7 @@
 //
 //   fillWidth   override the ratio in landscape so the keys use the band that
 //               was already being paid for
-//   k6Layout    rebuild the terminal layout as a real 65% keyboard: the digits
+//   layout65    rebuild the terminal layout as a real 65% keyboard: the digits
 //               with their shifted faces, the punctuation where fingers expect
 //               it, an inverted-T, and a navigation column down the right edge.
 //               The stock us-extended layout has no Escape key in any of its
@@ -73,7 +73,7 @@ const PN_PAGE_INDICATOR_ROOM = 28;
 
 const DEFAULTS = {
     fillWidth: true,
-    k6Layout: true,
+    layout65: true,
     trace: false,
 
     // BUILD 42. Measured: with an IBus source active (rime TW, mozc JP),
@@ -203,13 +203,13 @@ const DEFAULTS = {
     // Portrait is 1404px wide, not 1872, so 17 columns leave 67px each and the
     // word keys ellipsize. The first answer here was to drop to a 13-column
     // layout in portrait, which was giving up on a symptom: what did not fit
-    // was the labels, not the layout. Set k6 false to get that fallback back.
+    // was the labels, not the layout. Set layout65 false to get that fallback back.
     portrait: {
         // The same layout in both orientations. Two layouts means relearning
         // where the keys are every time the tablet turns, which costs more
         // than the narrower keys do — 17 columns of 1404px is 7.5mm a key,
         // which is still a touch target.
-        k6: true,
+        layout65: true,
 
         // What actually broke at that width was the labels, not the layout:
         // "Esc", "Ctrl", "Alt" and "?123" ellipsize at 67px. These are the
@@ -371,7 +371,7 @@ const charKeys = str => [...(str ?? '')].map(c => ({label: c, strings: [c]}));
 //
 // Level 0 only: bopomofo has no shift level. Shift remains uppercase latin
 // and symbols.
-// Bopomofo only, no latin: a k6 key is 109px (82px in portrait), with 1.1em text.
+// Bopomofo only, no latin: a 65% layout key is 109px (82px in portrait), with 1.1em text.
 // An iPad shows large bopomofo and small latin corners, because the reader looks
 // for bopomofo. St.Label does not support two-tier layouts, and squeezing two
 // characters into one keycap renders both unreadable. The US layout provides latin.
@@ -745,7 +745,7 @@ export default class PineNoteOskExtension extends Extension {
             if (ext._config.trace) {
                 log(`[pn-osk] _updateLayout group=${groupName} purpose=${purpose} ` +
                     `effectivePurpose=${effectivePurpose} ` +
-                    `TERMINAL=${Clutter.InputContentPurpose.TERMINAL} k6=${ext._config.k6Layout}`);
+                    `TERMINAL=${Clutter.InputContentPurpose.TERMINAL} layout65=${ext._config.layout65}`);
             }
 
             // Compose the whole terminal layout up front. _addRowKeys is told
@@ -765,7 +765,7 @@ export default class PineNoteOskExtension extends Extension {
                 Clutter.InputContentPurpose.TERMINAL,
                 Clutter.InputContentPurpose.NORMAL,
             ];
-            if (composeFor.includes(effectivePurpose) && ext._config.k6Layout)
+            if (composeFor.includes(effectivePurpose) && ext._config.layout65)
                 this._pnComposed = ext._composeLayout(groupName, landscape);
 
             const ret = ext._origUpdateLayout.call(this, groupName, effectivePurpose);
@@ -2446,9 +2446,9 @@ export default class PineNoteOskExtension extends Extension {
                     `${rows ? rows.length : "no"} rows, need 4`);
                 return null;
             }
-            const portraitK6 =
-                !landscape && (this._config.portrait?.k6 ?? DEFAULTS.portrait.k6);
-            let built = landscape || portraitK6
+            const portraitLayout65 =
+                !landscape && (this._config.portrait?.layout65 ?? DEFAULTS.portrait.layout65);
+            let built = landscape || portraitLayout65
                 ? this._composeLevel(rows, level)
                 : this._composePortrait(rows, level);
             if (!built) {
@@ -2463,7 +2463,7 @@ export default class PineNoteOskExtension extends Extension {
             built = relabel(built, {
                 ...DEFAULTS.labels,
                 ...this._config.labels,
-                ...(portraitK6
+                ...(portraitLayout65
                     ? {...DEFAULTS.portrait.labels, ...this._config.portrait?.labels}
                     : {}),
             });

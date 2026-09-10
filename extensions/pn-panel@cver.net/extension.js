@@ -146,7 +146,7 @@ const PN_HIDDEN_PANEL_ROLES = [
 
 // ── Input sources ─────────────────────────────────────────────────────────
 // One layout, three engines: pinyin, romaji, and English consume the same 26
-// letters, so k6 does not need changing (pn-osk's us-extended fallback
+// letters, so the 65% layout does not need changing (pn-osk's us-extended fallback
 // catches ibus engines with layout=default). The cost is that 'which engine
 // is active' becomes the only thing that can go wrong, and that was
 // originally written on an indicator that is now hidden.
@@ -178,7 +178,7 @@ const PN_HIDDEN_PANEL_ROLES = [
 //    engines: mozc-jp (generic), mozc-on (Mozc:あ, hiragana on activation),
 //    mozc-off (Mozc:A_). Hooking up mozc-jp leaves it in direct-input mode,
 //    typing romaji outputs latin letters — looking exactly like a broken
-//    input method, and the k6 layout has no hankaku/zenkaku key to escape it.
+//    input method, and the 65% layout has no hankaku/zenkaku key to escape it.
 //    mozc-on is kana from the start. This is exactly macOS's approach of
 //    making 'かな' and '英数' two input sources.
 //    Both names are kept in the table: anyone switching back should not lose
@@ -188,8 +188,8 @@ const PN_HIDDEN_PANEL_ROLES = [
 // provided — this keyboard and button must serve other CJK users, and
 // 'engine installed but missing label' is the hardest failure to trace. Both
 // use US keys:
-//   chewing  declares layout=us, mapping US keys to bopomofo itself, so k6
-//            is untouched
+//   chewing  declares layout=us, mapping US keys to bopomofo itself, so the
+//            65% layout is untouched
 //   hangul   declares layout=kr, but _composeLayout lacks kr-extended and
 //            falls back to us-extended, and 2-set hangul uses latin keys to
 //            type letters anyway
@@ -251,7 +251,7 @@ const PN_INPUT_LABELS = {
 // key is the direct shortcut bound by ime.sh in default.custom.yaml:
 //   key_binder/bindings: {when: always, accept: F7, select: luna_pinyin_tw} …
 // librime's select action switches schemas directly — opening no menu. F7/F8
-// were chosen because they are absent from the k6 layout, unpressable by a
+// were chosen because they are absent from the 65% layout, unpressable by a
 // human, synthesised only by us.
 const PN_RIME_FACES = {
     pinyin:   {schema: "luna_pinyin_tw", key: "F7"},

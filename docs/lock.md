@@ -62,7 +62,7 @@ been exercised on this panel, and a login screen you can't type into on a device
 physical keyboard is a worse failure than a session that starts unlocked. `setup/pn-lock-at-login.desktop` is a per-session autostart entry instead — it runs once the
 (still auto-logged-in) session comes up and locks it immediately, so the state you land in is
 "logged in, but locked" rather than "not logged in yet." The password entry you actually type
-into is GNOME Shell's own unlock dialog, which by this point already gets `pn-osk`'s k6
+into is GNOME Shell's own unlock dialog, which by this point already gets `pn-osk`'s 65%
 keyboard — `pn-osk`'s `metadata.json` carries `session-modes: ["user", "unlock-dialog"]`
 precisely for this, see [`docs/keyboard.md`](keyboard.md#pinning-the-keyboard).
 

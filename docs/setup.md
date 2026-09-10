@@ -85,7 +85,7 @@ difference before.
 
 ```
 pn                          everything, current state
-pn wifi off                 typing / idle / osk / panel / wave / k6 / wifi
+pn wifi off                 typing / idle / osk / panel / wave / layout65 / wifi
 pn ime add chewing          into the cycle, in tap order — or rm
 pn buttons rotate off       any of input / tone / refresh / rotate
 pn reload                   restart gdm3, and again if the greeter wins the race

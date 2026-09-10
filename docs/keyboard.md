@@ -23,9 +23,9 @@ tablet no longer moves a key. The modifiers are named in lower case on both — 
 words fit once the label size is trimmed, and a key that can spell itself beats a
 glyph you have to learn. Escape reads `Esc` in both. It did keep `⎋`
 upright, back when it was the stock Escape under a rename: `portrait.labels`
-only reaches keys the stock layout draws, and the k6 layout emits its own
+only reaches keys the stock layout draws, and this layout emits its own
 Escape from `navLabels`, which has one value per key and no portrait variant.
-That `⎋` is still live with `k6Layout` off. It is not missed here: 13 columns
+That `⎋` is still live with `layout65` off. It is not missed here: 13 columns
 across 1404 px leave the word more room than the 67 px that started the
 argument. Renames live in `labels` (both orientations) and `portrait.labels`
 (upright only), the second layered over the first.
@@ -267,7 +267,7 @@ never fires on the way into the lock screen's own `unlock-dialog` mode.
 `metadata.json` carries `session-modes: ["user", "unlock-dialog"]` now, so
 this layout is what the GNOME lock screen's password entry gets too, once
 that is turned on — not this button, `pn-panel` stays user-mode only, but the
-k6 keyboard underneath it does not stop existing just because the session
+keyboard underneath it does not stop existing just because the session
 locked. The mode switch is one more caller of `disable()`/`enable()`, on top
 of everything already exercising them (`gnome-extensions disable`/`enable`,
 `pn reload`), which is the other reason pinned resets there rather than
@@ -425,7 +425,7 @@ zero.
 **`mozc-on`, not `mozc-jp`.** ibus-mozc declares three engines — `mozc-jp`
 (generic), `mozc-on` (Mozc:あ), `mozc-off` (Mozc:A_). Wire up `mozc-jp` and it
 sits in direct-input mode, so romaji comes out as latin letters and looks exactly
-like an input method that failed to install; the k6 layout has no
+like an input method that failed to install; the 65% layout has no
 hankaku/zenkaku key to get out of it. `mozc-on` activates in kana. This is the
 same split macOS makes between かな and 英数.
 
@@ -434,7 +434,7 @@ English consume the same 26 letters. Both CJK engines declare `layout` values th
 OSK has no page for — `default` for rime and mozc, `kr` for hangul — and
 `_composeLayout`'s fall-through to `us-extended` catches every one of them. That
 fall-back was written for a missing terminal layout; it is the only reason the
-k6 keyboard survives switching engines at all.
+keyboard survives switching engines at all.
 
 ## The candidate window took four fixes, and they were four different bugs
 
@@ -577,7 +577,7 @@ cycles *faces* — `US → JP → TW(pinyin) → TW(bopomofo)` — and switching
 the two TW faces means switching RIME's schema. That is one synthesised
 keypress: `ime.sh` binds `F7 → select luna_pinyin_tw` and `F8 → select
 bopomofo_tw` through librime's `key_binder`, whose `select` action switches
-schema directly — no menu, no intermediate state. F7/F8 because the k6 layout
+schema directly — no menu, no intermediate state. F7/F8 because the 65% layout
 has no F keys: a human cannot press them, only `pn-panel` can.
 
 It was not one keypress for most of a day. The first design drove RIME's F4
@@ -616,7 +616,7 @@ on the glass: `su3cl3` → ㄋㄧˇ ㄏㄠˇ in the preedit, 你好安安超讚�
 
 Bopomofo through RIME would have been free — `rime-data-bopomofo` is already
 there — but it would share the single `rime` engine slot and need `Ctrl+`` ` `` to
-switch schemas, and the k6 portrait layout has no backtick. A separate engine is
+switch schemas, and the 65% portrait layout has no backtick. A separate engine is
 the right shape here.
 
 **JIS is deliberately absent.** For a physical JIS keyboard this repository needs
