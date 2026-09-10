@@ -711,7 +711,17 @@ export default class PineNoteOskExtension extends Extension {
             // "already disposed" per dead key (thousands per session here).
             // A rebuild is the moment the old keys stop existing, so this is
             // where the lists start over. Reported upstream; see UPSTREAM.md.
-            this._modifierKeys = {};
+            //
+            // Cleared rather than replaced, because the field is declared as a
+            // Map upstream even though 48.7 only ever indexes it like an
+            // object. gnome-shell!4396 makes the accesses match the
+            // declaration, and assigning a plain object here would break a
+            // shell that had adopted it; this way the line is harmless the
+            // day upstream starts clearing the Map itself.
+            if (this._modifierKeys instanceof Map)
+                this._modifierKeys.clear();
+            else
+                this._modifierKeys = {};
             this._pnPurpose = purpose;
             if (ext._config.chords)
                 ext._pnPatchModifiers(this);

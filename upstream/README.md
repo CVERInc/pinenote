@@ -28,3 +28,17 @@ someone has to review — the reproducible part is the report.
   the cheapest honesty available.
 - Search first. #9336 was a duplicate, and finding that out after filing is worse
   than finding it out before.
+- A merge request description is not a report. #9408 went up with the whole
+  investigation in the description of its patch, and the one comment it drew
+  said it was too verbose to read. The issue holds the evidence; the merge
+  request holds the change and a line saying which issue it closes.
+- The no-patch rule got tested here and the result is not one-sided. !4394 broke
+  it, was closed, and a maintainer wrote his own fix within the hour, better
+  than ours on two counts. The patch did not survive; the bug got fixed the same
+  day it was reported, which a report alone had not managed for the older ones
+  in this table. Attaching one is still the exception, and it costs the right to
+  complain about what happens to it.
+- Fix the thing, not the symptom. Ours reset the field and left a note that its
+  declared type and its actual use disagreed; the accepted patch made them
+  agree. Naming an inconsistency and stepping around it invites someone to
+  wonder whether the author understood it.

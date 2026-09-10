@@ -112,9 +112,18 @@ GNOME handbook; the error message does not say so.
 - **Issue:** [gnome-shell#9408](https://gitlab.gnome.org/GNOME/gnome-shell/-/issues/9408)
   (open, filed 2026-09-10; report text in
   [`upstream/gnome-shell-modifier-keys-dead-objects.md`](upstream/gnome-shell-modifier-keys-dead-objects.md))
-- **MR:** [gnome-shell!4394](https://gitlab.gnome.org/GNOME/gnome-shell/-/merge_requests/4394)
-  — `keyboard: Reset _modifierKeys when the layout is rebuilt`, from the fork at
-  `cver/gnome-shell`, branch `keyboard-reset-modifier-keys`.
+- **MR:** ours, [gnome-shell!4394](https://gitlab.gnome.org/GNOME/gnome-shell/-/merge_requests/4394),
+  is **closed**. A maintainer replaced it the same hour with
+  [!4396](https://gitlab.gnome.org/GNOME/gnome-shell/-/merge_requests/4396),
+  `keyboard: Properly use modifier keys as a Map (and clear them on reset)`,
+  which carries `Closes: #9408 (overrides !4394)`. Theirs is the better patch
+  on two counts: it makes every access use the `Map` the field is declared as,
+  rather than leaving that inconsistency for later as ours did, and it clears
+  `_modifiers` alongside `_modifierKeys` so a modifier latched before a rebuild
+  cannot survive it with no key left to paint. The one comment on ours also
+  said the description was too verbose to read, which is the lesson worth
+  keeping: the investigation belongs in the issue, and the merge request gets
+  the change.
 
 `Keyboard._addRowKeys` appends every on-screen modifier key to
 `this._modifierKeys[keyval]`, which `_setModifierEnabled` walks to latch or
@@ -131,8 +140,10 @@ is read and written everywhere (bracket access), despite being declared
 `new Map()` in the constructor. That mismatch is called out in the MR and
 left as a separate cleanup.
 
-Our workaround: `extensions/pn-osk@cver.net` resets `this._modifierKeys` at
-the top of its `_updateLayout` wrapper. Keep it until this lands upstream.
+Our workaround: `extensions/pn-osk@cver.net` clears `this._modifierKeys` at
+the top of its `_updateLayout` wrapper. It clears rather than reassigns, so
+that it stays harmless on a shell that has taken !4396 and turned the field
+into a real `Map`. Keep it until that lands here.
 
 ## pinenote-gnome-extension — quality-mode honours its value
 
