@@ -57,7 +57,7 @@ import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import * as InputSourceStatus from 'resource:///org/gnome/shell/ui/status/keyboard.js';
 import * as BoxPointer from 'resource:///org/gnome/shell/ui/boxpointer.js';
 
-const BUILD = 40;
+const BUILD = 42;
 
 // These represent the panel's physics, as a default state rather than a toggle.
 // They were previously applied manually over D-Bus because CSS overrides were
@@ -75,6 +75,22 @@ const DEFAULTS = {
     fillWidth: true,
     k6Layout: true,
     trace: false,
+
+    // BUILD 42. Measured: with an IBus source active (rime TW, mozc JP),
+    // tapping an emoji on the OSK's emoji page produced nothing in
+    // gnome-terminal or Firefox. Upstream's KeyboardController.commit()
+    // (keyboard.js) feeds every non-modifier commit to
+    // Main.inputMethod.handleVirtualKey() whenever the active source is
+    // IBus, so it can compose the keystroke — and the IBus engine consumes
+    // the emoji's keysym instead of passing it through. Letters still need
+    // that path (it is what lets rime/mozc compose bopomofo/kana at all);
+    // only an emoji string needs to skip it. With this on, kc.commit's
+    // wrapper below calls Main.inputMethod.commit(str) directly — the same
+    // fallback upstream itself uses for a non-IBus source — for any commit
+    // that is all emoji, IM-focused, and carries no modifiers, leaving
+    // every other commit on the normal IBus path. Set false to get
+    // upstream's behaviour (and the swallowed emoji) back.
+    emojiBypassIme: true,
 
     // Latched modifiers reaching keyval keys is _pnPatchModifiers. Both Shifts
     // stay stock levelSwitch keys — faces flip, long-press still caps-locks —
@@ -384,6 +400,28 @@ function currentEngineId() {
         return null;
     }
 }
+
+// BUILD 42. True for a string an emoji-page tap would send: any code point
+// at or past the main emoji plane (U+1F000), the older pre-Unicode-9 emoji
+// blocks (U+2600-U+27BF misc symbols/dingbats, U+2B00-U+2BFF misc
+// symbols-and-arrows), or a bare presentation/joiner mark riding along with
+// one (VARIATION SELECTOR-16, ZERO WIDTH JOINER, COMBINING ENCLOSING KEYCAP).
+// Letters, digits and punctuation never match, so this only ever fires for
+// what the emoji page itself sends.
+function pnIsEmojiString(str) {
+    if (!str)
+        return false;
+    if (str.includes('\u{FE0F}') || str.includes('\u{200D}') || str.includes('\u{20E3}'))
+        return true;
+    for (const ch of str) {
+        const cp = ch.codePointAt(0);
+        if (cp >= 0x1F000 ||
+            (cp >= 0x2600 && cp <= 0x27BF) ||
+            (cp >= 0x2B00 && cp <= 0x2BFF))
+            return true;
+    }
+    return false;
+}
 const faceFor = (setting, level) =>
     level === 1 ? setting?.shift ?? setting?.default ?? '' : setting?.default ?? '';
 
@@ -659,6 +697,12 @@ export default class PineNoteOskExtension extends Extension {
         };
 
         proto._updateLayout = function (groupName, purpose) {
+            // BUILD 41. Panic release, before the rebuild below throws this
+            // layout's modifier keys away: _modifierKeys is about to be
+            // reset (next line) and _pnPatchModifiers/_pnUnpatchModifiers
+            // may swap the chord ledger out entirely, so anything still
+            // held from the layout that is ending gets let go here first.
+            ext._pnPanicRelease(this, 'rebuild');
             ext._config = readConfig();
             // Upstream keeps _modifierKeys for the life of the Keyboard and only
             // ever appends to it in _addRowKeys, so every rebuild leaves the
@@ -848,16 +892,42 @@ export default class PineNoteOskExtension extends Extension {
         // so that index is undefined and the loop over it throws. Pull
         // 0xffe1 out before handing the rest to the original, and decide
         // whether it goes back from here instead of ever handing it in.
+        //
+        // BUILD 41. That same TypeError (any keyval in this._modifiers with
+        // no entry in this._modifierKeys, not just 0xffe1 — a page rebuild
+        // between the press and the release can drop a real modifier's key
+        // out of _modifierKeys too) can still escape _setModifierEnabled's
+        // loop. Uncaught, it fires *inside* commit()'s KEY_RELEASE
+        // _forwardModifiers call (our keyvalRelease wrapper's `finally`
+        // calls this), which stops the rest of that release from ever
+        // running — the mechanism behind the stuck-Ctrl bug. So the
+        // original call is never allowed to throw past here: on TypeError
+        // fall back to clearing this._modifiers outright (losing only the
+        // paint-the-key bookkeeping the throw already meant was impossible
+        // to do), and let the caps-lock re-add below run exactly as it
+        // would have.
+        const pnSafeDisableAllModifiers = self => {
+            try {
+                ext._origDisableAllModifiers.call(self);
+            } catch (e) {
+                if (!(e instanceof TypeError))
+                    throw e;
+                log(`[pn-osk] chords: _disableAllModifiers threw: ${e.message}`);
+                self._modifiers.clear();
+            }
+        };
         proto._disableAllModifiers = function () {
             pnTrace('_disableAllModifiers', {
                 latched: this._latched,
                 currentPageIsShift: this._currentPage === this._layers?.shift,
                 modifiersBefore: [...(this._modifiers ?? [])],
             });
-            if (!ext._config.chords)
-                return ext._origDisableAllModifiers.call(this);
+            if (!ext._config.chords) {
+                pnSafeDisableAllModifiers(this);
+                return undefined;
+            }
             this._modifiers.delete('0xffe1');
-            ext._origDisableAllModifiers.call(this);
+            pnSafeDisableAllModifiers(this);
             if (this._latched && this._currentPage === this._layers?.shift)
                 this._modifiers.add('0xffe1');
             pnTrace('_disableAllModifiers:done', {modifiersAfter: [...(this._modifiers ?? [])]});
@@ -1015,6 +1085,11 @@ export default class PineNoteOskExtension extends Extension {
         // extra call site to keep in sync if another close() call is ever
         // added upstream.
         proto.close = function (immediate) {
+            // BUILD 41. Panic release: whatever the chord ledger still
+            // thinks is physically down (see _pnPanicRelease) gets let go
+            // here unconditionally — the keyboard is going away either way,
+            // and a modifier stuck past close() outlives the OSK entirely.
+            ext._pnPanicRelease(this, 'close');
             if (ext._pinned) {
                 ext._pinned = false;
                 ext._dbus?.emit_property_changed('Pinned', new GLib.Variant('b', false));
@@ -2134,6 +2209,32 @@ export default class PineNoteOskExtension extends Extension {
     // (faces flip, long-press still caps-locks) and Shift_L is armed straight
     // off a tap instead: see the _setLatched/_disableAllModifiers wrappers in
     // enable().
+    // BUILD 41. Panic release: whatever the chord ledger (_pnDown, set up in
+    // _pnPatchModifiers below) still thinks is physically down gets let go
+    // here — the backstop for a moment nothing else covers, called from
+    // Keyboard.close() and from the top of _updateLayout (a rebuild throws
+    // away the very _modifierKeys / kc state the settle logic below reasons
+    // about, so anything still held has to be released before that happens,
+    // not after). No-op, silently, when there is nothing to release — the
+    // common case, and the reason there is no `chords:` line in normal use.
+    _pnPanicRelease(keyboard, label) {
+        const kc = keyboard?._keyboardController;
+        if (!kc?._pnDown?.size)
+            return;
+        const n = kc._pnDown.size;
+        for (const kv of [...kc._pnDown]) {
+            try {
+                kc._pnOrigKeyvalRelease(kv);
+            } catch (e) {
+                // Best-effort: one bad release must not stop the rest, and
+                // the ledger is cleared below regardless.
+            }
+        }
+        kc._pnDown.clear();
+        kc._pnHeldFor?.clear();
+        log(`[pn-osk] chords: released ${n} stuck modifiers on ${label}`);
+    }
+
     _pnPatchModifiers(keyboard) {
         const kc = keyboard?._keyboardController;
         if (!kc || kc._pnOrigKeyvalPress)
@@ -2143,12 +2244,75 @@ export default class PineNoteOskExtension extends Extension {
         kc._pnOrigKeyvalRelease = kc.keyvalRelease.bind(kc);
         kc._pnOrigCommit = kc.commit.bind(kc);
 
+        // BUILD 41. _pnDown is the ledger: every modifier keyval this code
+        // has physically pressed on the virtual device and not yet
+        // released, kept as plain numbers (pnKeyvalNum, same normalisation
+        // _pnHeld already used) regardless of whether keyboard._modifiers
+        // holds that entry as a number or — Shift_L's synthetic 0xffe1 — a
+        // hex string. _pnHeldFor replaces the old single _pnHeld list with
+        // one list per pressed key: two keys tapped before either released
+        // (measured: overlapping taps) shared one list, so the first
+        // release let go of both keys' modifiers and the second found
+        // nothing left to reverse, leaving its own modifiers stuck down.
+        kc._pnDown = new Set();
+        kc._pnHeldFor = new Map();
+
+        // commit() presses/releases the modifiers it was handed itself,
+        // through _forwardModifiers below — not through keyvalPress/
+        // keyvalRelease's own ledger bookkeeping, since kc._pnInside is true
+        // for the whole call and both wrappers just pass straight through
+        // while it is. _forwardModifiers is where that path gets its own
+        // ledger entries instead. It lives on KeyboardController.prototype,
+        // which keyboard.js does not export — reached off this instance and
+        // patched once, guarded like the instance methods below; commit()
+        // calls it as `this._forwardModifiers(...)`, so every controller
+        // instance sees the wrapped version once any one instance has
+        // triggered this, and `this._pnDown` inside it still resolves to
+        // whichever instance is actually calling.
+        const proto = Object.getPrototypeOf(kc);
+        if (!proto._pnOrigForwardModifiers) {
+            proto._pnOrigForwardModifiers = proto._forwardModifiers;
+            proto._forwardModifiers = function (modifiers, type) {
+                const ret = this._pnOrigForwardModifiers(modifiers, type);
+                if (this._pnDown) {
+                    for (const keyval of modifiers ?? []) {
+                        const kv = pnKeyvalNum(keyval);
+                        if (type === Clutter.EventType.KEY_PRESS)
+                            this._pnDown.add(kv);
+                        else if (type === Clutter.EventType.KEY_RELEASE)
+                            this._pnDown.delete(kv);
+                    }
+                }
+                return ret;
+            };
+        }
+
         // commit() puts the modifiers down itself and then sends the character
         // through this very method. Re-entering would press them a second time
         // around a key that is already inside them, so the guard covers the
         // whole call — with modifiers held, commit() takes its synchronous
         // branch and the await resolves immediately.
+        //
+        // BUILD 42. Before any of that: an emoji-page tap with an IBus
+        // source active never reaches here through the IBus keyval path at
+        // all (see emojiBypassIme in DEFAULTS above) — upstream's own
+        // commit() would feed the emoji's keysym to
+        // Main.inputMethod.handleVirtualKey() and the engine would consume
+        // it silently. modifiers?.size is checked against the caller's
+        // argument, not kc._pnInside, since this runs before that guard is
+        // set. Only a plain, unmodified, IM-focused, all-emoji commit takes
+        // this branch; anything else — letters included — falls through to
+        // the normal path below unchanged.
         kc.commit = (str, modifiers) => {
+            if (this._config.emojiBypassIme && !modifiers?.size &&
+                Main.inputMethod.currentFocus &&
+                kc._currentSource?.type === InputSourceStatus.INPUT_SOURCE_TYPE_IBUS &&
+                pnIsEmojiString(str)) {
+                if (this._config.trace)
+                    log(`[pn-osk] emojiBypassIme: bypassing IBus for ${JSON.stringify(str)}`);
+                Main.inputMethod.commit(str);
+                return Promise.resolve();
+            }
             kc._pnInside = true;
             return kc._pnOrigCommit(str, modifiers)
                 .finally(() => (kc._pnInside = false));
@@ -2159,13 +2323,18 @@ export default class PineNoteOskExtension extends Extension {
                 kc._pnOrigKeyvalPress(kv);
                 return;
             }
-            // Remember what went down. The release has to let go of exactly
-            // this set, and by then the latch has already been cleared.
-            kc._pnHeld = [...(keyboard._modifiers ?? [])].map(pnKeyvalNum);
+            // Remember what went down, against this key specifically — see
+            // _pnHeldFor above — not a single shared slot. The release has
+            // to let go of exactly this set, and by then the latch has
+            // already been cleared.
+            const held = [...(keyboard._modifiers ?? [])].map(pnKeyvalNum);
+            kc._pnHeldFor.set(kv, held);
             kc._pnInside = true;
             try {
-                for (const mod of kc._pnHeld)
+                for (const mod of held) {
                     kc._pnOrigKeyvalPress(mod);
+                    kc._pnDown.add(mod);
+                }
                 kc._pnOrigKeyvalPress(kv);
             } finally {
                 kc._pnInside = false;
@@ -2177,19 +2346,46 @@ export default class PineNoteOskExtension extends Extension {
                 kc._pnOrigKeyvalRelease(kv);
                 return;
             }
+            const held = kc._pnHeldFor.get(kv) ?? [];
+            kc._pnHeldFor.delete(kv);
             kc._pnInside = true;
             try {
                 kc._pnOrigKeyvalRelease(kv);
                 // Reverse order, the way a hand lets go of a chord.
-                for (const mod of [...(kc._pnHeld ?? [])].reverse())
+                for (const mod of [...held].reverse()) {
                     kc._pnOrigKeyvalRelease(mod);
+                    kc._pnDown.delete(mod);
+                }
             } finally {
                 kc._pnInside = false;
-                kc._pnHeld = [];
                 // One key each, the same one-shot the commit path gives them.
                 // Without this the latch outlives the key it modified and the
-                // next letter arrives with Ctrl still down.
-                keyboard._disableAllModifiers?.();
+                // next letter arrives with Ctrl still down. _disableAllModifiers
+                // is tolerant of its own TypeError now (see
+                // proto._disableAllModifiers in enable()), but an exception
+                // from anywhere else in it must still not skip the settle
+                // pass right below — that used to be exactly how a modifier
+                // ended up physically down with keyboard._modifiers reading
+                // empty.
+                try {
+                    keyboard._disableAllModifiers?.();
+                } catch (e) {
+                    log(`[pn-osk] chords: _disableAllModifiers threw: ${e.message}`);
+                }
+                // Settle: anything this code still thinks is physically down
+                // (_pnDown) that upstream's own modifier set no longer lists
+                // gets let go here. This is the general backstop — it covers
+                // an exception anywhere between a modifier's press and its
+                // release, not only the one line above, and it runs on every
+                // release, not only ones that had trouble.
+                const stillWanted = new Set(
+                    [...(keyboard._modifiers ?? [])].map(pnKeyvalNum));
+                for (const down of [...kc._pnDown]) {
+                    if (!stillWanted.has(down)) {
+                        kc._pnOrigKeyvalRelease(down);
+                        kc._pnDown.delete(down);
+                    }
+                }
             }
         };
 
@@ -2203,13 +2399,19 @@ export default class PineNoteOskExtension extends Extension {
         for (const kc of this._pnPatchedKc ?? []) {
             if (!kc._pnOrigKeyvalPress)
                 continue;
+            const proto = Object.getPrototypeOf(kc);
+            if (proto._pnOrigForwardModifiers) {
+                proto._forwardModifiers = proto._pnOrigForwardModifiers;
+                delete proto._pnOrigForwardModifiers;
+            }
             delete kc.keyvalPress;
             delete kc.keyvalRelease;
             delete kc.commit;
             delete kc._pnOrigKeyvalPress;
             delete kc._pnOrigKeyvalRelease;
             delete kc._pnOrigCommit;
-            delete kc._pnHeld;
+            delete kc._pnDown;
+            delete kc._pnHeldFor;
             delete kc._pnInside;
         }
         this._pnPatchedKc = null;

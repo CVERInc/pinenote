@@ -37,6 +37,12 @@ walked through many times that day without incident all share one thing: the pan
 blanked and re-lit through the shield. Until that path is understood, the lock does not come
 from idleness, and `pn reload` is done with the screen unlocked.
 
+A fourth reset the next day did not involve the lock at all: the cover closed at
+12:56, the kernel logged `PM: suspend entry (deep)`, and the next line in the
+journal is a fresh boot at 14:56. Two hours of deep suspend ended in a reboot
+rather than a resume. It is listed here so the ledger of unexplained resets stays
+in one place, not because the lock had a hand in it.
+
 ## The cover magnet
 
 Closing the cover does not go through GNOME's lid handling at all: `gpio-keys` reports this

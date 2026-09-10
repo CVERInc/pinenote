@@ -130,6 +130,34 @@ about 7,000 in one session on this device, 2,880 the session before. BUILD 37
 resets the list at the top of `_updateLayout`, the moment the old keys stop
 existing. Reported upstream (pending); see [UPSTREAM.md](../UPSTREAM.md).
 
+**Ctrl stuck physically down.** Measured: typing `+` zoomed the terminal —
+Ctrl held on the virtual keyboard device with `Keyboard._modifiers` reading
+empty, so nothing in the UI showed it and nothing in the UI could clear it.
+The chord wrappers press every modifier before a keyval or a `commit()` and
+release them after, tracked in a list this code kept in a single shared slot;
+any exception between a modifier's press and its release left it down, and a
+second key tapped before the first released overwrote that slot, so the first
+key's release let go of both keys' modifiers and the second's release found
+nothing left to reverse. The likeliest exception: `_setModifierEnabled` walks
+`_modifierKeys[keyval]`, undefined and throwing `TypeError` for a modifier
+whose key a rebuild dropped — and it fired inside `keyvalRelease`'s own
+`finally`, before that `finally` could do anything else.
+
+BUILD 41 replaces the shared slot with a ledger, `_pnDown` — every modifier
+keyval this code has physically pressed and not yet released — plus one held
+list per pressed key instead of one for all of them, so overlapping taps stop
+clobbering each other. `_forwardModifiers`, `commit()`'s own path for the
+modifiers it is handed, is wrapped too, so that path lands in the ledger as
+well. `_disableAllModifiers` no longer lets a `TypeError` escape — it falls
+back to clearing `_modifiers` outright — and `keyvalRelease` follows it with a
+settle pass: anything still in `_pnDown` that `_modifiers` no longer lists
+gets released right there, whatever put it there. The backstop for everything
+else is a panic release, at the top of `_updateLayout` and inside the patched
+`close()` — a rebuild or a close throws away the very state the settle pass
+reasons about, so anything still held is let go first. All three log one
+`[pn-osk] chords:` line when they actually catch or release something; none
+of them should ever be seen in normal use.
+
 ## Summon and dismiss
 
 Chords answer *how* you press Ctrl+C on glass. They do not answer *when* the
@@ -503,6 +531,10 @@ hangul` puts it in. Five sources
 on one button is four taps to the far end. The labels ship anyway, because an
 engine that works while its button shows the wrong name is the worst of the
 three states.
+
+## Emoji through an IBus source
+
+An emoji tap on the OSK's emoji page went nowhere with `TW` or `JP` active: nothing landed in gnome-terminal or Firefox, while the same tap under `US` typed the emoji normally. Upstream's `KeyboardController.commit()` (`keyboard.js`) routes every commit that has IM focus and no modifiers through `Main.inputMethod.handleVirtualKey()` whenever the active source is IBus, so the engine can compose the keystroke; rime and mozc take the emoji's own keysym and hold onto it instead of passing it through, since neither engine has anything to compose it into. Letters still need that path, since it is what lets bopomofo and kana compose at all, so the fix cannot skip IBus in general. `emojiBypassIme` (default `true`) in `pn-osk.json` narrows the skip to strings that are all emoji: a wrapper around `commit()` checks the code points before delegating, and for an all-emoji string with IM focus, no modifiers, and an IBus source active, it calls `Main.inputMethod.commit(str)` directly, the same fallback upstream itself takes for a non-IBus source, instead of handing the string to the engine. Every other commit, letters included, goes through the normal path unchanged.
 
 ## Bopomofo, and the three layers it made us name
 

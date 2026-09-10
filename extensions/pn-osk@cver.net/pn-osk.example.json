@@ -4,6 +4,7 @@
   "trace": false,
   "chords": true,
   "fullLayoutEverywhere": true,
+  "emojiBypassIme": true,
   "pin": {
     "gesture": true,
     "button": false,
