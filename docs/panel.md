@@ -220,15 +220,27 @@ no longer covering for a sensor that could not be relied on to do its own job.
 
 Turning the lock off is not, on this device, always enough. Mutter's own
 panel-orientation policy runs only while the seat is in touch mode, and touch
-mode ends the moment a physical keyboard or pointer is attached. A paired
-Keychron Q1 Max shows up in libinput as a keyboard and a pointer, and with it
-connected two things happen at once: the Auto Rotate toggle leaves Quick
-Settings (its visibility is `can-lock-orientation`, which is Mutter's
-`panel-orientation-managed`), and the screen stops following the sensor even
-though `AccelerometerOrientation` keeps updating. Disconnect the keyboard and
-both come back. An afternoon was spent blaming pn-panel's own virtual input
-devices and its sensor claim for that missing toggle; three A/B cuts changed
-nothing because the keyboard was the variable, not the extension.
+mode ends the moment libinput sees a mouse-shaped device. Its visibility is
+`can-lock-orientation`, which is Mutter's `panel-orientation-managed`, and
+that in turn requires the seat's touch mode — leave touch mode and the toggle
+leaves Quick Settings along with it, and the screen stops following the
+sensor even though `AccelerometerOrientation` keeps updating.
+
+Two independent causes were found for that, not one. A paired Bluetooth
+keyboard (a Keychron Q1 Max) shows up in libinput as a keyboard and a
+pointer, and is one. The other turned out to be this extension's own doing:
+the persistent virtual pointer device the long-press gesture used to keep
+open for the life of the extension (see "One finger, hold for a menu" below)
+reads to Mutter exactly like a real mouse being attached, so pn-panel was
+quietly holding its own toggle hidden. Four A/B cuts, all with no Bluetooth
+keyboard attached, isolated it: the toggle was present with pn-panel off;
+present with pn-panel on and no virtual devices created; present with only
+the virtual keyboard device present; and gone the moment the virtual pointer
+device existed, regardless of the keyboard device's state. The fix was to
+stop keeping that pointer device around — it is now created immediately
+before a long-press fires and the reference dropped immediately after (see
+"One finger, hold for a menu" for the mechanics). The keyboard device is
+unaffected by any of this and is still created once in `enable()`.
 
 So pn-panel drives it instead, through the rotation it already has: while the
 lock is off, it calls `ClaimAccelerometer` on `net.hadess.SensorProxy` (system
@@ -341,14 +353,25 @@ evaluator was already going to reject a peak of one finger on its own, this
 only keeps the trace readable.
 
 Firing means a Clutter virtual `POINTER` device
-(`Clutter.InputDeviceType.POINTER_DEVICE`, created once in `enable()` next to
-the virtual keyboard the chord already uses, dropped in `disable()`):
-`notify_absolute_motion` to move the pointer under the finger first — a touch
-never moves the system pointer on its own — then
+(`Clutter.InputDeviceType.POINTER_DEVICE`): `notify_absolute_motion` to move
+the pointer under the finger first — a touch never moves the system pointer
+on its own — then
 `notify_button(Clutter.BUTTON_SECONDARY, Clutter.ButtonState.PRESSED)` and
 `RELEASED`. Same shape as the chord's synthetic key pair, one layer down;
 signatures confirmed against GNOME Shell 48.7's own `Clutter-16.typelib` on
 the device rather than assumed.
+
+Unlike the virtual keyboard, which the chord creates once in `enable()` and
+keeps for the extension's life, this pointer device is created immediately
+before each fire and the reference dropped immediately after — see "Mutter
+only picks it up in tablet mode" below for why: a persistent virtual pointer
+is itself enough to take Mutter out of touch mode, the same effect a real
+Bluetooth keyboard has. `Clutter.VirtualInputDevice` has no `destroy()` (the
+`Clutter-16.typelib` exposes only the `notify_*` methods plus
+`get_device_type`/`get_seat`), so the create-use-drop cycle relies on GJS's
+refcounting to finalize the device once the only reference is gone, same
+mechanism the persistent keyboard device already relied on for its own
+teardown in `disable()`.
 
 Excluded the same way the chord is: overview, any modal, the on-screen
 keyboard's own box (checked at the moment it fires, not the moment it

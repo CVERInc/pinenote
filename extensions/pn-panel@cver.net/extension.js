@@ -35,7 +35,7 @@ import * as IBusManager from 'resource:///org/gnome/shell/misc/ibusManager.js';
 import IBus from 'gi://IBus';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
-const BUILD = 13;
+const BUILD = 14;
 
 const IFACE = `<node>
   <interface name="org.cver.PnPanel">
@@ -1972,16 +1972,19 @@ export default class PineNotePanelExtension extends Extension {
 
         const seat = Clutter.get_default_backend().get_default_seat();
         // Same seat/device call keyboard.js's OSK makes to type a real key:
-        // one virtual device per kind actually used, created once, fed
-        // synthetic events for the life of the extension, destroyed (by
-        // dropping the last reference — Clutter virtual devices have no
-        // destroy()) in _pnRemoveGestures.
+        // one keyboard virtual device, created once, fed synthetic events
+        // for the life of the extension, destroyed (by dropping the last
+        // reference — Clutter virtual devices have no destroy()) in
+        // _pnRemoveGestures. The pointer device used for long-press is
+        // deliberately NOT created here: measured on-device, a persistent
+        // virtual pointer makes Mutter treat "a mouse is attached", which
+        // drops it out of touch mode and hides the Auto Rotate quick toggle
+        // (panel-orientation-managed requires touch mode). So the pointer
+        // is created and dropped per long-press fire instead — see
+        // _pnSendRightClick.
         if (chordsWanted)
             this._pnVirtualKeyboard = seat.create_virtual_device(
                 Clutter.InputDeviceType.KEYBOARD_DEVICE);
-        if (this._pnLongPressEnabled)
-            this._pnVirtualPointer = seat.create_virtual_device(
-                Clutter.InputDeviceType.POINTER_DEVICE);
 
         this._pnTouchGroup = null;
         this._pnLongPressTimerId = 0;
@@ -2013,9 +2016,10 @@ export default class PineNotePanelExtension extends Extension {
         this._pnLongPressGroup = null;
         // No destroy() on a Clutter virtual device; dropping the last
         // reference is what keyboard.js relies on too, and GJS's refcounting
-        // frees the underlying device once it does.
+        // frees the underlying device once it does. The pointer device has
+        // no persistent reference to drop here — it is created and dropped
+        // per fire in _pnSendRightClick.
         this._pnVirtualKeyboard = null;
-        this._pnVirtualPointer = null;
         this._pnTouchGroup = null;
     }
 
@@ -2269,7 +2273,7 @@ export default class PineNotePanelExtension extends Extension {
     // belt-and-braces exclusion for a stylus that ever arrives wrapped in a
     // touch-typed event (it carries a non-null tool, a finger never does).
     _pnMaybeStartLongPress(slot, x, y, event) {
-        if (!this._pnLongPressEnabled || !this._pnVirtualPointer)
+        if (!this._pnLongPressEnabled)
             return;
         const type = event.type();
         const isTouchEvent = type === Clutter.EventType.TOUCH_BEGIN ||
@@ -2363,16 +2367,31 @@ export default class PineNotePanelExtension extends Extension {
     // A right-click is a button event, not a key: notify_absolute_motion
     // first so whatever is under the finger actually receives the pointer
     // there (a touch never moved the pointer itself), then press and
-    // release BUTTON_SECONDARY on it — the same shape _pnSendChord uses for
-    // a key, one virtual device created once in _pnInstallGestures.
+    // release BUTTON_SECONDARY on it. Unlike the keyboard device in
+    // _pnSendChord, this pointer is NOT kept around: measured on-device, a
+    // persistent virtual pointer makes Mutter treat "a mouse is attached",
+    // which takes the seat out of touch mode and hides the Auto Rotate
+    // quick toggle (panel-orientation-managed requires touch mode) — and
+    // stops Mutter's own auto-rotation along with it. So the device is
+    // created immediately before use and the reference dropped immediately
+    // after; Clutter.VirtualInputDevice has no destroy() (checked against
+    // 48.7's Clutter-16 typelib — notify_* and get_device_type/get_seat are
+    // the whole surface), so dropping the only reference and letting GJS's
+    // refcounting finalize it, same as the keyboard device, is the only way
+    // to release one.
     _pnSendRightClick(x, y) {
-        const pointer = this._pnVirtualPointer;
-        if (!pointer)
-            return;
+        const seat = Clutter.get_default_backend().get_default_seat();
+        let pointer = seat.create_virtual_device(
+            Clutter.InputDeviceType.POINTER_DEVICE);
+        if (this._pnGestureTrace)
+            console.log('[pn-panel] longpress pointer device created');
         const now = () => Clutter.get_current_event_time() * 1000;
         pointer.notify_absolute_motion(now(), x, y);
         pointer.notify_button(now(), Clutter.BUTTON_SECONDARY, Clutter.ButtonState.PRESSED);
         pointer.notify_button(now(), Clutter.BUTTON_SECONDARY, Clutter.ButtonState.RELEASED);
+        pointer = null;
+        if (this._pnGestureTrace)
+            console.log('[pn-panel] longpress pointer device dropped');
     }
 
     Rotate() {
