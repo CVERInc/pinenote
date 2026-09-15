@@ -368,6 +368,13 @@ subprocess.check_call(["gsettings","set","org.gnome.desktop.input-sources","xkb-
 print("   xkb-options =", cur)
 PY
 echo "   Applied (requires manual verification: XKB sits above evdev, evdev keycodes remain unchanged)"
+# 🔴 Sticky keys off, explicitly. Nothing in this repository ever turned them on,
+#    yet on 2026-09-16 they were on: a light tap of Shift or Ctrl latched for the
+#    next key on the Bluetooth keyboard and the on-screen one alike, paste broke,
+#    and it read exactly like a modifier bug in pn-osk until a rollback of both
+#    extensions changed nothing (docs/stability.md). Writing the default down
+#    costs one line; `pn stickykeys` warns if it comes back.
+gsettings set org.gnome.desktop.a11y.keyboard stickykeys-enable false
 
 echo "== [18] Input method (skipped if PINENOTE_NO_IME=1) =="
 # Pinyin, bopomofo, Japanese. This used to be "run it yourself if you want it",
@@ -424,6 +431,10 @@ for d in /sys/bus/iio/devices/iio:device*; do
 done
 sudo systemctl restart iio-sensor-proxy 2>/dev/null || true
 gsettings set org.gnome.settings-daemon.peripherals.touchscreen orientation-lock false
+# ③ After a suspend the proxy never re-claims the accelerometer. The unit and why
+#    live in setup/pn (f_autorotate_set), which is also what installs it, so there
+#    is one copy of the recipe. Watch docs/stability.md §2 before trusting it.
+"$D/pn" autorotate on >/dev/null
 echo "   Wired up; Auto Rotate is in quick settings (the rotate button on the panel also shows the current mode)"
 
 echo "== [13] pn-osk: replace virtual keyboard with 65% layout (supported by GNOME 47 and 48) =="
@@ -502,6 +513,11 @@ echo "== [15b] pn: single location for status and toggles =="
 mkdir -p "$HOME/.local/bin"
 ln -sf "$D/pn" "$HOME/.local/bin/pn"
 chmod +x "$D/pn"
+# Lock at login, never from idleness (docs/lock.md). The clipboard relays are
+# deliberately not turned on here: they are off on the reference device since
+# 2026-09-16 (docs/clipboard.md), and `pn cliprelay on` / `pn clipinbox on` is
+# one command away for anyone who wants them.
+"$D/pn" lock on >/dev/null
 
 echo "== [16] pn-wave: replace full-screen flash with complementary dither clear =="
 # The amount of clearing did not decrease, the distribution did: the factory clear

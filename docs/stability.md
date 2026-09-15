@@ -82,3 +82,29 @@ sudo journalctl -b -N -o short-iso -n 40                 # how boot -N ended
 sudo journalctl -k -b -N -g 'allocation failure|Unable to handle|nobody cared'
 sudo journalctl -k -b -N -g IRQ_NONE | cut -c1-16 | uniq -c | sort -rn | head
 ```
+
+## The baseline being watched from 2026-09-16
+
+The state the tablet was left in to be lived with, after the session restart at 01:19 on boot
+`d7abc951`. `setup/setup.sh` reproduces it on a reflash (sticky keys off in [12], the resume
+unit in [14], lock in [15b]); the clipboard relays are the one thing deliberately left out.
+
+```
+typing         unit=active
+idle-refresh   active
+osk / panel / wave   ACTIVE (HEAD)
+layout65       True
+wifi-powersave off
+stickykeys     off
+cliprelay      inactive
+clipinbox      inactive
+lock           autostart=on disable-lock-screen=false idle-delay=0
+autorotate     resume-unit=enabled orientation-lock=false
+ime            us, mozc-on, rime
+xkb-options    caps:menu, altwin:swap_lalt_lwin
+```
+
+If it dies again, the first three questions are the ones above: did it die on a wake
+(`PM: suspend exit` in the last lines), is it the order-10 allocation, and did the sc7a20
+flood start first. `pn` should still read like this block; anything that drifted from it is a
+suspect before any code is.
