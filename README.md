@@ -101,6 +101,8 @@ file per subject, in the order the device asks for them:
 - [`docs/clipboard.md`](docs/clipboard.md) — why the Mac's clipboard is pulled rather than pushed,
   the byte-exact framing that gets a multi-line, any-UTF-8 paste across it intact, and the
   tailnet-only inbox that takes the Mac out of the loop entirely for an iPhone on its own.
+- [`docs/stability.md`](docs/stability.md) — four unclean endings in five boots, the 4 MB the
+  e-ink driver can't find on wake, and the accelerometer interrupt that floods right after it.
 - [`docs/lock.md`](docs/lock.md) — the lockdown key that kept this device from ever locking, why
   it locks at login instead of turning off autologin, and what closing the cover does now that
   it's cleared.

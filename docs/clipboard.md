@@ -5,6 +5,19 @@ Part of [pinenote](../README.md).
 Apple's Universal Clipboard already carries a copy from the iPhone to the Mac. This closes
 the last hop: whatever lands on the Mac's clipboard becomes pasteable on the PineNote.
 
+> **Off on the reference device since 2026-09-16** (`pn cliprelay off`, `pn clipinbox off`).
+> Everything below still works and still installs; it's off because the clipboard it feeds
+> stopped being usable on its own. A copy made on the PineNote and pasted into Firefox on the
+> same PineNote could fail, and the relay is built to overwrite exactly that: every reconnect
+> writes the Mac's current clipboard within seconds (after waking at 12:49:51 on 2026-09-13,
+> record #1 landed at 12:50:06), and so does every copy on the Mac while connected. The same
+> boot ended with a row of 27 identical generic "running app" icons in the dash, and 116
+> `WindowPreview tried to allocate a size of -N x -N` warnings, all in that 12:50 minute.
+> `wl-copy` on a compositor without a data-control protocol takes the selection through a
+> surface of its own, which would fit, but **that link is not verified**: nobody has yet
+> watched a `wl-copy` leave a window behind. Turn it back on only after that check, and
+> alone, so the next failure has one suspect.
+
 ## Why it pulls instead of pushes
 
 The PineNote already has a standing ssh connection to the Mac that needs nothing from a
