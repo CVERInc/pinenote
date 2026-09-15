@@ -208,6 +208,17 @@ PY
 }
 
 # Wi-Fi power-save. Source of truth is iw, not the config file.
+# Sticky keys: GNOME's accessibility latch, which nothing here turns on. With it
+# on, a light tap of a physical Shift or Ctrl stays down for the next key, on the
+# Bluetooth keyboard and the on-screen one alike, and survives a reload -- it
+# looked exactly like a modifier bug in pn-osk, and cost a rollback to find
+# (docs/stability.md). Read-only on purpose: the fix is to know it is on.
+f_stickykeys_status() {
+  local v; v=$(gs org.gnome.desktop.a11y.keyboard stickykeys-enable)
+  if [ "$v" = "false" ]; then ok stickykeys "off (good)"
+  else warn stickykeys "${v:-unknown} — every modifier latches; gsettings set org.gnome.desktop.a11y.keyboard stickykeys-enable false"; fi
+}
+
 f_wifi_status() {
   local ps; ps=$(/usr/sbin/iw dev wlan0 get power_save 2>/dev/null | awk '{print $3}')
   if [ "$ps" = "off" ]; then ok wifi-powersave "off (good)"; else warn wifi-powersave "${ps:-unknown} — this device will drop off the network, see lifeline.sh [5]"; fi
@@ -351,7 +362,7 @@ f_reload_cmd() {
 }
 
 # ── dispatch ───────────────────────────────────────────────────────────────
-ALL="typing idle osk panel wave layout65 wifi cliprelay clipinbox lock autorotate ime buttons"
+ALL="typing idle osk panel wave layout65 wifi stickykeys cliprelay clipinbox lock autorotate ime buttons"
 
 if [ $# -eq 0 ]; then
   echo "pn — current state (reads the source of truth, not the config file)"

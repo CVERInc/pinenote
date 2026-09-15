@@ -6,9 +6,11 @@ Apple's Universal Clipboard already carries a copy from the iPhone to the Mac. T
 the last hop: whatever lands on the Mac's clipboard becomes pasteable on the PineNote.
 
 > **Off on the reference device since 2026-09-16** (`pn cliprelay off`, `pn clipinbox off`).
-> Everything below still works and still installs; it's off because the clipboard it feeds
-> stopped being usable on its own. A copy made on the PineNote and pasted into Firefox on the
-> same PineNote could fail, and the relay is built to overwrite exactly that: every reconnect
+> Everything below still works and still installs; it's off so that only the tablet writes
+> to its own clipboard while the tablet's stability is being judged. It was first blamed for
+> local paste failing in Firefox, and **that was wrong**: GNOME's sticky keys were on, so
+> Ctrl and Shift latched on every tap (see [`docs/stability.md`](stability.md)). What the relay
+> does do is overwrite a local copy: every reconnect
 > writes the Mac's current clipboard within seconds (after waking at 12:49:51 on 2026-09-13,
 > record #1 landed at 12:50:06), and so does every copy on the Mac while connected. The same
 > boot ended with a row of 27 identical generic "running app" icons in the dash, and 116

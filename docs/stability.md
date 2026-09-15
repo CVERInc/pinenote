@@ -58,11 +58,21 @@ and the storm often starts in the same second the proxy does, but not always: on
 it starts on the resume line itself. The journal does not reach back before 09-10, so there is
 no before-and-after for the accelerometer wiring. Not yet changed.
 
-## 3. The clipboard
+## 3. Paste that did not work, and a Shift that stayed down
 
-See the note at the top of [`docs/clipboard.md`](clipboard.md). Turned off 2026-09-16, along
-with the mozc engine (`pn ime rm mozc-on`; rime stays), to get back to a clipboard only the
-tablet writes to.
+Copy on the tablet, paste into Firefox on the tablet: it failed from the physical keyboard
+and the on-screen one alike. Turning off the clipboard relays (see
+[`docs/clipboard.md`](clipboard.md)) did not fix it, disabling pn-osk did not fix it, and a
+full rollback of both extensions to 0ffc917 with a session restart did not fix it. The
+description that found it came from using the thing: *a light tap of the physical Shift locks
+it, the same way the on-screen Shift does.* That is not a modifier bug; it is
+`org.gnome.desktop.a11y.keyboard stickykeys-enable` set to `true`, which latches every
+modifier for the next key on every keyboard and survives any reload. Nothing in this
+repository sets it, and nothing on the device recorded who did. It is off again, and `pn`
+now warns when it is on. The extensions went back to HEAD.
+
+The relays stay off anyway, so the tablet's own clipboard has one writer while the crashes
+above are being judged.
 
 ## Reading it again
 
